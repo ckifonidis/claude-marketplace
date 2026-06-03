@@ -20,7 +20,7 @@ batching tool + deterministic flow-controller runner).
 Install:
 
 ```
-/plugin install agent-step-toolkit@claude-marketplace
+/plugin install agent-step-toolkit@ckifonidis-marketplace
 ```
 
 Ships two skills:
