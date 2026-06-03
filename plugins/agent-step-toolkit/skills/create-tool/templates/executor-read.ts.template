@@ -1,0 +1,56 @@
+// FILE: src/tools/{{TOOL_NAME}}/actions/{{ACTION_NAME}}/executor.ts
+//
+// Read-only executor. Calls backend, parses response, returns a result body
+// shaped for the LLM. No backend mutations. May return stateUpdate to cache
+// or pin the resolved entity for later actions in this thread.
+
+import { postBackend } from "../../backend/client.js";
+import { {{TOOL_NAME}}Env } from "../../backend/env.js";
+// import { tryResolve{{ENTITY}} } from "../../shared/resolve-{{entity}}.js"; // if needed
+import type { AgentState } from "../../../../state.js";
+import type { ExecutorResult } from "../../../../agent-step/index.js";
+
+type State = typeof AgentState.State;
+
+interface {{ACTION_PARAMS_TYPE}} {
+  // {{PARAM_FIELDS}}
+}
+
+interface BackendPayload {
+  // {{BACKEND_RESPONSE_FIELDS}}
+}
+
+export async function {{EXECUTOR_FN_NAME}}(
+  rawParams: unknown,
+  state: State,
+): Promise<ExecutorResult<State>> {
+  const p = rawParams as {{ACTION_PARAMS_TYPE}};
+
+  // (Optional) Resolve the target entity from state + params.
+  // const entity = tryResolve{{ENTITY}}(state, p.{{LOOKUP_FIELD}});
+  // if ("error" in entity) {
+  //   return { resultBody: { summary: entity.summary, error: entity.error }, ok: false };
+  // }
+
+  const resp = await postBackend<{ payload?: BackendPayload }>(
+    {{TOOL_NAME}}Env.{{BASE_URL_FIELD}},
+    "{{BACKEND_ENDPOINT}}",
+    {
+      // {{BACKEND_REQUEST_FIELDS}}
+    },
+    { envelope: "{{ENVELOPE_MODE}}" }, // "full" or "payload-only"
+  );
+
+  const payload = resp?.payload ?? {};
+  // {{INTERPRET_RESPONSE}}
+  const summary = `{{HUMAN_READABLE_SUMMARY}}`;
+
+  return {
+    resultBody: {
+      summary,
+      // {{RESULT_BODY_FIELDS}}
+    },
+    // stateUpdate: { {{STATE_FIELD}}: ... } as Partial<State>,  // include only if this action updates state
+    ok: true,
+  };
+}

@@ -1,0 +1,37 @@
+// FILE: src/tools/{{TOOL_NAME}}/backend/env.ts
+//
+// Per-tool environment constants. Read process.env at module load; throw
+// loudly if anything required is missing. The frozen exported object is the
+// only way the tool's executors read these values — never reach into
+// process.env directly.
+
+function required(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing required env var: ${name}`);
+  return v;
+}
+
+function optional(name: string, fallback = ""): string {
+  return process.env[name] ?? fallback;
+}
+
+export const {{TOOL_NAME}}Env = Object.freeze({
+  // Base URLs for the backend services this tool calls
+  {{baseUrlField1}}: required("{{BASE_URL_ENV_1}}"),
+  {{baseUrlField2}}: required("{{BASE_URL_ENV_2}}"),
+
+  // Sandbox / tenancy
+  sandboxId: optional("SANDBOX_ID"),
+  applicationId: required("APPLICATION_ID"),
+
+  // Envelope / channel
+  bank: optional("BANK", "NBG"),
+  channel: optional("CHANNEL", "intranet"),
+
+  // User / branch identity (backend audit fields; never asked of the LLM)
+  userId: required("USER_ID"),
+  branchCode: required("BRANCH_CODE"),
+  workstation: required("WORKSTATION"),
+});
+
+export type {{TOOL_NAME_PascalCase}}Env = typeof {{TOOL_NAME}}Env;

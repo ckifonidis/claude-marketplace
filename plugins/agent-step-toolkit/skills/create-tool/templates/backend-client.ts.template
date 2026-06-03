@@ -1,0 +1,74 @@
+// FILE: src/tools/{{TOOL_NAME}}/backend/client.ts
+//
+// Transport helper. For HTTP+JSON backends this matches the cards pattern.
+// Adapt freely for other protocols (SOAP, gRPC, etc.); the contract is that
+// executors call postBackend (or whatever this exports) and don't worry about
+// envelopes, headers, sandbox-id, or auth.
+
+import { {{TOOL_NAME}}Env, type {{TOOL_NAME_PascalCase}}Env } from "./env.js";
+
+export type Envelope = "full" | "payload-only";
+
+interface PostOptions {
+  envelope?: Envelope;
+}
+
+function buildEnvelopeHeader(env: {{TOOL_NAME_PascalCase}}Env): Record<string, string> {
+  return {
+    Application: env.applicationId,
+    Bank: env.bank,
+    Channel: env.channel,
+    ID: crypto.randomUUID(),
+  };
+}
+
+function summarize(value: unknown, max = 600): string {
+  let s: string;
+  try {
+    s = JSON.stringify(value);
+  } catch {
+    s = String(value);
+  }
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+export async function postBackend<T = unknown>(
+  apiBaseUrl: string,
+  endpoint: string,
+  payload: Record<string, unknown>,
+  opts: PostOptions = {},
+): Promise<T> {
+  const envelope: Envelope = opts.envelope ?? "full";
+  const body =
+    envelope === "full"
+      ? { header: buildEnvelopeHeader({{TOOL_NAME}}Env), payload }
+      : { payload };
+  const url = `${apiBaseUrl}/${endpoint}`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if ({{TOOL_NAME}}Env.sandboxId.length > 0) {
+    headers["sandbox-id"] = {{TOOL_NAME}}Env.sandboxId;
+  }
+
+  const t0 = Date.now();
+  console.log(`[backend →] POST ${endpoint} payload=${summarize(payload)}`);
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  const ms = Date.now() - t0;
+  if (!res.ok) {
+    console.error(`[backend ←] ${endpoint} ${res.status} ${ms}ms body=${text.slice(0, 500)}`);
+    throw new Error(`backend ${endpoint} failed (${res.status}): ${text.slice(0, 500)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    console.error(`[backend ←] ${endpoint} 200 ${ms}ms non-JSON: ${text.slice(0, 200)}`);
+    throw new Error(`backend ${endpoint} returned non-JSON: ${text.slice(0, 200)}`);
+  }
+  console.log(`[backend ←] ${endpoint} 200 ${ms}ms response=${summarize(parsed)}`);
+  return parsed as T;
+}

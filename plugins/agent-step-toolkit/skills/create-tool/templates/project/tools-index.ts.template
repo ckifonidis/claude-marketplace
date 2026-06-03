@@ -1,0 +1,11 @@
+// FILE: src/tools/index.ts
+//
+// Barrel that exports the list of tools registered with the agent. As tools
+// are added via /create-tool, each gets one import line + one entry here.
+
+// Example (uncomment + adapt when adding the first tool):
+// import { cardsTool } from "./cards/index.js";
+
+export const tools = [
+  // cardsTool,
+] as const;

@@ -1,0 +1,90 @@
+// FILE: src/state.ts
+//
+// Graph-level state. Per-tool slots get added as tools are introduced.
+// `awaitingInput` + `currentFlow` are library-managed slots used by the
+// runner to coordinate confirmation gates, OTP gates, double-entry-match
+// gates, and multi-turn flows. The library writes them via each action's
+// inline `controller` opts (ControllerHooks: `requiresConfirmation`,
+// `requiresOtp`, `issuesOtp`, `startsFlow`, `endsFlow`, `requiresMatch`,
+// `startsMatchFor`) and clears them via `abort_pending_input` (an action the
+// library auto-injects into the tool schema whenever any opt above is
+// declared). Downstream slots are reset to `null` via an action's separate
+// `invalidatesOnChange` field when a watched slot's value changes.
+
+import { Annotation, MessagesAnnotation, MessagesZodState } from "@langchain/langgraph";
+import { z } from "zod";
+import type { AwaitingInput, CurrentFlow } from "./agent-step/index.js";
+
+export const AgentState = Annotation.Root({
+  ...MessagesAnnotation.spec,
+
+  /** Library-managed slot for "what input does the customer owe right now."
+   *  Discriminated union over the three input-gates the runner coordinates:
+   *  - `confirmation` — a `requiresConfirmation` mutation is awaiting
+   *    propose-then-execute. Library counts attempts on drift; lockdown
+   *    refuses unrelated batches.
+   *  - `otp` — an `issuesOtp` action minted an SCA challenge; the named
+   *    `consumer_action` (e.g. `confirm_otp`) is the only thing that may
+   *    run next. Backend is authoritative for lock/timeout/wrong outcomes.
+   *  - `match` — a `startsMatchFor` capturer stored a value; the named
+   *    consumer (`requiresMatch`) must receive a matching value next.
+   *    Library decrements `attempts_left` on each `match_mismatch`. */
+  awaitingInput: Annotation<AwaitingInput | null>({
+    reducer: (_, n) => n,
+    default: () => null,
+  }),
+
+  /** Library-managed slot for the active multi-turn flow (PIN setup,
+   *  card activation, etc.). One at a time — mutex by design. Set by the
+   *  runner when an action with `startsFlow` returns `ok`; cleared on
+   *  `endsFlow` or `lifecycle.abortFlow`. Flow-bound executors store and
+   *  read scratch data via `currentFlow.data` (merged shallowly from
+   *  `ExecutorResult.flowData`). */
+  currentFlow: Annotation<CurrentFlow | null>({
+    reducer: (_, n) => n,
+    default: () => null,
+  }),
+
+  // ─── Per-tool slots — added by /create-tool as tools are introduced ─── //
+  // Example (uncomment + adapt when adding the first tool):
+  //
+  // verifiedCustomer: Annotation<VerifiedCustomer | null>({
+  //   reducer: (_, n) => n,
+  //   default: () => null,
+  // }),
+});
+
+const AwaitingInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("confirmation"),
+    for_action: z.string(),
+    params: z.record(z.string(), z.unknown()),
+    attempts_left: z.number().int().nonnegative(),
+    max_attempts: z.number().int().positive(),
+    flow_ref: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("otp"),
+    for_action: z.string(),
+    flow_ref: z.string(),
+  }),
+  z.object({
+    kind: z.literal("match"),
+    for_action: z.string(),
+    attempts_left: z.number().int().nonnegative(),
+    max_attempts: z.number().int().positive(),
+    flow_ref: z.string().optional(),
+  }),
+]);
+
+const CurrentFlowSchema = z.object({
+  name: z.string(),
+  data: z.record(z.string(), z.unknown()),
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const AgentStateSchema: z.ZodObject<any> = MessagesZodState.extend({
+  awaitingInput: AwaitingInputSchema.nullable().optional().default(null),
+  currentFlow: CurrentFlowSchema.nullable().optional().default(null),
+  // Mirror per-tool slots here as they get added.
+});

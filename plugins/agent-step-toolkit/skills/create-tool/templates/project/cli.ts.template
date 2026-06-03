@@ -1,0 +1,973 @@
+#!/usr/bin/env node
+/**
+ * Streaming CLI for {{AGENT_DISPLAY_NAME}}.
+ *
+ * Runs the graph in-process with the existing MemorySaver checkpointer.
+ * Raw-mode terminal: streaming tokens, multiline input, history, ESC abort,
+ * slash commands.
+ *
+ * The `/state` slash command and the per-batch post-state line both reach
+ * into the graph's state to display:
+ *   - Library-managed slots: `awaitingInput`, `currentFlow`.
+ *   - Tool-specific slots: edit the lines marked TOOL-SPECIFIC below to
+ *     match the slots declared in your `state.ts` (the bootstrap shows the
+ *     cards-tool slots — replace with your tool's verified/active slots).
+ *
+ *   npm run cli
+ */
+
+import "dotenv/config";
+import "./cli-env-init.js";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { HumanMessage } from "@langchain/core/messages";
+import { graph } from "./graph.js";
+
+// ─── Persistent input history ───────────────────────────────────────────── //
+
+const HISTORY_FILE = join(homedir(), ".{{PROJECT_NAME}}-cli-history");
+const HISTORY_MAX = 1000;
+
+/** Each entry occupies one line. Newlines inside an entry are escaped as `\n`
+ *  and literal backslashes as `\\`. Char-by-char unescape avoids the ordering
+ *  pitfalls of a naive double-replace. */
+function escapeHistoryEntry(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
+}
+
+function unescapeHistoryEntry(s: string): string {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && i + 1 < s.length) {
+      const next = s[i + 1];
+      if (next === "n") {
+        out += "\n";
+        i++;
+        continue;
+      }
+      if (next === "\\") {
+        out += "\\";
+        i++;
+        continue;
+      }
+    }
+    out += s[i];
+  }
+  return out;
+}
+
+function loadHistory(): string[] {
+  try {
+    const text = readFileSync(HISTORY_FILE, "utf8");
+    return text
+      .split("\n")
+      .map((l) => l.replace(/\r$/, ""))
+      .filter((l) => l.length > 0)
+      .map(unescapeHistoryEntry);
+  } catch {
+    return [];
+  }
+}
+
+function appendHistory(text: string): void {
+  try {
+    appendFileSync(HISTORY_FILE, escapeHistoryEntry(text) + "\n", "utf8");
+  } catch {
+    // non-critical — proceed without persistence
+  }
+}
+
+/** Cap the file size on startup. Cheap enough to run every launch. */
+function trimHistoryIfLarge(): void {
+  try {
+    const text = readFileSync(HISTORY_FILE, "utf8");
+    const lines = text.split("\n").filter((l) => l.length > 0);
+    if (lines.length > Math.floor(HISTORY_MAX * 1.5)) {
+      writeFileSync(HISTORY_FILE, lines.slice(-HISTORY_MAX).join("\n") + "\n", "utf8");
+    }
+  } catch {
+    // ignore
+  }
+}
+
+// ─── ANSI ────────────────────────────────────────────────────────────────── //
+
+const RESET = "\x1b[0m";
+const BOLD = "\x1b[1m";
+const DIM = "\x1b[2m";
+const GREEN = "\x1b[32m";
+const CYAN = "\x1b[36m";
+const YELLOW = "\x1b[33m";
+const RED = "\x1b[31m";
+
+function printSystem(text: string): void {
+  console.log(`${DIM}${YELLOW}[system]${RESET} ${DIM}${text}${RESET}`);
+}
+
+// ─── Spinner ─────────────────────────────────────────────────────────────── //
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function createSpinner(initialLabel: string) {
+  let frame = 0;
+  let label = initialLabel;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let active = false;
+  return {
+    setLabel(newLabel: string) {
+      label = newLabel;
+    },
+    start() {
+      if (active) return;
+      active = true;
+      frame = 0;
+      process.stdout.write(`\n${DIM}${YELLOW}${SPINNER_FRAMES[0]} ${label}${RESET}`);
+      timer = setInterval(() => {
+        frame = (frame + 1) % SPINNER_FRAMES.length;
+        process.stdout.write(
+          `\r${DIM}${YELLOW}${SPINNER_FRAMES[frame]} ${label}${RESET}\x1b[K`,
+        );
+      }, 80);
+    },
+    stop() {
+      if (!active) return;
+      active = false;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      process.stdout.write("\r\x1b[2K\x1b[A\r");
+    },
+    isActive() {
+      return active;
+    },
+  };
+}
+
+// ─── Multiline raw-mode input reader ────────────────────────────────────── //
+
+function readInput(
+  prompt: string,
+  contPrompt: string,
+  inputHistory: string[] = [],
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const lines: string[] = [""];
+    let curLine = 0;
+    let curCol = 0;
+    let escBuf = "";
+    let inEscape = false;
+    let historyIndex = inputHistory.length;
+    let savedCurrent = "";
+
+    function replaceInput(text: string) {
+      if (curLine < lines.length - 1) {
+        process.stdout.write(`\x1b[${lines.length - 1 - curLine}B`);
+      }
+      for (let i = lines.length - 1; i > 0; i--) {
+        process.stdout.write("\r\x1b[2K\x1b[A");
+      }
+      process.stdout.write("\r\x1b[2K");
+      const newLines = text.split("\n");
+      lines.length = 0;
+      lines.push(...newLines);
+      curLine = 0;
+      curCol = lines[0].length;
+      for (let i = 0; i < lines.length; i++) {
+        const p = i === 0 ? prompt : contPrompt;
+        if (i > 0) process.stdout.write("\n");
+        process.stdout.write(`${p}${lines[i]}`);
+      }
+      if (lines.length > 1) process.stdout.write(`\x1b[${lines.length - 1}A`);
+      redraw();
+    }
+
+    function redraw() {
+      const p = curLine === 0 ? prompt : contPrompt;
+      process.stdout.write(`\r\x1b[2K${p}${lines[curLine]}`);
+      const back = lines[curLine].length - curCol;
+      if (back > 0) process.stdout.write(`\x1b[${back}D`);
+    }
+
+    function showPrompt() {
+      process.stdout.write(curLine === 0 ? prompt : contPrompt);
+    }
+
+    function insertNewline() {
+      const before = lines[curLine].slice(0, curCol);
+      const after = lines[curLine].slice(curCol);
+      lines[curLine] = before;
+      curLine++;
+      lines.splice(curLine, 0, after);
+      curCol = 0;
+      process.stdout.write("\n");
+      showPrompt();
+      if (after.length > 0) {
+        process.stdout.write(after);
+        process.stdout.write(`\x1b[${after.length}D`);
+      }
+    }
+
+    function handleBackspace() {
+      if (curCol > 0) {
+        const line = lines[curLine];
+        lines[curLine] = line.slice(0, curCol - 1) + line.slice(curCol);
+        curCol--;
+        redraw();
+      } else if (curLine > 0) {
+        const cur = lines[curLine];
+        lines.splice(curLine, 1);
+        curLine--;
+        curCol = lines[curLine].length;
+        lines[curLine] += cur;
+        process.stdout.write("\x1b[A");
+        redraw();
+        process.stdout.write("\x1b[1B\r\x1b[2K\x1b[1A");
+        const p = curLine === 0 ? prompt : contPrompt;
+        process.stdout.write(`\r\x1b[${p.length + curCol}C`);
+      }
+    }
+
+    const wasRaw = process.stdin.isRaw;
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    showPrompt();
+
+    const onData = (buf: Buffer) => {
+      const str = buf.toString("utf8");
+      for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        const code = ch.charCodeAt(0);
+
+        if (inEscape) {
+          escBuf += ch;
+          if (escBuf === "[13;2u") {
+            inEscape = false;
+            escBuf = "";
+            insertNewline();
+            continue;
+          }
+          if (escBuf === "OM") {
+            inEscape = false;
+            escBuf = "";
+            insertNewline();
+            continue;
+          }
+          if (escBuf === "OH") {
+            inEscape = false;
+            escBuf = "";
+            curCol = 0;
+            redraw();
+            continue;
+          }
+          if (escBuf === "OF") {
+            inEscape = false;
+            escBuf = "";
+            curCol = lines[curLine].length;
+            redraw();
+            continue;
+          }
+          if (escBuf.length >= 2 && escBuf[0] === "[") {
+            const tail = escBuf.slice(1);
+            if (tail === "H") {
+              inEscape = false;
+              escBuf = "";
+              curCol = 0;
+              redraw();
+              continue;
+            }
+            if (tail === "F") {
+              inEscape = false;
+              escBuf = "";
+              curCol = lines[curLine].length;
+              redraw();
+              continue;
+            }
+            if (tail === "3~") {
+              inEscape = false;
+              escBuf = "";
+              if (curCol < lines[curLine].length) {
+                lines[curLine] =
+                  lines[curLine].slice(0, curCol) + lines[curLine].slice(curCol + 1);
+                redraw();
+              }
+              continue;
+            }
+            if (tail === "A") {
+              inEscape = false;
+              escBuf = "";
+              if (lines.length === 1 && historyIndex > 0) {
+                if (historyIndex === inputHistory.length) savedCurrent = lines[0];
+                historyIndex--;
+                replaceInput(inputHistory[historyIndex]);
+              } else if (curLine > 0) {
+                curLine--;
+                curCol = Math.min(curCol, lines[curLine].length);
+                process.stdout.write("\x1b[A");
+                redraw();
+              }
+              continue;
+            }
+            if (tail === "B") {
+              inEscape = false;
+              escBuf = "";
+              if (lines.length === 1 && historyIndex < inputHistory.length) {
+                historyIndex++;
+                replaceInput(
+                  historyIndex === inputHistory.length
+                    ? savedCurrent
+                    : inputHistory[historyIndex],
+                );
+              } else if (curLine < lines.length - 1) {
+                curLine++;
+                curCol = Math.min(curCol, lines[curLine].length);
+                process.stdout.write("\x1b[B");
+                redraw();
+              }
+              continue;
+            }
+            if (tail === "C") {
+              inEscape = false;
+              escBuf = "";
+              if (curCol < lines[curLine].length) {
+                curCol++;
+                process.stdout.write("\x1b[C");
+              }
+              continue;
+            }
+            if (tail === "D") {
+              inEscape = false;
+              escBuf = "";
+              if (curCol > 0) {
+                curCol--;
+                process.stdout.write("\x1b[D");
+              }
+              continue;
+            }
+            if (tail === "1;3C" || tail === "1;5C") {
+              inEscape = false;
+              escBuf = "";
+              const line = lines[curLine];
+              while (curCol < line.length && line[curCol] === " ") curCol++;
+              while (curCol < line.length && line[curCol] !== " ") curCol++;
+              redraw();
+              continue;
+            }
+            if (tail === "1;3D" || tail === "1;5D") {
+              inEscape = false;
+              escBuf = "";
+              const line = lines[curLine];
+              while (curCol > 0 && line[curCol - 1] === " ") curCol--;
+              while (curCol > 0 && line[curCol - 1] !== " ") curCol--;
+              redraw();
+              continue;
+            }
+            if (tail === "1;2C") {
+              inEscape = false;
+              escBuf = "";
+              curCol = lines[curLine].length;
+              redraw();
+              continue;
+            }
+            if (tail === "1;2D") {
+              inEscape = false;
+              escBuf = "";
+              curCol = 0;
+              redraw();
+              continue;
+            }
+            if (escBuf.length > 8) {
+              inEscape = false;
+              escBuf = "";
+              continue;
+            }
+            continue;
+          }
+          if (escBuf === "b") {
+            inEscape = false;
+            escBuf = "";
+            const line = lines[curLine];
+            while (curCol > 0 && line[curCol - 1] === " ") curCol--;
+            while (curCol > 0 && line[curCol - 1] !== " ") curCol--;
+            redraw();
+            continue;
+          }
+          if (escBuf === "f") {
+            inEscape = false;
+            escBuf = "";
+            const line = lines[curLine];
+            while (curCol < line.length && line[curCol] === " ") curCol++;
+            while (curCol < line.length && line[curCol] !== " ") curCol++;
+            redraw();
+            continue;
+          }
+          if (escBuf.length === 1 && escBuf.charCodeAt(0) === 0x7f) {
+            inEscape = false;
+            escBuf = "";
+            const start = curCol;
+            while (curCol > 0 && lines[curLine][curCol - 1] === " ") curCol--;
+            while (curCol > 0 && lines[curLine][curCol - 1] !== " ") curCol--;
+            lines[curLine] = lines[curLine].slice(0, curCol) + lines[curLine].slice(start);
+            redraw();
+            continue;
+          }
+          if (escBuf.length > 8) {
+            inEscape = false;
+            escBuf = "";
+          }
+          continue;
+        }
+
+        if (code === 0x1b) {
+          inEscape = true;
+          escBuf = "";
+          continue;
+        }
+        if (code === 0x0d) {
+          process.stdin.removeListener("data", onData);
+          process.stdin.setRawMode(wasRaw ?? false);
+          process.stdin.pause();
+          process.stdout.write("\n");
+          resolve(lines.join("\n"));
+          return;
+        }
+        if (code === 0x0a) {
+          insertNewline();
+          continue;
+        }
+        if (code === 0x03) {
+          process.stdin.removeListener("data", onData);
+          process.stdin.setRawMode(wasRaw ?? false);
+          process.stdin.pause();
+          process.stdout.write("\n");
+          reject(new Error("SIGINT"));
+          return;
+        }
+        if (code === 0x01) {
+          curCol = 0;
+          redraw();
+          continue;
+        }
+        if (code === 0x05) {
+          curCol = lines[curLine].length;
+          redraw();
+          continue;
+        }
+        if (code === 0x17) {
+          const start = curCol;
+          while (curCol > 0 && lines[curLine][curCol - 1] === " ") curCol--;
+          while (curCol > 0 && lines[curLine][curCol - 1] !== " ") curCol--;
+          lines[curLine] = lines[curLine].slice(0, curCol) + lines[curLine].slice(start);
+          redraw();
+          continue;
+        }
+        if (code === 0x15) {
+          lines[curLine] = lines[curLine].slice(curCol);
+          curCol = 0;
+          redraw();
+          continue;
+        }
+        if (code === 0x0b) {
+          lines[curLine] = lines[curLine].slice(0, curCol);
+          redraw();
+          continue;
+        }
+        if (code === 0x04) {
+          if (lines.length === 1 && lines[0].length === 0) {
+            process.stdin.removeListener("data", onData);
+            process.stdin.setRawMode(wasRaw ?? false);
+            process.stdin.pause();
+            process.stdout.write("\n");
+            reject(new Error("EOF"));
+            return;
+          }
+          continue;
+        }
+        if (code === 0x7f || code === 0x08) {
+          handleBackspace();
+          continue;
+        }
+        if (code >= 0x20) {
+          const line = lines[curLine];
+          lines[curLine] = line.slice(0, curCol) + ch + line.slice(curCol);
+          curCol++;
+          redraw();
+        }
+      }
+    };
+
+    process.stdin.on("data", onData);
+  });
+}
+
+// ─── Clipboard ──────────────────────────────────────────────────────────── //
+
+function getClipboardCommand(): { cmd: string; args: string[] } {
+  switch (process.platform) {
+    case "darwin":
+      return { cmd: "pbcopy", args: [] };
+    case "win32":
+      return { cmd: "clip", args: [] };
+    default:
+      return { cmd: "xclip", args: ["-selection", "clipboard"] };
+  }
+}
+
+function generateId(): string {
+  return crypto.randomUUID();
+}
+
+interface LocalMessage {
+  role: "user" | "agent";
+  text: string;
+}
+
+// ─── Tool envelope formatting ───────────────────────────────────────────── //
+
+interface StepResult {
+  action: string;
+  ok: boolean;
+  summary?: string;
+  error?: string;
+  needs_confirmation?: boolean;
+  attempts_left?: number;
+  preState?: string;
+  postState?: string;
+  verdict?: string;
+  otp_sent?: boolean;
+  mobile_masked?: string;
+  aborted_awaiting?: { kind?: string; for_action?: string };
+  aborted_flow?: string;
+  active_flow?: string;
+  state?: string;
+  locked?: boolean;
+  counter?: number;
+  success?: boolean;
+  newStatus?: string;
+  masked_pin_last2?: string;
+}
+
+interface ToolEnvelope {
+  summary?: string;
+  results?: StepResult[];
+  failed_at?: number;
+}
+
+/** Sensitive param keys are masked before logging — even in the dev CLI we
+ *  don't want full PINs / OTPs in scrollback. */
+const SENSITIVE_PARAM_KEYS = new Set(["pin", "otp"]);
+
+function maskParams(params: unknown): unknown {
+  if (params == null || typeof params !== "object") return params;
+  if (Array.isArray(params)) return params;
+  const obj = params as Record<string, unknown>;
+  const masked: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (SENSITIVE_PARAM_KEYS.has(k) && typeof v === "string") {
+      masked[k] = v.length <= 2 ? "***" : "*".repeat(v.length - 2) + v.slice(-2);
+    } else {
+      masked[k] = v;
+    }
+  }
+  return masked;
+}
+
+/** Compact one-liner when the JSON fits in 80 cols; pretty-printed multi-line
+ *  otherwise. Multi-line output is indented so continuation lines align under
+ *  the opening brace's column (the caller passes the column it starts at). */
+function formatJson(value: unknown, leftIndent: number): string {
+  const compact = JSON.stringify(value);
+  if (compact == null) return String(value);
+  if (compact.length <= 80) return compact;
+  const pretty = JSON.stringify(value, null, 2);
+  const pad = " ".repeat(leftIndent);
+  return pretty
+    .split("\n")
+    .map((line, i) => (i === 0 ? line : pad + line))
+    .join("\n");
+}
+
+/** Pull `{ steps: [...] }` out of an `on_tool_start` event payload.
+ *  LangChain v0.x callback shape is `data.input = { input: <JSONstring> }`
+ *  (stringified args). Older shapes may pass the args directly under
+ *  `data.input`. Returns null if neither matches. */
+function extractStepsFromToolStart(
+  data: unknown,
+): { action: string; params: unknown }[] | null {
+  if (!data || typeof data !== "object") return null;
+  const di = (data as { input?: unknown }).input;
+  let parsed: unknown = null;
+  if (typeof di === "string") {
+    try {
+      parsed = JSON.parse(di);
+    } catch {
+      return null;
+    }
+  } else if (di && typeof di === "object") {
+    const inner = (di as { input?: unknown }).input;
+    if (typeof inner === "string") {
+      try {
+        parsed = JSON.parse(inner);
+      } catch {
+        return null;
+      }
+    } else {
+      parsed = di;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const steps = (parsed as { steps?: unknown }).steps;
+  return Array.isArray(steps) ? (steps as { action: string; params: unknown }[]) : null;
+}
+
+/** Pull the ToolMessage envelope JSON out of an `on_tool_end` event payload.
+ *  When the tool returns a LangGraph `Command`, the envelope lives in
+ *  `output.update.messages[<last>].content` (a JSON string). For tools that
+ *  return a ToolMessage directly, the envelope is `output.content`. Plain
+ *  string outputs are returned as-is. */
+function extractEnvelopeFromToolEnd(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const output = (data as { output?: unknown }).output;
+  if (output == null) return null;
+  if (typeof output === "string") return output;
+  if (typeof output !== "object") return null;
+  // ToolMessage shape
+  const directContent = (output as { content?: unknown }).content;
+  if (typeof directContent === "string") return directContent;
+  // LangGraph Command shape: output.update.messages[last].content
+  const update = (output as { update?: unknown }).update;
+  if (update && typeof update === "object") {
+    const messages = (update as { messages?: unknown }).messages;
+    if (Array.isArray(messages) && messages.length > 0) {
+      const last = messages[messages.length - 1] as { content?: unknown } | undefined;
+      if (last && typeof last.content === "string") return last.content;
+    }
+  }
+  return null;
+}
+
+function formatRequestLine(step: { action: string; params: unknown }): string {
+  const masked = maskParams(step.params);
+  // "  → action " — the JSON value starts after that, indent continuation
+  // lines so they sit one level deeper than the arrow.
+  const json = formatJson(masked, 4);
+  return `${DIM}  → ${step.action} ${json}${RESET}`;
+}
+
+function formatStepLine(r: StepResult): string {
+  const mark = r.ok ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
+  const bits: string[] = [];
+  if (r.verdict && r.verdict !== "ok") bits.push(`verdict=${r.verdict}`);
+  if (r.needs_confirmation) bits.push(`needs_confirmation attempts_left=${r.attempts_left}`);
+  if (r.preState) bits.push(`preState=${r.preState}`);
+  if (r.postState) bits.push(`postState=${r.postState}`);
+  if (r.state) bits.push(`state=${r.state}`);
+  if (r.locked !== undefined) bits.push(`locked=${r.locked} counter=${r.counter}`);
+  if (r.otp_sent) bits.push(`otp_sent mobile=${r.mobile_masked}`);
+  if (r.aborted_awaiting) bits.push(`aborted_awaiting=${r.aborted_awaiting.kind}/${r.aborted_awaiting.for_action}`);
+  if (r.aborted_flow) bits.push(`aborted_flow=${r.aborted_flow}`);
+  if (r.active_flow) bits.push(`active_flow=${r.active_flow}`);
+  if (r.success !== undefined && !r.needs_confirmation) bits.push(`success=${r.success}`);
+  if (r.newStatus) bits.push(`newStatus=${r.newStatus}`);
+  if (r.masked_pin_last2) bits.push(`pin=**${r.masked_pin_last2}`);
+  if (r.error) bits.push(`error=${r.error}`);
+  if (bits.length === 0 && r.summary)
+    bits.push(r.summary.length > 60 ? r.summary.slice(0, 60) + "…" : r.summary);
+  return `${DIM}  • ${r.action} ${mark}${bits.length ? " " + bits.join(" ") : ""}${RESET}`;
+}
+
+// ─── State capture ──────────────────────────────────────────────────────── //
+
+async function captureState(threadId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+    return snapshot.values as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Main ───────────────────────────────────────────────────────────────── //
+
+async function main(): Promise<void> {
+  trimHistoryIfLarge();
+  let threadId = generateId();
+  let messages: LocalMessage[] = [];
+  let lastResponse = "";
+  const inputHistory: string[] = loadHistory();
+
+  console.log(`${BOLD}{{AGENT_DISPLAY_NAME}} CLI${RESET} (LangGraph, in-process)`);
+  console.log(`${DIM}LLM: Azure OpenAI ${process.env.AZURE_OPENAI_DEPLOYMENT ?? "?"}${RESET}`);
+  console.log(`${DIM}Sandbox: ${process.env.SANDBOX_ID ?? "?"} @ ${process.env.CUSTOMER_API_BASE_URL ?? "?"}${RESET}`);
+  console.log(`${DIM}Thread: ${threadId}${RESET}`);
+  console.log(`${DIM}History: ${HISTORY_FILE} (${inputHistory.length} entries)${RESET}`);
+  console.log(`${DIM}Commands: /history /state /new /last /copy /quit /help${RESET}`);
+  console.log(`${DIM}Shift+Enter or Ctrl+J for newline, Enter to send, ESC during reply to abort, ↑/↓ to navigate history${RESET}`);
+  console.log();
+
+  const PROMPT = `${GREEN}You>${RESET} `;
+  const CONT_PROMPT = `${GREEN} ..${RESET} `;
+
+  while (true) {
+    let text: string;
+    try {
+      text = (await readInput(PROMPT, CONT_PROMPT, inputHistory)).trim();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg === "SIGINT" || msg === "EOF") {
+        console.log("Goodbye!");
+        process.exit(0);
+      }
+      continue;
+    }
+    if (text.length === 0) continue;
+
+    if (inputHistory.length === 0 || inputHistory[inputHistory.length - 1] !== text) {
+      inputHistory.push(text);
+      appendHistory(text);
+    }
+
+    const cmd = text.toLowerCase();
+
+    if (cmd === "/quit" || cmd === "/exit") {
+      console.log("Goodbye!");
+      process.exit(0);
+    }
+
+    if (cmd === "/help") {
+      printSystem("Commands:");
+      printSystem("  /history       Show conversation");
+      printSystem("  /state         Show cards session state");
+      printSystem("  /new, /reset   Start a fresh thread");
+      printSystem("  /last, /raw    Show last raw agent response");
+      printSystem("  /copy          Copy last response to clipboard");
+      printSystem("  /quit, /exit   Exit");
+      console.log();
+      continue;
+    }
+
+    if (cmd === "/history") {
+      if (messages.length === 0) printSystem("(empty)");
+      else
+        for (const m of messages) {
+          const prefix = m.role === "user" ? `${GREEN}You${RESET}` : `${CYAN}Agent${RESET}`;
+          const trunc = m.text.length > 200 ? m.text.slice(0, 200) + "…" : m.text;
+          console.log(`  ${prefix}: ${trunc}`);
+        }
+      console.log();
+      continue;
+    }
+
+    if (cmd === "/state") {
+      const state = await captureState(threadId);
+      printSystem(`Thread: ${threadId}`);
+      if (!state) {
+        printSystem("(no state yet — send a message first)");
+      } else {
+        // ─── TOOL-SPECIFIC: replace these lines with prints for the slots
+        //     your tool declares in state.ts (e.g. verifiedAccount,
+        //     activeAccountNumber, etc.). The library-managed slots below
+        //     are stable and need no editing.
+        const vc = state.verifiedCustomer as { customerCode?: string; fullName?: string } | null;
+        printSystem(`verifiedCustomer: ${vc ? `${vc.customerCode} (${vc.fullName})` : "null"}`);
+        const cards = state.verifiedCards as Record<string, unknown> | null;
+        printSystem(`verifiedCards: ${cards ? Object.keys(cards).join(", ") || "{}" : "null"}`);
+        printSystem(`activeCardNumber: ${state.activeCardNumber ?? "null"}`);
+        // ─── Library-managed slots (keep as-is) ──────────────────────────
+        const ai = state.awaitingInput as
+          | { kind?: string; for_action?: string; attempts_left?: number; flow_ref?: string }
+          | null;
+        printSystem(
+          `awaitingInput: ${
+            ai
+              ? `${ai.kind}/${ai.for_action}${ai.attempts_left !== undefined ? ` attempts_left=${ai.attempts_left}` : ""}${ai.flow_ref ? ` flow_ref=${ai.flow_ref}` : ""}`
+              : "null"
+          }`,
+        );
+        const cf = state.currentFlow as { name?: string; data?: Record<string, unknown> } | null;
+        if (cf) {
+          const dataKeys = cf.data ? Object.keys(cf.data).join(", ") : "";
+          printSystem(`currentFlow: ${cf.name}${dataKeys ? ` data={${dataKeys}}` : ""}`);
+        } else {
+          printSystem(`currentFlow: null`);
+        }
+      }
+      console.log();
+      continue;
+    }
+
+    if (cmd === "/new" || cmd === "/reset") {
+      threadId = generateId();
+      messages = [];
+      lastResponse = "";
+      // Keep inputHistory — it spans sessions.
+      printSystem(`New thread: ${threadId}`);
+      console.log();
+      continue;
+    }
+
+    if (cmd === "/last" || cmd === "/raw") {
+      if (lastResponse) {
+        printSystem("Last raw response:");
+        console.log(lastResponse);
+      } else {
+        printSystem("No response yet.");
+      }
+      console.log();
+      continue;
+    }
+
+    if (cmd === "/copy") {
+      if (!lastResponse) {
+        printSystem("No response to copy.");
+      } else {
+        try {
+          const clip = getClipboardCommand();
+          const { execFileSync } = await import("node:child_process");
+          execFileSync(clip.cmd, clip.args, { input: lastResponse });
+          printSystem("Copied.");
+        } catch {
+          printSystem("Clipboard copy failed.");
+        }
+      }
+      console.log();
+      continue;
+    }
+
+    // ─── Send to agent ───────────────────────────────────────────────────── //
+    messages.push({ role: "user", text });
+    const spinner = createSpinner("Thinking…");
+    spinner.start();
+    const abortController = new AbortController();
+    let aborted = false;
+
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    const onKey = (buf: Buffer) => {
+      const code = buf[0];
+      if ((code === 0x1b && buf.length === 1) || code === 0x03) {
+        aborted = true;
+        abortController.abort();
+      }
+    };
+    process.stdin.on("data", onKey);
+
+    let agentText = "";
+    let pendingToolSteps: { action: string; params: unknown }[] | null = null;
+    let headerPrinted = false;
+
+    try {
+      const eventStream = graph.streamEvents(
+        { messages: [new HumanMessage(text)] },
+        {
+          configurable: { thread_id: threadId },
+          metadata: { thread_id: threadId },
+          version: "v2",
+          signal: abortController.signal,
+        },
+      );
+
+      for await (const event of eventStream) {
+        if (aborted) break;
+
+        if (event.event === "on_chat_model_stream") {
+          const chunk = event.data?.chunk;
+          const content = chunk?.content;
+          if (typeof content === "string" && content.length > 0) {
+            if (spinner.isActive()) spinner.stop();
+            if (!headerPrinted) {
+              headerPrinted = true;
+              process.stdout.write(`${BOLD}${CYAN}Agent${RESET} `);
+            }
+            process.stdout.write(content);
+            agentText += content;
+          }
+        } else if (event.event === "on_tool_start") {
+          if (spinner.isActive()) spinner.stop();
+          if (!headerPrinted) {
+            headerPrinted = true;
+            process.stdout.write(`${BOLD}${CYAN}Agent${RESET}`);
+          }
+          pendingToolSteps = extractStepsFromToolStart(event.data);
+          process.stdout.write(`\n${DIM}  ↳ ${event.name ?? "tool"}${RESET}\n`);
+          for (const step of pendingToolSteps ?? []) {
+            process.stdout.write(formatRequestLine(step) + "\n");
+          }
+        } else if (event.event === "on_tool_end") {
+          const envText = extractEnvelopeFromToolEnd(event.data);
+          if (envText) {
+            try {
+              const env = JSON.parse(envText) as ToolEnvelope;
+              for (const r of env.results ?? []) {
+                process.stdout.write(formatStepLine(r) + "\n");
+              }
+              if (env.failed_at !== undefined) {
+                process.stdout.write(
+                  `${DIM}  ${YELLOW}batch short-circuited at step ${env.failed_at}${RESET}\n`,
+                );
+              }
+              // Show post-batch library-controlled state for visibility
+              const post = await captureState(threadId);
+              if (post) {
+                const ai = post.awaitingInput as { kind?: string; for_action?: string } | null;
+                const cf = post.currentFlow as { name?: string } | null;
+                const bits: string[] = [];
+                if (ai) bits.push(`awaitingInput=${ai.kind}/${ai.for_action}`);
+                if (cf) bits.push(`currentFlow=${cf.name}`);
+                // ─── TOOL-SPECIFIC: add bits for your active entity, e.g.
+                //   const acn = post.activeCardNumber as string | null;
+                //   if (acn) bits.push(`activeCard=…${acn.slice(-4)}`);
+                if (bits.length) {
+                  process.stdout.write(`${DIM}  ⎿ state: ${bits.join(" ")}${RESET}\n`);
+                }
+              }
+            } catch {
+              // not JSON, skip
+            }
+          }
+          spinner.setLabel("Generating reply…");
+          spinner.start();
+          pendingToolSteps = null;
+        }
+      }
+
+      if (spinner.isActive()) spinner.stop();
+      if (aborted) {
+        console.log(`\n${DIM}${YELLOW}[interrupted]${RESET}\n`);
+      } else {
+        console.log("\n");
+      }
+      lastResponse = agentText;
+      if (agentText) messages.push({ role: "agent", text: agentText });
+    } catch (err) {
+      if (spinner.isActive()) spinner.stop();
+      if (aborted) {
+        console.log(`\n${DIM}${YELLOW}[interrupted]${RESET}\n`);
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`\n${RED}Error: ${msg}${RESET}\n`);
+      }
+    } finally {
+      process.stdin.removeListener("data", onKey);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+    }
+  }
+}
+
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error(`\n${RED}Unhandled: ${msg}${RESET}\n`);
+});
+
+main().catch((err) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("environment variable is required") || msg.includes("Missing required")) {
+    console.error(`\n${RED}Configuration error: ${msg}${RESET}`);
+    console.error(`${DIM}Make sure .env has AZURE_OPENAI_* and the sandbox URLs set.${RESET}\n`);
+    process.exit(1);
+  }
+  console.error(`\n${RED}Fatal: ${msg}${RESET}\n`);
+  process.exit(1);
+});

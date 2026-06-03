@@ -1,0 +1,33 @@
+// FILE: src/llm-env.ts
+//
+// Graph-level LLM env. Read once at module load; throws on missing vars.
+
+import dotenv from "dotenv";
+
+dotenv.config({ override: true });
+
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value || value.length === 0) {
+    throw new Error(`${name} environment variable is required.`);
+  }
+  return value;
+}
+
+function envFloat(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw || raw.length === 0) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${name} must be a number. Got: "${raw}"`);
+  }
+  return parsed;
+}
+
+export const llmEnv = {
+  endpoint: required("AZURE_OPENAI_ENDPOINT"),
+  apiKey: required("AZURE_OPENAI_API_KEY"),
+  deploymentName: required("AZURE_OPENAI_DEPLOYMENT"),
+  apiVersion: required("AZURE_OPENAI_API_VERSION"),
+  temperature: envFloat("TEMPERATURE", 0),
+} as const;

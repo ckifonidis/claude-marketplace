@@ -1,0 +1,42 @@
+// FILE: src/tools/{{TOOL_NAME}}/index.ts
+//
+// Wire-up: import every executor and verifier by name, build the registries,
+// call buildAgentStepTool. This is the ONLY file in the tool directory that
+// touches the agent-step library directly.
+
+import { buildAgentStepTool } from "../../agent-step/index.js";
+import type {
+  ExecutorRegistry,
+  VerifierRegistry,
+} from "../../agent-step/index.js";
+import { AgentState } from "../../state.js";
+import { {{TOOL_NAME}}Config } from "./config.js";
+
+// ─── Action executors — one file per action under actions/<name>/executor.ts
+import { {{EXECUTOR_FN_1}} } from "./actions/{{ACTION_1}}/executor.js";
+import { {{EXECUTOR_FN_2}} } from "./actions/{{ACTION_2}}/executor.js";
+import { {{EXECUTOR_FN_3}} } from "./actions/{{ACTION_3}}/executor.js";
+
+// ─── Verifiers — one file per prereq under verifiers/.
+import { {{PREREQ_1}} } from "./verifiers/{{PREREQ_1_KEBAB}}.js";
+import { {{PREREQ_2}} } from "./verifiers/{{PREREQ_2_KEBAB}}.js";
+
+type State = typeof AgentState.State;
+
+const executors: ExecutorRegistry<State> = {
+  {{EXECUTOR_FN_1}},
+  {{EXECUTOR_FN_2}},
+  {{EXECUTOR_FN_3}},
+};
+
+const verifiers: VerifierRegistry<State> = {
+  {{PREREQ_1}},
+  {{PREREQ_2}},
+};
+
+export const {{TOOL_NAME}}Tool = buildAgentStepTool({
+  config: {{TOOL_NAME}}Config,
+  stateAnnotation: AgentState,
+  executors,
+  verifiers,
+});

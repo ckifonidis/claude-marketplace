@@ -1,0 +1,99 @@
+// FILE: src/tools/{{TOOL_NAME}}/config.ts
+//
+// Pure data. Action declarations. The runner cross-references this against
+// the executors / verifiers registries at construction time.
+
+import { z } from "zod";
+import { defineConfig } from "../../agent-step/index.js";
+
+type ActionName =
+  | "{{ACTION_1}}"
+  | "{{ACTION_2}}"
+  | "{{ACTION_3}}";
+
+type PrereqName = "{{PREREQ_1}}" | "{{PREREQ_2}}";
+
+// Multi-turn flow names (only needed if any action declares startsFlow/endsFlow/requiresFlow).
+// const {{FLOW_NAME_CONST}} = "{{flow_name}}";
+
+export const {{TOOL_NAME}}Config = defineConfig<ActionName, PrereqName>({
+  tool: {
+    name: "{{TOOL_NAME}}_agent_step",
+    description:
+      "Run one or more {{TOOL_NAME}} action steps in order. Each step is `{ action, params }`. The runner resolves prereqs against session state, executes sequentially threading state updates between steps, and short-circuits on the first non-ok step. Result body is `{ summary, results: StepResult[], failed_at? }` where each StepResult is `{ action, ok, ...payload }`.",
+  },
+  actions: {
+    {{ACTION_1}}: {
+      description:
+        "{{ACTION_1_LLM_DESCRIPTION}}",
+      paramsSchema: z.object({
+        // {{ACTION_1_PARAMS}}
+      }),
+      prereqs: [{{ACTION_1_PREREQS}}],
+    },
+    {{ACTION_2}}: {
+      description:
+        "{{ACTION_2_LLM_DESCRIPTION}}",
+      paramsSchema: z.object({
+        // {{ACTION_2_PARAMS}}
+      }),
+      prereqs: [{{ACTION_2_PREREQS}}],
+      // Optional: reset downstream slots when this action re-collects a watched
+      // slot with a DIFFERENT value (non-null → changed). First-time set and
+      // same-value writes do NOT fire. Targets must accept `null` as "unset".
+      // invalidatesOnChange: {
+      //   {{WATCHED_SLOT}}: ["{{DOWNSTREAM_SLOT_A}}", "{{DOWNSTREAM_SLOT_B}}"],
+      // },
+    },
+    {{ACTION_3}}: {
+      description:
+        "Confirm-required mutation. May ride as the LAST step of a propose batch (e.g. `[verify_x, verify_y, {{ACTION_3}}]`); once a confirmation is pending, the execute re-call must be the only step in the batch. First call proposes (returns `{ needs_confirmation, proposed_params, attempts_left }`, no execution). Re-call with same params after the customer affirms executes — the executor internally re-reads {{ENTITY}} status after the write to confirm the change landed; the post-read state appears in the result as `postState`. Re-call with drifted params re-proposes and decrements `attempts_left`. While pending, unrelated actions return `pending_confirmation_locked`; the LLM may also call `abort_pending_input` (library-injected) to drop the gate.",
+      paramsSchema: z.object({
+        // {{ACTION_3_PARAMS}}
+      }),
+      prereqs: [{{ACTION_3_PREREQS}}],
+      // Lifecycle opts live INLINE on the action under `controller` — there is
+      // no separate top-level `mutations` map.
+      controller: {
+        // `soleOnExecute` allows propose / re-propose to ride as the LAST step
+        // of a multi-step batch (so `[verify_customer, verify_card, mutate]`
+        // works in one tool call on the propose turn), while execute mode must
+        // be the only step in the batch. Use the strict `soleStep: true`
+        // instead if the mutation must never share a batch, regardless of mode.
+        soleOnExecute: true,
+        requiresConfirmation: { maxAttempts: 3, ttlMs: 300_000 },
+      },
+    },
+  },
+});
+
+// ─── Other lifecycle opts available on `ActionDef.controller` (use as needed) ─── //
+//
+// Declare these inline on the action, inside its `controller: { … }` block.
+//
+// Multi-turn flow lifecycle (one flow at a time; library enforces flow mutex):
+//   startsFlow:    { name: "{{flow_name}}" }     — opens the flow on `ok`.
+//   requiresFlow:  "{{flow_name}}"               — refuse unless flow matches.
+//   endsFlow:      true                           — clears flow + awaitingInput on `ok`.
+//
+// SCA / OTP gating (library never counts OTP attempts; backend is authoritative):
+//   issuesOtp:     { consumer_action: "confirm_otp" }
+//                                                 — executor reports `lifecycle.issuesOtp`;
+//                                                   library sets awaitingInput=otp for the
+//                                                   named consumer.
+//   requiresOtp:   true                           — refuse unless awaitingInput.kind="otp"
+//                                                   for this action; auto-clears on `ok`.
+//
+// Double-entry verification (PIN repeat, password repeat, security answer):
+//   startsMatchFor:{ consumer_action: "commit_x" }
+//                                                 — capturer stores the first entry; library
+//                                                   sets awaitingInput=match for the consumer.
+//   requiresMatch: { capturer: "propose_x", maxAttempts: 3 }
+//                                                 — consumer receives the repeat; library
+//                                                   decrements attempts on `verdict: "match_mismatch"`,
+//                                                   aborts the flow on exhaustion, auto-clears on `ok`.
+//
+// Downstream-slot invalidation is NOT a controller opt — it is the separate
+// per-action `invalidatesOnChange` field shown on {{ACTION_2}} above.
+//
+// See `references/agent-step-api.md` for the full lifecycle table.

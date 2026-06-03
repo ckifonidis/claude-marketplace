@@ -1,0 +1,19 @@
+// FILE: src/tools/{{TOOL_NAME}}/verifiers/{{PREREQ_KEBAB}}.ts
+//
+// Self-contained prereq: predicate + denial body in one file. Library uses
+// the predicate to gate, and emits the denial in the result envelope when it
+// fails. The registry key in the tool's index.ts MUST match the prereq name
+// declared in config.actions[X].prereqs.
+
+import type { AgentState } from "../../../state.js";
+import type { Verifier } from "../../../agent-step/index.js";
+
+type State = typeof AgentState.State;
+
+export const {{PREREQ_NAME}}: Verifier<State> = {
+  check: (s) => {{PREDICATE_EXPRESSION}},
+  denial: {
+    summary: "{{LLM_FACING_DENIAL_SUMMARY}}",
+    error: "{{MACHINE_ERROR_KEY}}",
+  },
+};

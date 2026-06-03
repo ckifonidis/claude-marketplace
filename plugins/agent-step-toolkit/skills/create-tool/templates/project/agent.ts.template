@@ -1,0 +1,45 @@
+// FILE: src/agent.ts
+//
+// Build the LangGraph ReAct agent with Azure OpenAI + MemorySaver checkpointer.
+// Tools registered via src/tools/index.ts.
+
+import { MemorySaver } from "@langchain/langgraph";
+import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { AzureChatOpenAI } from "@langchain/openai";
+import { llmEnv } from "./llm-env.js";
+import { AgentStateSchema } from "./state.js";
+import { buildPrompt } from "./prompt.js";
+import { tools } from "./tools/index.js";
+
+export function createAgent(): ReturnType<typeof createReactAgent> {
+  console.log(
+    "[agent] config: azure_openai_instance=",
+    new URL(llmEnv.endpoint).hostname.split(".")[0],
+    "deployment=",
+    llmEnv.deploymentName,
+    "api_version=",
+    llmEnv.apiVersion,
+    "temperature=",
+    llmEnv.temperature,
+  );
+
+  const model = new AzureChatOpenAI({
+    azureOpenAIApiKey: llmEnv.apiKey,
+    azureOpenAIApiInstanceName: new URL(llmEnv.endpoint).hostname.split(".")[0],
+    azureOpenAIEndpoint: llmEnv.endpoint,
+    azureOpenAIApiDeploymentName: llmEnv.deploymentName,
+    azureOpenAIApiVersion: llmEnv.apiVersion,
+    temperature: llmEnv.temperature,
+  });
+  console.log("[agent] AzureChatOpenAI client built");
+
+  return createReactAgent({
+    llm: model,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tools: tools as any,
+    stateSchema: AgentStateSchema,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    prompt: buildPrompt as any,
+    checkpointSaver: new MemorySaver(),
+  });
+}

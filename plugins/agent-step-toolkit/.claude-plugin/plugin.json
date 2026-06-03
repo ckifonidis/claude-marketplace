@@ -1,0 +1,9 @@
+{
+  "name": "agent-step-toolkit",
+  "version": "0.1.0",
+  "description": "Build agent-step LangGraph projects and tools — bootstrap a new project (runner library + streaming CLI + scaffold), add domain tools (actions / executors / verifiers / controller hooks + invalidatesOnChange), and apply the three-layer test methodology (runner unit / sandbox / prompt-input).",
+  "author": {
+    "name": "Charalampos Kyfonidis"
+  },
+  "keywords": ["langgraph", "agent-step", "scaffolding", "typescript", "react-agent", "testing"]
+}

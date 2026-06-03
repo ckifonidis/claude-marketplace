@@ -1,0 +1,93 @@
+// FILE: src/tools/{{TOOL_NAME}}/actions/{{ACTION_NAME}}/executor.ts
+//
+// Mutation executor. Handles its own pre-check and post-read internally.
+// The library only manages the propose → execute lifecycle around this
+// executor; on execute mode this executor is invoked once with the matching
+// params. Library will NOT auto-wrap with preWrap/postWrap reads.
+
+import { postBackend } from "../../backend/client.js";
+import { {{TOOL_NAME}}Env } from "../../backend/env.js";
+// import { tryResolve{{ENTITY}} } from "../../shared/resolve-{{entity}}.js"; // if needed
+import type { AgentState } from "../../../../state.js";
+import type { ExecutorResult } from "../../../../agent-step/index.js";
+
+type State = typeof AgentState.State;
+
+interface {{ACTION_PARAMS_TYPE}} {
+  // {{PARAM_FIELDS}}
+}
+
+// ─── Helper: read current state (used by both pre-check and post-read) ──── //
+async function read{{ENTITY}}State({{ENTITY_ID}}: string): Promise<string> {
+  const resp = await postBackend<{ payload?: { state?: string } }>(
+    {{TOOL_NAME}}Env.{{BASE_URL_FIELD}},
+    "{{READ_STATE_ENDPOINT}}",
+    {
+      // {{READ_REQUEST_FIELDS}}
+    },
+    { envelope: "{{ENVELOPE_MODE}}" },
+  );
+  return resp?.payload?.state ?? "unknown";
+}
+
+export async function {{EXECUTOR_FN_NAME}}(
+  rawParams: unknown,
+  state: State,
+): Promise<ExecutorResult<State>> {
+  const p = rawParams as {{ACTION_PARAMS_TYPE}};
+
+  // (Optional) Resolve the target entity from state + params.
+  // const entity = tryResolve{{ENTITY}}(state, p.{{LOOKUP_FIELD}});
+  // if ("error" in entity) {
+  //   return { resultBody: { summary: entity.summary, error: entity.error }, ok: false };
+  // }
+
+  // ─── Pre-read: decide whether the mutation should happen ──────────────── //
+  const preState = await read{{ENTITY}}State(/* entity.id */ "{{ENTITY_ID_VALUE}}");
+  if ({{REFUSE_CONDITION}}) {
+    return {
+      resultBody: {
+        summary: `{{ENTITY}} is already ${preState}; mutation refused.`,
+        error: "mutation_blocked_{{BLOCKING_REASON}}",
+        preState,
+      },
+      ok: false,
+    };
+  }
+
+  // ─── Write ────────────────────────────────────────────────────────────── //
+  const resp = await postBackend<{ payload?: { success?: boolean } }>(
+    {{TOOL_NAME}}Env.{{WRITE_BASE_URL_FIELD}},
+    "{{WRITE_ENDPOINT}}",
+    {
+      // {{WRITE_REQUEST_FIELDS}}
+    },
+    { envelope: "{{ENVELOPE_MODE}}" },
+  );
+
+  const success = resp?.payload?.success === true;
+  if (!success) {
+    return {
+      resultBody: {
+        summary: "{{ENTITY}} change did not persist.",
+        success: false,
+        preState,
+      },
+      ok: false,
+    };
+  }
+
+  // ─── Post-read: verify the write landed ───────────────────────────────── //
+  const postState = await read{{ENTITY}}State(/* entity.id */ "{{ENTITY_ID_VALUE}}");
+
+  return {
+    resultBody: {
+      summary: `{{ENTITY}} change persisted; new state: ${postState}.`,
+      success: true,
+      // {{NEW_VALUE_FIELDS}}
+      preState,
+      postState,
+    },
+    ok: true,
+  };
+}

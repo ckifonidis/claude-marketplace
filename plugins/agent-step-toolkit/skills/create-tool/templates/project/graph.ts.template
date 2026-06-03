@@ -1,0 +1,31 @@
+// FILE: src/graph.ts
+//
+// Entry point for the LangGraph dev server (referenced from langgraph.json).
+// Logs env presence + builds the agent exactly once.
+
+import "dotenv/config";
+import { createAgent } from "./agent.js";
+
+console.log("[graph] loading — node=", process.version, "cwd=", process.cwd());
+console.log("[graph] env keys present:", {
+  AZURE_OPENAI_ENDPOINT: !!process.env.AZURE_OPENAI_ENDPOINT,
+  AZURE_OPENAI_DEPLOYMENT: process.env.AZURE_OPENAI_DEPLOYMENT,
+  AZURE_OPENAI_API_VERSION: process.env.AZURE_OPENAI_API_VERSION,
+  SANDBOX_ID: process.env.SANDBOX_ID,
+  LANGSMITH_ENDPOINT: process.env.LANGSMITH_ENDPOINT,
+  LANGSMITH_PROJECT: process.env.LANGSMITH_PROJECT,
+  REDIS_URI: process.env.REDIS_URI ? "<set>" : "<missing>",
+  DATABASE_URI: process.env.DATABASE_URI ? "<set>" : "<missing>",
+});
+
+let _graph: ReturnType<typeof createAgent> | null = null;
+function buildOnce(): ReturnType<typeof createAgent> {
+  if (_graph) return _graph;
+  const t0 = Date.now();
+  console.log("[graph] createAgent() starting…");
+  _graph = createAgent();
+  console.log(`[graph] createAgent() ok in ${Date.now() - t0}ms`);
+  return _graph;
+}
+
+export const graph = buildOnce();

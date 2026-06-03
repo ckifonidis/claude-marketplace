@@ -1,0 +1,44 @@
+#!/bin/bash
+# Push the {{PROJECT_NAME}} Docker image to Azure Container Registry.
+#
+# Usage: ./build_and_push.sh <tag>      e.g. ./build_and_push.sh latest
+
+set -e
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 <tag>" >&2
+  exit 1
+fi
+
+ACR_REGISTRY="{{ACR_REGISTRY}}"
+ACR_USERNAME="${ACR_USERNAME:-{{ACR_USERNAME_DEFAULT}}}"
+ACR_PASSWORD="${ACR_PASSWORD:-{{ACR_PASSWORD_DEFAULT}}}"
+TAG="$1"
+
+COMPONENTS=(
+  "agent:Dockerfile:{{IMAGE_NAME}}"
+)
+
+echo "🚀 Building & pushing {{PROJECT_NAME}} to ACR..."
+echo "📍 Registry: $ACR_REGISTRY"
+echo "🏷️  Tag: $TAG"
+echo
+
+docker buildx create --use --name multiarch-builder 2>/dev/null || docker buildx use multiarch-builder
+
+echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY --username $ACR_USERNAME --password-stdin
+if [[ $? -ne 0 ]]; then echo "❌ ACR login failed"; exit 1; fi
+
+for entry in "${COMPONENTS[@]}"; do
+  IFS=":" read -r component dockerfile image <<<"${entry}"
+  local_image="${image}:${TAG}"
+  remote_image="${ACR_REGISTRY}/${image}:${TAG}"
+
+  echo "🔨 Building ${component} for linux/amd64..."
+  docker buildx build --platform linux/amd64 -f "${dockerfile}" -t "${local_image}" . --load
+  docker tag "${local_image}" "${remote_image}"
+  docker push "${remote_image}"
+  echo "   ✅ pushed ${remote_image}"
+done
+
+echo "🎉 Done."

@@ -1,0 +1,15 @@
+/**
+ * Side-effect-only module that tunes process.env before any other CLI module
+ * loads. Imported FIRST in cli.ts so the graph/backend modules see the right
+ * values when they evaluate.
+ *
+ * Suppress the per-tool backend trace logs (`[backend →]`, `[backend ←]`,
+ * `[tool:*]`) in the CLI by default — they're useful in the LangGraph dev
+ * panel but they crowd the CLI's structured `→ action {…}` / `• action ✓`
+ * output. Set `<TOOL>_BACKEND_TRACE=1` explicitly to see them in the CLI.
+ */
+
+// Example for a cards-style tool (rename to match your tool's trace env):
+if (process.env.CARDS_BACKEND_TRACE === undefined) {
+  process.env.CARDS_BACKEND_TRACE = "0";
+}
