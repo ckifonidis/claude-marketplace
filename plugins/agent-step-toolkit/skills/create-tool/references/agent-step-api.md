@@ -40,7 +40,10 @@ There is **no top-level `mutations` map**. All per-action behavioural opts (conf
 ```ts
 interface ActionDef<PrereqName extends string> {
   description: string;             // non-empty; flows into Zod .describe() AND tool description
-  summary?: string;                // optional one-line label, used only in the tool-level action index
+  summary?: string;                // optional one-line label for the tool-level action index. Add one
+                                   // when the action NAME isn't self-explanatory to the model; the full
+                                   // mechanics always live in `description` regardless. Omit it and the
+                                   // index just lists the action name alone.
   paramsSchema: z.ZodTypeAny;      // params the LLM must send
   prereqs: PrereqName[];           // state predicates checked before invoking executor
   invalidatesOnChange?: Record<string, string[]>;
@@ -89,10 +92,17 @@ interface ControllerHooks {
 }
 
 interface ConfirmationOpts {
-  maxAttempts?: number;            // default 3
-  ttlMs?: number;                  // default 300_000 (5 min); reserved field — gating is
-                                   //                          conversation-driven, not time-driven
-  lockdown?: boolean;              // default true — refuses unrelated batches while pending
+  maxAttempts?: number;            // re-propose budget before the gate exhausts. Default 3 —
+                                   // almost always right. Lower to 1–2 for high-stakes mutations
+                                   // where you want to bail fast on param drift.
+  ttlMs?: number;                  // INERT. The field exists on the type for forward-compat, but the
+                                   // runner removed time-based expiry (see runner.ts: "timestamps
+                                   // removed; runner no longer does TTL"). Gating is conversation-
+                                   // driven, not time-driven. Setting it does nothing today — omit it.
+  lockdown?: boolean;              // default true — refuses unrelated batches while a confirmation is
+                                   // pending. Leave it true. Set false only if you deliberately want
+                                   // unrelated READS to proceed mid-confirmation (rare; weakens the
+                                   // safety gate, since the customer can wander off the pending action).
 }
 
 interface OtpOpts {

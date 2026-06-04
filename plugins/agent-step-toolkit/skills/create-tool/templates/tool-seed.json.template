@@ -1,0 +1,6 @@
+{
+  "_comment": "Canonical sandbox seed for src/tools/{{TOOL_NAME}} tests. resetToSeed() in _setup.ts resets the local sandbox to this known state before every suite. Keep it minimal and broadly useful — layer per-suite fixtures on top via setup helpers rather than bloating this file. Shape is whatever your sandbox's reset endpoint accepts.",
+  "{{TOOL_NAME}}": {
+    "entities": []
+  }
+}

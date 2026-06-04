@@ -28,15 +28,32 @@ The shape produced by the `bootstrap-project` workflow. This is a complete LangG
     ├── graph.ts                  # exports `graph` (langgraph.json points here)
     ├── prompt.ts                 # system prompt with TBD section placeholders
     ├── cli.ts                    # streaming REPL (npm run cli)
+    ├── test-harness/             # SHARED test scaffolding — generic, tool-agnostic
+    │   ├── sandbox.ts            # runSteps re-export, foldCommitted, requireReachable, resetViaHttp
+    │   ├── prompt-input.ts       # live-model drivers + expect* helpers + PROMPT_INPUT_LIVE gating
+    │   └── index.ts              # barrel
     └── tools/
         └── index.ts              # empty barrel: `export const tools = [] as const;`
+```
+
+After the first `/create-tool`, each tool also gets a `tests/` subtree built on the shared harness:
+```
+src/tools/<name>/tests/
+├── tool/                         # sandbox tests — runner + executors, no LLM
+│   ├── _setup.ts                 # per-tool wiring: toolOpts, seedState, resetToSeed
+│   ├── seed.json                 # canonical sandbox seed
+│   ├── <action>.test.ts          # one per action (npm run test:sandbox)
+│   └── FINDINGS.md
+└── prompt-input/                 # routing tests — live model, no execution
+    ├── <topic>.test.ts           # one per routing decision (npm run test:prompt)
+    └── FINDINGS.md
 ```
 </final_layout>
 
 <per_file_purpose>
 ## Config files
 
-**package.json** — Declares dependencies (`@langchain/core`, `@langchain/langgraph`, `@langchain/openai`, `dotenv`, `zod`) and dev-deps (`@langchain/langgraph-cli`, `tsx`, `typescript`, `@types/node`). Scripts: `build`, `typecheck`, `test`, `dev` (LangGraph dev server on :2024), `cli` (in-process REPL).
+**package.json** — Declares dependencies (`@langchain/core`, `@langchain/langgraph`, `@langchain/openai`, `dotenv`, `zod`) and dev-deps (`@langchain/langgraph-cli`, `tsx`, `typescript`, `@types/node`). Scripts: `build`, `typecheck`, `test` (runner unit tests — fast, no backend, no LLM), `test:sandbox` (per-tool sandbox tests — needs the local sandbox), `test:prompt` (prompt-input tests — live model, sets `PROMPT_INPUT_LIVE=1`), `test:all` (unit + sandbox), `dev` (LangGraph dev server on :2024), `cli` (in-process REPL). The `test:sandbox` / `test:prompt` scripts use a guarded `find` so they're clean no-ops until a tool ships tests.
 
 **tsconfig.json** — ESM, Node 20+, `target: ES2022`, `module: ESNext`, `moduleResolution: bundler`, `strict: true`. Outputs to `dist/`.
 
@@ -61,7 +78,7 @@ Verbatim copy of the runner library. The skill treats these as templates-by-copy
 - **define-config.ts** — identity helper for typed `defineConfig({...})` calls.
 - **index.ts** — public exports (re-exports from `types.ts`, `state.ts`, `define-config.ts`, `runner.ts`).
 
-**Never modify the library in a generated project.** If you find a real bug in the runner, fix it upstream (in `cards-info-agent-ts/src/agent-step/`) and re-sync the skill's templates.
+**Never modify the library in a generated project.** The source of truth for the runner library is this skill's own `templates/agent-step/` directory. If you find a real bug in the runner, fix it there (and update `templates/agent-step/runner.test.ts` to cover it), then regenerate — never hand-patch a copy inside a generated project, or it will drift from the templates and the next bootstrap will reintroduce the bug.
 
 ## Graph scaffold
 
@@ -80,6 +97,16 @@ Verbatim copy of the runner library. The skill treats these as templates-by-copy
 **cli.ts** — In-process streaming REPL. Raw-mode terminal, multi-line input, history, ESC to abort, slash commands (`/state`, `/history`, `/new`, `/last`, `/copy`, `/quit`, `/help`). Per-step tool envelope display: each batch step printed as a dim bullet with ok/fail and surfaced fields. Imports `cli-env-init.ts` first to silence backend logs.
 
 **tools/index.ts** — Empty barrel. The first `create-tool` invocation adds an import + array entry. Subsequent tools append.
+
+## Shared test harness: src/test-harness/
+
+Generic, tool-agnostic scaffolding the per-tool test suites build on. Shipped at bootstrap so the testing methodology (see the `test-agent-step` skill) has real, in-project infrastructure to grade against — not files that only exist in some reference project.
+
+- **sandbox.ts** — The sandbox/tool layer (no LLM). Re-exports `runSteps` and `assert`; provides `foldCommitted` (thread one batch's `committed` into the next batch's starting state, mirroring the graph between turns), `requireReachable` (assert the local sandbox answers before a suite runs), and `resetViaHttp` (POST a seed to a reset endpoint). Tool tests import these via their own `tests/tool/_setup.ts`.
+- **prompt-input.ts** — The prompt-input layer (live model, no execution). Lazy-imports the model + tools + `llm-env` (so the file imports without credentials and the suite self-skips), binds the project's real tools to the model, runs the real `buildPrompt`, and returns the **steps the model emitted** before any execution. Provides `runUserTurn` / `runTurn` / `priorToolTurn` drivers, `expect*` assertions over emitted steps, and `promptInputEnabled()` / `promptInputSkipReason` for gating behind `PROMPT_INPUT_LIVE`.
+- **index.ts** — Barrel over both layers. (Tests usually import the specific layer directly; keeping the two layers in separate modules ensures a sandbox test never pulls in the live-model machinery.)
+
+**The harness compiles against zero tools.** At bootstrap the tools array is empty and there are no `tests/` directories yet; the harness still typechecks because the prompt-input layer defers all model/tool imports to call time.
 </per_file_purpose>
 
 <what_bootstrap_does_NOT_do>
@@ -98,7 +125,9 @@ These are deliberate boundaries: bootstrap produces a runnable shape, the user o
 After bootstrap, the user's next steps are:
 
 1. `cp .env.example .env`, fill in Azure OpenAI + (eventually) backend creds.
-2. `/create-tool` — add the first tool.
-3. `npm run dev` to test via the dev server, OR `npm run cli` to test via the REPL.
+2. `/create-tool` — add the first tool. This scaffolds the tool's `tests/` (sandbox + prompt-input) against the shared harness.
+3. `npm run dev` to test via the dev server, OR `npm run cli` to test via the REPL. `npm run test:sandbox` once the local sandbox is up; `npm run test:prompt` for routing checks (live model).
 4. Iterate: more `/create-tool` invocations for additional tools, then `./build_and_push.sh latest` when ready to deploy.
+
+Bootstrap ships the shared **harness** but no per-tool **tests** (there are no tools yet) — those arrive with each `/create-tool`. The `test:sandbox` / `test:prompt` scripts are clean no-ops until then.
 </post_bootstrap_workflow>

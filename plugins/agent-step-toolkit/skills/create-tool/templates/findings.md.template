@@ -1,0 +1,36 @@
+# Findings — {{TOOL_NAME}} {{LAYER}} tests
+
+Failing tests are findings, not flakes. When a test fails for a real reason —
+the prompt misroutes, the runner drops a verdict, the executor loses a field —
+**do not relax the assertion or delete the test**. Instead:
+
+1. **Rename** the test with a `FINDING:` prefix so it stays visible in reporter
+   output. It still runs; it's flagged.
+2. **Document** it here.
+
+A relaxed assertion is a silent production regression. A finding is a paragraph.
+
+Genuine flakes (rate-limit errors, transient connection failures, model latitude
+between two acceptable phrasings) are different — skip them with a reason that
+links the finding, but only after arguing why it's a flake and not a regression.
+The default assumption is regression.
+
+---
+
+## Open findings
+
+_None yet._
+
+<!--
+Template for an entry:
+
+### FINDING: <test name>
+- **Observed:** what the test actually saw.
+- **Expected:** what it should have seen.
+- **Why it matters:** channel / money / audit impact.
+- **Severity:** low | medium | high.
+- **Candidate fix:** prompt edit | library change | schema tweak | executor fix.
+- **Status:** open | closed (<date>, <how>).
+
+Closed findings stay here as breadcrumbs — do not delete them.
+-->

@@ -1,0 +1,80 @@
+// FILE: src/tools/{{TOOL_NAME}}/tests/tool/{{ACTION_1}}.test.ts
+//
+// Sandbox / tool test. Layer question: "given these EXPLICIT steps, do the
+// runner + executors do the right thing?" No LLM. Real local sandbox.
+//
+// Assert on body.results[i] (.ok / .verdict), body.failed_at, and committed.*
+// state. Do NOT assert on tool_calls, LLM wording, or HTTP shapes.
+//
+// Coverage bar for this action: one happy-path verdict; each terminal verdict
+// the executor can return; one short-circuit case (a downstream step's prereq
+// fails because an upstream step returned non-ok — assert failed_at is the
+// upstream index and the downstream step did not run); and, for any
+// flow-controller mode the action declares, at least one test exercising it.
+
+import { test, describe, before } from "node:test";
+import {
+  runSteps,
+  foldCommitted,
+  seedState,
+  resetToSeed,
+  toolOpts,
+  assert,
+} from "./_setup.js";
+
+describe("{{TOOL_NAME}}: {{ACTION_1}}", () => {
+  before(async () => {
+    // Reachability + reset to the checked-in seed. Order-independent suites
+    // depend on this; never skip it.
+    await resetToSeed();
+  });
+
+  test("happy path → ok verdict", async () => {
+    const { body, committed } = await runSteps(
+      toolOpts,
+      [{ action: "{{ACTION_1}}", params: { /* {{HAPPY_PARAMS}} */ } }],
+      seedState(),
+    );
+    assert.equal(body.failed_at, undefined);
+    assert.equal(body.results[0].ok, true);
+    assert.equal(body.results[0].verdict, "ok");
+    // Assert the state mutation the runner accepted, if this action writes one:
+    // assert.ok(committed.{{PER_TOOL_SLOT_1}});
+    void committed;
+  });
+
+  test("terminal failure → {{FAILURE_VERDICT}}", async () => {
+    const { body } = await runSteps(
+      toolOpts,
+      [{ action: "{{ACTION_1}}", params: { /* {{FAILURE_PARAMS}} */ } }],
+      seedState(),
+    );
+    assert.equal(body.results[0].ok, false);
+    assert.equal(body.results[0].verdict, "{{FAILURE_VERDICT}}");
+  });
+
+  test("short-circuit: dependent step does not run when its prereq fails", async () => {
+    // The first step returns non-ok; the second step (which depends on the
+    // first via a prereq or threaded state) must not execute.
+    const { body } = await runSteps(
+      toolOpts,
+      [
+        { action: "{{ACTION_1}}", params: { /* {{FAILURE_PARAMS}} */ } },
+        { action: "{{DEPENDENT_ACTION}}", params: {} },
+      ],
+      seedState(),
+    );
+    assert.equal(body.failed_at, 0);
+    assert.equal(body.results.length, 1); // downstream step did not run
+  });
+
+  // Multi-batch threading example (uncomment for confirm / OTP / match / flow):
+  // test("propose then execute across two batches", async () => {
+  //   const first = await runSteps(toolOpts, [{ action: "{{MUTATION}}", params }], seedState());
+  //   assert.equal(first.committed.awaitingInput?.kind, "confirmation");
+  //   const next = foldCommitted(seedState(), first.committed);
+  //   const second = await runSteps(toolOpts, [{ action: "{{MUTATION}}", params }], next);
+  //   assert.equal(second.body.results[0].ok, true);
+  //   assert.equal(second.committed.awaitingInput, null);
+  // });
+});

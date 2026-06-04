@@ -11,7 +11,7 @@
 |------|--------|---------|-----------|----------------|---------|
 | {{action_1}} | {{params}} | {{prereqs}} | no | — | {{summary}} |
 | {{action_2}} | {{params}} | {{prereqs}} | no | — | {{summary}} |
-| {{action_3}} | {{params}} | {{prereqs}} | yes — soleOnExecute, requiresConfirmation { maxAttempts: 3, ttlMs: 300_000 } | — | {{summary}} |
+| {{action_3}} | {{params}} | {{prereqs}} | yes — soleOnExecute, requiresConfirmation { maxAttempts: 3 } | — | {{summary}} |
 
 If the tool has a multi-turn flow (OTP-gated activation, double-entry PIN, etc.), expand the **lifecycle opts** column for each action using these tokens:
 

@@ -1,0 +1,246 @@
+// FILE: src/test-harness/prompt-input.ts
+//
+// Generic prompt-input test harness, shared by every tool's tests/prompt-input/
+// suite. Prompt-input tests answer ONE question: "given this user message, does
+// the prompt route to the right steps with the right params?"
+//
+// They run the LIVE model with the project's real prompt + real tool schemas,
+// then assert on the STEPS THE MODEL EMITS — before any execution. The backend
+// is never called; the runner is never invoked. The boundary is the tool call.
+//
+// What to assert (via the expect* helpers): the emitted action(s), their order
+// or presence, specific param values, and "no tool call" for branches where the
+// model should ask the user instead of acting.
+// What NOT to assert: the exact wording of the reply, or anything post-execution
+// (committed state / verdicts) — that is the sandbox layer.
+//
+// GATING: these tests hit a live model and cost money, so they are skipped
+// unless PROMPT_INPUT_LIVE=1 (and Azure OpenAI creds) are present. Always pass
+// `promptInputSkipReason` to the describe's skip option so the suite is a no-op
+// in CI / on machines without credentials. The model + tools + llm-env are
+// imported LAZILY inside runTurn so this file can be imported (and the suite
+// skipped) without any credentials set.
+
+import assert from "node:assert/strict";
+import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
+import type { BaseMessageLike } from "@langchain/core/messages";
+
+// Note: `assert` is used internally by the expect* helpers below and is NOT
+// re-exported (the sandbox layer owns the `assert` re-export, so the shared
+// barrel stays unambiguous). Prompt-input tests should assert through the
+// expect* helpers; if you need raw assert, import it from "node:assert/strict".
+
+/** A single `{ action, params }` the model asked the runner to perform. */
+export interface EmittedStep {
+  action: string;
+  params: Record<string, unknown>;
+}
+
+/** The outcome of one model turn: the flattened steps it emitted (across all
+ *  agent-step tool calls, in order), the raw tool calls, and the assistant text
+ *  (non-empty only when the model chose NOT to call a tool). */
+export interface TurnResult {
+  steps: EmittedStep[];
+  toolCalls: { name: string; args: Record<string, unknown> }[];
+  text: string;
+  raw: AIMessage;
+}
+
+/** Whether prompt-input tests should run. */
+export function promptInputEnabled(): boolean {
+  return process.env.PROMPT_INPUT_LIVE === "1";
+}
+
+/** Pass this to a describe's `skip` option:
+ *    describe("…", { skip: promptInputEnabled() ? false : promptInputSkipReason }, () => { … }) */
+export const promptInputSkipReason =
+  "prompt-input tests are skipped — set PROMPT_INPUT_LIVE=1 (with Azure OpenAI creds) to run them";
+
+// ─── Drivers ─────────────────────────────────────────────────────────────────
+
+let cachedModel: unknown;
+
+async function boundModel() {
+  if (!cachedModel) {
+    const { llmEnv } = await import("../llm-env.js");
+    const { AzureChatOpenAI } = await import("@langchain/openai");
+    const { tools } = await import("../tools/index.js");
+    const model = new AzureChatOpenAI({
+      azureOpenAIApiKey: llmEnv.apiKey,
+      azureOpenAIApiInstanceName: new URL(llmEnv.endpoint).hostname.split(".")[0],
+      azureOpenAIEndpoint: llmEnv.endpoint,
+      azureOpenAIApiDeploymentName: llmEnv.deploymentName,
+      azureOpenAIApiVersion: llmEnv.apiVersion,
+      temperature: llmEnv.temperature,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    cachedModel = model.bindTools(tools as any);
+  }
+  return cachedModel as { invoke: (m: BaseMessageLike[]) => Promise<AIMessage> };
+}
+
+function extractSteps(msg: AIMessage): EmittedStep[] {
+  const steps: EmittedStep[] = [];
+  for (const tc of msg.tool_calls ?? []) {
+    // Every agent-step tool is named "<tool>_agent_step" and carries a `steps`
+    // array. Collect across all such calls in emission order.
+    if (tc.name.endsWith("_agent_step")) {
+      const arr = (tc.args?.steps ?? []) as EmittedStep[];
+      steps.push(...arr);
+    }
+  }
+  return steps;
+}
+
+/** Run one model turn over an explicit message list (system prompt is prepended
+ *  by the project's buildPrompt). Returns the emitted steps WITHOUT executing
+ *  them. Most single-turn tests use {@link runUserTurn}; reach for this when you
+ *  need full control over the prior messages. */
+export async function runTurn(messages: BaseMessageLike[]): Promise<TurnResult> {
+  const { buildPrompt } = await import("../prompt.js");
+  // buildPrompt prepends the system message and spreads state.messages after it.
+  // awaitingInput / currentFlow are passed for fidelity; the default template
+  // does not branch on them, but a customised prompt might.
+  const full = buildPrompt({
+    messages,
+    awaitingInput: null,
+    currentFlow: null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any) as BaseMessageLike[];
+  const model = await boundModel();
+  const raw = await model.invoke(full);
+  return {
+    steps: extractSteps(raw),
+    toolCalls: (raw.tool_calls ?? []).map((tc) => ({ name: tc.name, args: tc.args })),
+    text: typeof raw.content === "string" ? raw.content : JSON.stringify(raw.content),
+    raw,
+  };
+}
+
+/** Single-turn convenience: one user utterance, fresh conversation. */
+export async function runUserTurn(userText: string): Promise<TurnResult> {
+  return runTurn([new HumanMessage(userText)]);
+}
+
+/** Build the message history for a PRIOR assistant tool-call turn and its tool
+ *  reply, so a multi-turn test can assert on the NEXT turn (recovery paths,
+ *  follow-ups). Append the next user message and pass the whole array to
+ *  {@link runTurn}:
+ *
+ *    const history = priorToolTurn({
+ *      user: "is my card active?",
+ *      toolName: "cards_agent_step",
+ *      steps: [{ action: "verify_card", params: { last4: "1234" } }],
+ *      reply: { results: [{ action: "verify_card", ok: false, verdict: "card_not_found" }] },
+ *    });
+ *    const res = await runTurn([...history, new HumanMessage("oh, it ends 5678")]);
+ */
+export function priorToolTurn(opts: {
+  user: string;
+  toolName: string;
+  steps: EmittedStep[];
+  reply: unknown;
+  toolCallId?: string;
+}): BaseMessageLike[] {
+  const id = opts.toolCallId ?? "call_prior_0";
+  return [
+    new HumanMessage(opts.user),
+    new AIMessage({
+      content: "",
+      tool_calls: [{ id, name: opts.toolName, args: { steps: opts.steps } }],
+    }),
+    new ToolMessage({
+      content: typeof opts.reply === "string" ? opts.reply : JSON.stringify(opts.reply),
+      tool_call_id: id,
+    }),
+  ];
+}
+
+// ─── Assertions over emitted steps ───────────────────────────────────────────
+
+/** The step at `index` is `action`. */
+export function expectAction(steps: EmittedStep[], index: number, action: string): void {
+  assert.equal(
+    steps[index]?.action,
+    action,
+    `expected step[${index}] to be "${action}", got ${describe(steps)}`,
+  );
+}
+
+/** The emitted actions, in order, are exactly `actions`. Use when the model has
+ *  no latitude over ordering. */
+export function expectActionsInOrder(steps: EmittedStep[], actions: string[]): void {
+  assert.deepEqual(
+    steps.map((s) => s.action),
+    actions,
+    `expected actions ${JSON.stringify(actions)}, got ${describe(steps)}`,
+  );
+}
+
+/** `action` appears somewhere in the batch (order-independent). */
+export function expectActionPresent(steps: EmittedStep[], action: string): void {
+  assert.ok(
+    steps.some((s) => s.action === action),
+    `expected "${action}" to be present, got ${describe(steps)}`,
+  );
+}
+
+/** `action` does NOT appear (e.g. a forbidden action the model must not emit). */
+export function expectActionAbsent(steps: EmittedStep[], action: string): void {
+  assert.ok(
+    !steps.some((s) => s.action === action),
+    `expected "${action}" to be absent, got ${describe(steps)}`,
+  );
+}
+
+/** The first step for `action` carries `params[key] === value`. */
+export function expectParam(
+  steps: EmittedStep[],
+  action: string,
+  key: string,
+  value: unknown,
+): void {
+  const step = steps.find((s) => s.action === action);
+  assert.ok(step, `expected a "${action}" step, got ${describe(steps)}`);
+  assert.deepEqual(
+    step.params[key],
+    value,
+    `expected ${action}.params.${key} === ${JSON.stringify(value)}, got ${JSON.stringify(step.params[key])}`,
+  );
+}
+
+/** The first step for `action` has a `params[key]` satisfying `predicate`. Use
+ *  when the model has latitude over the exact representation (e.g. an ambiguous
+ *  spoken number that may produce one of several acceptable forms). */
+export function expectParamMatches(
+  steps: EmittedStep[],
+  action: string,
+  key: string,
+  predicate: (value: unknown) => boolean,
+): void {
+  const step = steps.find((s) => s.action === action);
+  assert.ok(step, `expected a "${action}" step, got ${describe(steps)}`);
+  assert.ok(
+    predicate(step.params[key]),
+    `expected ${action}.params.${key} to satisfy predicate, got ${JSON.stringify(step.params[key])}`,
+  );
+}
+
+/** The model called NO tool — it should have asked the user instead. */
+export function expectNoToolCall(result: TurnResult): void {
+  assert.equal(
+    result.toolCalls.length,
+    0,
+    `expected no tool call, got ${describe(result.steps)}`,
+  );
+}
+
+/** Content sanity check for the channel — pass a regex the reply must match
+ *  (e.g. a script/locale check). NEVER assert the exact wording. */
+export function expectContentMatches(result: TurnResult, pattern: RegExp): void {
+  assert.match(result.text, pattern);
+}
+
+function describe(steps: EmittedStep[]): string {
+  return JSON.stringify(steps.map((s) => s.action));
+}

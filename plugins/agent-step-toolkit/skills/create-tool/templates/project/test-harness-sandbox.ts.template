@@ -1,0 +1,81 @@
+// FILE: src/test-harness/sandbox.ts
+//
+// Generic sandbox-test scaffolding, shared by every tool's tests/tool/ suite.
+// Tool-agnostic: it knows nothing about a specific backend. Per-tool wiring
+// (which backend to reset, which seed, the initial state) lives in each tool's
+// tests/tool/_setup.ts, which builds on these helpers.
+//
+// THIS LAYER NEVER TOUCHES THE LLM. Sandbox tests prove the runner + executors
+// behave correctly given EXPLICIT step batches. The question they answer is
+// "given these steps, do the runner + executors do the right thing?" — not
+// "what steps would the model emit?" (that is the prompt-input layer).
+//
+// What sandbox tests assert (via the re-exports below):
+//   - body.results[i].ok / .verdict   — the executor's outcome
+//   - body.failed_at                  — the short-circuit index, or undefined
+//   - committed.<slot>                — state mutations the runner accepted
+// What they must NOT assert: anything about tool_calls or LLM wording.
+
+import assert from "node:assert/strict";
+import { runSteps } from "../agent-step/index.js";
+import type {
+  BuildAgentStepToolOptions,
+  RunResult,
+  LibraryManagedSlots,
+} from "../agent-step/index.js";
+
+// Re-exported so tool tests import everything they need from one place
+// (their _setup.ts) and never reach into runner internals.
+export { runSteps, assert };
+export type { BuildAgentStepToolOptions, RunResult };
+
+/** Fold a batch's committed updates into the starting state for the next batch,
+ *  mirroring what the graph does between turns. Shallow merge is correct for
+ *  replace-on-write slots (the library default for awaitingInput / currentFlow
+ *  and most per-tool slots). For record-merge slots (e.g.
+ *  `Record<string, X>` accumulated by key across turns) override this in the
+ *  tool's _setup.ts with a slot-aware merge. */
+export function foldCommitted<T extends LibraryManagedSlots>(
+  prev: T,
+  committed: Partial<T>,
+): T {
+  return { ...prev, ...committed };
+}
+
+/** Assert the local sandbox backend is reachable before a suite runs. Call in a
+ *  `before` hook. Pass the SAME base-url the executors use (read from the tool's
+ *  env) so the test routes at exactly what production code hits. A connection
+ *  refusal throws with a fix-it message; any HTTP response (even 404) counts as
+ *  reachable — we only care that the server answered. */
+export async function requireReachable(
+  baseUrl: string,
+  opts: { path?: string; timeoutMs?: number } = {},
+): Promise<void> {
+  const url = `${baseUrl}${opts.path ?? "/"}`;
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? 2000) });
+  } catch (err) {
+    throw new Error(
+      `sandbox unreachable at ${url} — start the local sandbox and point the ` +
+        `tool's *_BASE_URL env at it before running sandbox tests. ` +
+        `Original: ${(err as Error).message}`,
+    );
+  }
+}
+
+/** Generic HTTP reset helper. Many local sandboxes expose a reset/seed endpoint;
+ *  POST the seed to it in a `before` hook so every suite starts from the same
+ *  known state. Tools whose sandbox resets differently should implement their
+ *  own reset in _setup.ts instead of calling this. */
+export async function resetViaHttp(url: string, body?: unknown): Promise<void> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `sandbox reset failed (${res.status}) at ${url}: ${(await res.text()).slice(0, 300)}`,
+    );
+  }
+}

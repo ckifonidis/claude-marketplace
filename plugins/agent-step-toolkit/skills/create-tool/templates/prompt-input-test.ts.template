@@ -1,0 +1,71 @@
+// FILE: src/tools/{{TOOL_NAME}}/tests/prompt-input/{{TOPIC}}.test.ts
+//
+// Prompt-input test. Layer question: "given this user message, does the prompt
+// route to the right STEPS with the right PARAMS?" LIVE model. No execution.
+//
+// Imports come ONLY from the shared prompt-input harness — never runner
+// internals, never _setup.ts (that is the sandbox layer). Assert on emitted
+// steps via the expect* helpers; never assert exact wording or post-execution
+// state.
+//
+// Coverage bar for this routing decision: one happy single-utterance path; one
+// ambiguity case where applicable (model produces candidates or asks to
+// clarify); one recovery case (a prior non-ok verdict → the next turn asks
+// appropriately); and, if this is the first action the user hits, one
+// out-of-scope case (polite refusal, no tool call).
+//
+// GATED: skipped unless PROMPT_INPUT_LIVE=1 (+ Azure OpenAI creds). Live model,
+// costs money. When iterating, target this compiled file directly rather than
+// the whole suite.
+
+import { test, describe } from "node:test";
+import {
+  runUserTurn,
+  runTurn,
+  priorToolTurn,
+  expectAction,
+  expectActionsInOrder,
+  expectActionPresent,
+  expectParam,
+  expectNoToolCall,
+  promptInputEnabled,
+  promptInputSkipReason,
+} from "../../../../test-harness/prompt-input.js";
+import { HumanMessage } from "@langchain/core/messages";
+
+describe(
+  "{{TOOL_NAME}} prompt routing: {{TOPIC}}",
+  { skip: promptInputEnabled() ? false : promptInputSkipReason },
+  () => {
+    test("happy path: routes to {{ACTION_1}} with the right params", async () => {
+      const res = await runUserTurn("{{HAPPY_UTTERANCE}}");
+      expectActionPresent(res.steps, "{{ACTION_1}}");
+      expectParam(res.steps, "{{ACTION_1}}", "{{PARAM_KEY}}", "{{PARAM_VALUE}}");
+    });
+
+    test("batches the prerequisite read before the dependent step", async () => {
+      const res = await runUserTurn("{{BATCHED_UTTERANCE}}");
+      expectActionsInOrder(res.steps, ["{{VERIFY_ACTION}}", "{{ACTION_1}}"]);
+    });
+
+    test("recovery: prior {{FAILURE_VERDICT}} → next turn re-asks the user", async () => {
+      const history = priorToolTurn({
+        user: "{{HAPPY_UTTERANCE}}",
+        toolName: "{{TOOL_NAME}}_agent_step",
+        steps: [{ action: "{{ACTION_1}}", params: { /* {{HAPPY_PARAMS}} */ } }],
+        reply: {
+          results: [
+            { action: "{{ACTION_1}}", ok: false, verdict: "{{FAILURE_VERDICT}}" },
+          ],
+        },
+      });
+      const res = await runTurn([...history, new HumanMessage("{{RECOVERY_UTTERANCE}}")]);
+      expectAction(res.steps, 0, "{{ACTION_1}}");
+    });
+
+    test("out of scope: refuses politely, no tool call", async () => {
+      const res = await runUserTurn("{{OUT_OF_SCOPE_UTTERANCE}}");
+      expectNoToolCall(res);
+    });
+  },
+);

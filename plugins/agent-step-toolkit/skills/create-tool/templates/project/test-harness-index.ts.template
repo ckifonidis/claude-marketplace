@@ -1,0 +1,9 @@
+// FILE: src/test-harness/index.ts
+//
+// Barrel for the shared test harness. Tool tests import from the two layers
+// directly (sandbox.js for tests/tool/, prompt-input.js for tests/prompt-input/)
+// or from here. Keeping the two layers in separate modules is deliberate: a
+// sandbox test file must never pull in the live-model machinery, and vice versa.
+
+export * from "./sandbox.js";
+export * from "./prompt-input.js";

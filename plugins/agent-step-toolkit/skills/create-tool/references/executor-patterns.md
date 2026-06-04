@@ -1,7 +1,7 @@
 # Reference: Executor Patterns
 
 <overview>
-Executors do the actual work: parse the LLM-supplied params, call the backend, interpret the response, return an `ExecutorResult`. There are six pattern variants you'll encounter:
+Executors do the actual work: parse the LLM-supplied params, call the backend, interpret the response, return an `ExecutorResult`. The pattern variants you'll encounter:
 
 1. **Read-only executor** — fetches data, no state mutation (some still update state for caching, e.g. `verify_*` updates `verifiedCustomer`).
 2. **Identity/verification executor** — locates an entity by user-supplied identifiers; populates state slots so subsequent actions can rely on them.
@@ -9,8 +9,11 @@ Executors do the actual work: parse the LLM-supplied params, call the backend, i
 4. **OTP issuer (`issuesOtp` + typically `startsFlow`)** — opens a multi-turn flow and mints an SCA challenge. Returns `lifecycle: { issuesOtp }` and `flowData` so the consumer can read `challengeId` later.
 5. **OTP consumer (`requiresOtp`)** — validates the customer's 6-digit code against the backend. Library auto-clears the gate on `ok:true`; executor signals timeout / lockout via `lifecycle.clearAwaitingInput` / `lifecycle.abortFlow`.
 6. **Double-entry capturer + consumer (`startsMatchFor` / `requiresMatch`)** — captures the first entry into `flowData`, then verifies the repeat matches.
+7. **Self-sufficient read executor** — a read that loads its own dependencies on demand instead of gating on a prior step via a prereq.
+8. **Reference resolver** — turns a user's human-terms reference into a concrete entity (or a candidate set) by matching over more than primary keys.
+9. **Compute / analysis executor** — runs a computation over data already in state; the agent supplies the computation, the host runs it.
 
-All six share the same TypeScript signature; the differences are in what they read/write.
+All share the same TypeScript signature; the differences are in what they read/write.
 </overview>
 
 <contract>
@@ -434,6 +437,60 @@ On `ok: false` + `verdict: "match_mismatch"`: library decrements `attempts_left`
 On `ok: false` + any other verdict: library leaves state alone (this is a "real" failure, e.g. backend error, not a mismatch).
 </pattern_6_double_entry_match>
 
+<pattern_7_self_sufficient_read>
+## Pattern 7: Self-sufficient read executor
+
+For reads, prefer an executor that **loads its own dependencies** over one that gates on a prior step via a prereq. Prereq verifiers are the right tool for *safety* gates (identity; an active entity before a mutation) — but using them to enforce mere sequencing ("you must have listed the inventory first") causes two recurring failures:
+
+- The model reports an empty or negative answer from a slot that was simply never loaded.
+- The model asks the user for an identifier it could have looked up itself.
+
+Instead, a self-sufficient read resolves what it needs on demand:
+
+```ts
+export async function getItemDetails(rawParams, state): Promise<ExecutorResult<State>> {
+  const p = rawParams as { ref?: string };
+  // Auto-load the inventory if it isn't in state yet, rather than refusing on a prereq.
+  const inventory = state.items ?? (await loadInventory(state));
+  const item = resolveRef(inventory, p.ref);          // see Pattern 8
+  if (!item) return { resultBody: { summary: "...", verdict: "not_found" }, ok: false };
+  // ... fetch and return the details for the resolved item ...
+}
+```
+
+Rules:
+- Keep the identity/session prereq as the only prereq; let the executor own everything downstream of identity.
+- Reserve prereq verifiers for genuine gates, not sequencing hints. (See also the "unloaded vs. empty" prompt rule in `state-and-prompt-integration.md`.)
+</pattern_7_self_sufficient_read>
+
+<pattern_8_reference_resolver>
+## Pattern 8: Reference resolver
+
+Users refer to things in human terms, not primary keys. A resolver that matches only on id/primary key will miss "my main one", an alias, a label, an attribute. Resolve in **tiers over human-referenceable fields**, widening only as needed:
+
+1. exact primary key / id,
+2. a stable short token the user can voice (a tail, a code),
+3. label / alias / name,
+4. attribute (category, type, status, …).
+
+Rules:
+- A resolver **may match many** — return the candidate set and let the agent disambiguate, rather than silently picking one.
+- For references that could span **separate namespaces** (two entity types, two collections), don't blind-match across them. Let the model tag the namespace via a typed param and resolve within it.
+- Pair the resolver with a **selection key** in list results (see `<voice_safe_results>`) so the user's phrasing maps back to a concrete item.
+</pattern_8_reference_resolver>
+
+<pattern_9_compute_analysis>
+## Pattern 9: Compute / analysis executor
+
+For open-ended analysis over data already in state ("what's the trend", "which is largest"), an effective pattern is **the agent writes the computation, the host runs it**:
+
+- The agent model is already in the loop, so it emits the analysis snippet **directly as a param** — no second model call to generate code.
+- The host executes that snippet in a **constrained in-process evaluator** against the in-state datasets and returns the computed result.
+- Drive the available data from a **single source of truth** feeding three consumers: (a) the datasets exposed to the evaluator, (b) the schema described statically in the prompt, and (c) a live, per-turn "data available now" summary so the model writes code against what actually exists this turn. One schema, three projections — they cannot drift.
+
+Security caveat: an in-process evaluator is **not** a security boundary — it constrains accidents, not adversaries, and carries the same trust posture as any "run model-authored code" feature. If the input can't be trusted, isolate execution properly (a real sandbox / separate process with no ambient capabilities) instead of relying on the in-process evaluator.
+</pattern_9_compute_analysis>
+
 <state_update_shape>
 ## stateUpdate semantics
 
@@ -481,6 +538,8 @@ But the result body still shouldn't include:
 - Sensitive raw data (the new PIN's plaintext — only persist ciphertext in `flowData`; only echo masked tails in the summary)
 
 Keep result bodies focused: enough for the LLM to compose a correct spoken reply, no more.
+
+**Selection key, even under masking.** Mask secrets in what gets *spoken*, not in what the model *reads*. When a list result masks an identifier for voice safety, still include a stable, voiceable **selection key** (a short tail, a code) in the result body — it's how the user's natural reference ("the one ending fifty-fifty") maps to a concrete item. Stripping the value out of the body entirely breaks that mapping and forces the model to re-ask. The key is a selector, not the secret: a maskable tail is fine to carry; the full sensitive value is not.
 </voice_safe_results>
 
 <backend_client_helpers>

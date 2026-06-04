@@ -1,0 +1,75 @@
+// FILE: src/tools/{{TOOL_NAME}}/tests/tool/_setup.ts
+//
+// Per-tool sandbox-test wiring. This is the ONLY test file that knows THIS
+// tool's executors, verifiers, env, and seed. Sandbox tests in this directory
+// import from here (and the re-exported shared helpers) — never from runner
+// internals and never the live model.
+//
+// It bundles the four things runSteps needs (config + stateAnnotation +
+// executors + verifiers), owns the sandbox reset, and provides the seed state.
+
+import {
+  runSteps,
+  foldCommitted,
+  requireReachable,
+  resetViaHttp,
+  assert,
+} from "../../../../test-harness/sandbox.js";
+import { AgentState } from "../../../../state.js";
+import { {{TOOL_NAME}}Config } from "../../config.js";
+import { {{TOOL_NAME}}Env } from "../../backend/env.js";
+import { readFile } from "node:fs/promises";
+
+// Executors + verifiers — mirror the registries in the tool's index.ts. Keep in
+// sync: the same snake-to-camel keys the runner validates at construction.
+import { {{EXECUTOR_FN_1}} } from "../../actions/{{ACTION_1}}/executor.js";
+// import { {{EXECUTOR_FN_2}} } from "../../actions/{{ACTION_2}}/executor.js";
+import { {{PREREQ_1}} } from "../../verifiers/{{PREREQ_1_KEBAB}}.js";
+
+type State = typeof AgentState.State;
+
+/** Bundle passed as the first arg to runSteps. Untyped on purpose — runSteps
+ *  infers T/ActionName/PrereqName from config + the registries. */
+export const toolOpts = {
+  config: {{TOOL_NAME}}Config,
+  stateAnnotation: AgentState,
+  executors: {
+    {{EXECUTOR_FN_1}},
+    // {{EXECUTOR_FN_2}},
+  },
+  verifiers: {
+    {{PREREQ_1}},
+  },
+};
+
+/** The starting state for a batch. Includes the library-managed slots and this
+ *  tool's per-tool slots (all `null` at the start of a conversation). For
+ *  multi-batch flows, fold the previous batch's `committed` into this via
+ *  {@link foldCommitted} to mirror what the graph does between turns. */
+export function seedState(overrides: Partial<State> = {}): State {
+  return {
+    messages: [],
+    awaitingInput: null,
+    currentFlow: null,
+    // {{PER_TOOL_SLOT_1}}: null,
+    ...overrides,
+  } as unknown as State;
+}
+
+/** Reset the local sandbox to the checked-in seed. Call in a `before` hook.
+ *  Adapt the reset call to your sandbox's protocol — the default below reads
+ *  seed.json and POSTs it to a conventional reset endpoint. If your sandbox
+ *  resets differently (or seeds via fixtures), replace the body; keep the
+ *  reachability check. */
+export async function resetToSeed(): Promise<void> {
+  await requireReachable({{TOOL_NAME}}Env.{{BASE_URL_FIELD}});
+  const seed = JSON.parse(
+    await readFile(new URL("./seed.json", import.meta.url), "utf8"),
+  );
+  // Example reset — replace endpoint/body with your sandbox's contract:
+  // await resetViaHttp(`${{{TOOL_NAME}}Env.{{BASE_URL_FIELD}}}/__reset`, seed);
+  void seed; // remove once the reset call above is wired
+}
+
+export { runSteps, foldCommitted, assert };
+export type { State };

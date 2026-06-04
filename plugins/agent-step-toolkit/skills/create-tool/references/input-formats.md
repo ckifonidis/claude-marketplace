@@ -22,7 +22,7 @@ Example:
 Maps to:
 - `verify_customer` (params: taxNo, firstName, lastName, fatherName; prereqs: []; mutation: no)
 - `verify_card` (params: lastFour; prereqs: [customerVerified]; mutation: no)
-- `change_status` (params: newStatus, lastFour?; prereqs: [cardVerified]; mutation: yes; **soleOnExecute**: true; requiresConfirmation: { maxAttempts: 3, ttlMs: 300_000 })
+- `change_status` (params: newStatus, lastFour?; prereqs: [cardVerified]; mutation: yes; **soleOnExecute**: true; requiresConfirmation: { maxAttempts: 3 })
 - State slots: verifiedCustomer, verifiedCards, activeCardNumber, awaitingInput, currentFlow
 - Verifiers: customerVerified, cardVerified
 
@@ -92,6 +92,8 @@ Machine-readable backend definitions.
 
 - **An endpoint is NOT a 1:1 action.** Multiple endpoints can compose into one action (e.g. a `change_status` action calls `getCardStatus` then `changeCardStatus` then `getCardStatus` again).
 - **An action is a domain-level capability the LLM exposes to the customer.** Group endpoints by what they accomplish together.
+- **Fold a list→details split into one action.** A backend that separates "list items" from "get item details" is exposing an endpoint boundary, not a user task. Expose one action that returns usable detail, and call both endpoints inside the executor. A two-step `list_x` → `get_x_details` that has no standalone user meaning is an endpoint boundary leaking into the action surface.
+- **Keep parallel entity types symmetric.** If two comparable entity types are both browsable, give them the same action shape: if one is one-step, the other should be too. Asymmetry between siblings (one-step vs two-step for the same kind of task) confuses both the model and the user.
 - **OpenAPI's GET → read action; POST → potentially a mutation.** Not absolute — POST with semantics like "search" is read-only.
 - **Request schemas → params subset.** Strip backend-only fields (user IDs, channel codes, sandbox IDs, branch codes). What's left is what the LLM should send.
 - **Response schemas → result body design.** Pick the few fields the LLM needs to speak the answer; ignore the rest.
@@ -129,6 +131,8 @@ If any item is unclear, ask the user before writing — it's cheaper than refact
 
 <common_mistakes>
 - **Mapping one endpoint → one action.** Backend granularity ≠ tool granularity. Group endpoints by domain capability.
+- **Letting an endpoint boundary become an action boundary.** A list/details split, or a paged endpoint, is backend plumbing. Design for the user task, then audit each action: does it exist only to mirror an endpoint boundary? If so, fold it into the action that has user meaning.
+- **Asymmetric sibling actions.** Comparable entity types should share an action surface. Differing step counts for siblings (one product one-step, another two-step) is a design smell — usually one of them leaked an endpoint boundary.
 - **Exposing backend identifiers in params.** UserId, channel, sandbox-id, branch code → all live in `backend/env.ts`, not in the action params.
 - **Inventing new prereqs unnecessarily.** If `customerVerified` covers the gate, don't add a sub-prereq like `customerHasAccounts`. Let the executor return a domain-level negative result instead.
 - **Making every read action depend on a mutation-like confirmation.** Reads should be cheap and batched.

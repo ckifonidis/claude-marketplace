@@ -11,9 +11,9 @@ The most common failure mode is conflating the layers — asserting on the LLM's
 
 <quick_start>
 1. **Pick the layer** for what you're testing. Flow-controller mechanics → runner unit. Runner + executor behaviour → sandbox. LLM routing → prompt-input. Some slices need more than one.
-2. **Sandbox test**: file under `src/tools/<tool>/tests/tool/`. Calls `runSteps(opts, [...steps], state)` directly. Asserts on `body.results[i]`, `body.failed_at`, and `committed.*` slot values. Uses a real local sandbox reset to a known seed in `before`.
-3. **Prompt-input test**: file under `src/tools/<tool>/tests/prompt-input/`. Calls the shared harness's turn helpers. Asserts via the harness's `expect*` helpers on the emitted steps. Gated behind an env flag (live model, costs money).
-4. **Run them** with the project's `test:sandbox` and `test:prompt` scripts. The recursive `npm test` may only pick up runner unit tests (a POSIX-glob limitation) — check the project's scripts.
+2. **Sandbox test**: file under `src/tools/<tool>/tests/tool/`. Imports from the tool's `tests/tool/_setup.ts` (which bundles `toolOpts`, `seedState`, `resetToSeed`, and re-exports `runSteps` from the shared harness). Calls `runSteps(toolOpts, [...steps], state)` directly. Asserts on `body.results[i]`, `body.failed_at`, and `committed.*` slot values. Resets a real local sandbox to the checked-in `seed.json` in `before`.
+3. **Prompt-input test**: file under `src/tools/<tool>/tests/prompt-input/`. Imports the turn drivers + `expect*` helpers from the shared harness at `src/test-harness/prompt-input.ts`. Asserts on the emitted steps. Gated behind `PROMPT_INPUT_LIVE` (live model, costs money).
+4. **Run them** with the project's scripts: `npm test` (runner unit only — fast, intentionally scoped to `dist/agent-step/runner.test.js`), `npm run test:sandbox` (per-tool sandbox tests; needs the local sandbox up), `npm run test:prompt` (prompt-input; sets `PROMPT_INPUT_LIVE=1`). The sandbox/prompt scripts discover compiled test files via a guarded `find`, so they only run the layer they name.
 5. **Failing tests are findings, not flakes.** If a test fails for a real reason, rename it with a `FINDING:` prefix and document it under the test directory's `FINDINGS.md`. Do not relax the assertion.
 </quick_start>
 
@@ -43,7 +43,7 @@ If a slice needs more than one layer, write more than one. They're cheap (except
 <phase name="2_sandbox_test">
 **Phase 2: the sandbox / tool test**
 
-File: `src/tools/<tool>/tests/tool/<name>.test.ts`. It imports `runSteps` from the agent-step library and the tool's `config` / `executors` / `verifiers`, plus the directory's shared setup helpers. Read an existing file under `tests/tool/` and `tests/tool/_setup.ts` for the exact helper names; the shape:
+File: `src/tools/<tool>/tests/tool/<name>.test.ts`. It imports everything from the directory's `_setup.ts` — `runSteps`, `toolOpts` (the bundled config + stateAnnotation + executors + verifiers), `seedState`, `resetToSeed`, `foldCommitted`, `assert` — which in turn re-exports the shared `src/test-harness/sandbox.ts`. Never import runner internals directly. Read the generated `_setup.ts` for the exact helper names; the shape:
 
 - A `before` hook asserts the sandbox is reachable, routes the env at it, and resets it to the checked-in seed. Layer any per-suite fixtures on top of the seed via the setup helpers — don't edit the seed file unless the data is broadly useful.
 - Each `test` invokes `runSteps` with a hand-crafted step batch and asserts on the **result**, not on HTTP.
@@ -69,9 +69,9 @@ File: `src/tools/<tool>/tests/tool/<name>.test.ts`. It imports `runSteps` from t
 <phase name="3_prompt_input_test">
 **Phase 3: the prompt-input test**
 
-File: `src/tools/<tool>/tests/prompt-input/<topic>.test.ts`. Imports come **only** from the shared prompt-input harness — never from runner internals. Read the harness for the exact helper names; conceptually you get single-turn and multi-turn drivers plus a family of `expect*` assertions over the emitted steps.
+File: `src/tools/<tool>/tests/prompt-input/<topic>.test.ts`. Imports come **only** from the shared prompt-input harness at `src/test-harness/prompt-input.ts` — never from runner internals or from the sandbox `_setup.ts`. The harness gives you single-turn (`runUserTurn`) and multi-turn (`runTurn` + `priorToolTurn`) drivers plus a family of `expect*` assertions over the emitted steps (`expectAction`, `expectActionsInOrder`, `expectActionPresent`, `expectActionAbsent`, `expectParam`, `expectParamMatches`, `expectNoToolCall`, `expectContentMatches`).
 
-- The `describe` is **conditionally skipped** when the run flag / model credentials are absent. Always pass that skip reason through so the suite is a no-op in environments that can't run it.
+- The `describe` is **conditionally skipped** via the harness's `promptInputEnabled()` / `promptInputSkipReason` (the gate is `PROMPT_INPUT_LIVE=1` + model credentials). Always pass that skip reason through so the suite is a no-op in environments that can't run it: `describe(name, { skip: promptInputEnabled() ? false : promptInputSkipReason }, () => { … })`.
 - A **single-turn** test feeds one user utterance and asserts the emitted action(s) and params.
 - A **multi-turn** test feeds prior turns (user message + the tool call the assistant produced + the tool's reply payload) and asserts on the next turn — this is how you test recovery paths.
 
@@ -119,10 +119,12 @@ Order matters: write the sandbox test against the executor **before** touching t
 <reference_files>
 - `src/agent-step/runner.ts` — the flow controller. Reading it once end-to-end is worth more than any spec.
 - `src/agent-step/runner.test.ts` — the runner unit tests; they double as documentation of every mode.
-- `src/tools/<tool>/tests/shared/` (or the prompt-input harness location) — `expect*` helpers and turn drivers. Import from here, never from runner internals.
-- `src/tools/<tool>/tests/tool/_setup.ts` — sandbox harness: reachability, reset, state threading, fixtures.
-- The checked-in sandbox seed under `tests/tool/` — the canonical seed; reset to it before every suite.
-- `package.json` scripts — the `test:sandbox` and `test:prompt` entry points and their preconditions (sandbox running locally; model credentials + run flag for prompt-input).
+- `src/test-harness/prompt-input.ts` — shared prompt-input harness: turn drivers + `expect*` helpers + gating. Import from here for prompt-input tests, never from runner internals.
+- `src/test-harness/sandbox.ts` — shared sandbox helpers: `runSteps` re-export, `foldCommitted` (state threading), `requireReachable`, `resetViaHttp`. Consumed via each tool's `_setup.ts`.
+- `src/tools/<tool>/tests/tool/_setup.ts` — per-tool sandbox wiring: `toolOpts`, `seedState`, `resetToSeed`, fixtures (built on `src/test-harness/sandbox.ts`).
+- `src/tools/<tool>/tests/tool/seed.json` — the canonical sandbox seed; reset to it before every suite.
+- `src/tools/<tool>/tests/{tool,prompt-input}/FINDINGS.md` — where a failing-but-real test is documented (see Phase 4).
+- `package.json` scripts — `npm test` (runner unit), `npm run test:sandbox` (sandbox up locally), `npm run test:prompt` (live model; the script sets `PROMPT_INPUT_LIVE=1`).
 </reference_files>
 
 <anti_patterns>

@@ -8,7 +8,7 @@ Read these reference files NOW, in order:
 </required_reading>
 
 <overview>
-This workflow scaffolds a brand-new agent-step-based project from scratch: TypeScript config, langgraph dev server config, the agent-step library (copied verbatim from `templates/agent-step/`), graph + state + prompt + agent skeleton, the streaming CLI, Dockerfile, and ACR build script. Total ~20 files. After bootstrap, the project is **agent-shaped but tool-empty** — the user runs the `create-tool` workflow next to add the first tool.
+This workflow scaffolds a brand-new agent-step-based project from scratch: TypeScript config, langgraph dev server config, the agent-step library (copied verbatim from `templates/agent-step/`), graph + state + prompt + agent skeleton, the streaming CLI, the **shared test harness** (`src/test-harness/` — generic sandbox + prompt-input scaffolding the per-tool tests build on), Dockerfile, and ACR build script. Total ~23 files. After bootstrap, the project is **agent-shaped but tool-empty** — the user runs the `create-tool` workflow next to add the first tool (which scaffolds that tool's tests against the harness shipped here).
 </overview>
 
 <process>
@@ -34,7 +34,7 @@ Generate a short plan listing every file the workflow will create, grouped by pu
 
 Target: /absolute/path/to/<project_name>/
 
-## Files to create (~20)
+## Files to create (~23)
 
 ### Config (project root)
 - package.json
@@ -63,9 +63,14 @@ Target: /absolute/path/to/<project_name>/
 - src/cli.ts                   (streaming REPL)
 - src/tools/index.ts           (empty barrel)
 
+### Shared test harness (generic; per-tool tests built on this by /create-tool)
+- src/test-harness/sandbox.ts        (runSteps re-export, foldCommitted, requireReachable, resetViaHttp)
+- src/test-harness/prompt-input.ts   (live-model drivers + expect* helpers + PROMPT_INPUT_LIVE gating)
+- src/test-harness/index.ts          (barrel)
+
 ## Next actions after bootstrap
 - npm install
-- Verify: npm run typecheck (zero errors), npm test (20/20 runner tests pass), npm run dev (server starts)
+- Verify: npm run typecheck (zero errors), npm test (all runner unit tests pass, zero failures), npm run dev (server starts)
 - Add the first tool: /create-tool
 ```
 
@@ -75,7 +80,7 @@ Wait for explicit go-ahead.
 
 ```bash
 PROJECT=/absolute/path/to/<project_name>
-mkdir -p "$PROJECT"/{src/agent-step,src/tools}
+mkdir -p "$PROJECT"/{src/agent-step,src/tools,src/test-harness}
 ```
 
 If the directory exists and is non-empty, ASK before proceeding — refuse to overwrite without confirmation.
@@ -146,6 +151,18 @@ For each, copy from `templates/project/*.template` and substitute placeholders. 
 7. `src/cli.ts` ← `templates/project/cli.ts.template` (substitute `{{AGENT_DISPLAY_NAME}}`, `{{PROJECT_NAME}}`)
 8. `src/tools/index.ts` ← `templates/project/tools-index.ts.template` (no substitution; empty barrel)
 
+## Step 6b: Write the shared test harness
+
+Generic, tool-agnostic test scaffolding the per-tool suites (added later by `/create-tool`) build on. No substitution — copy verbatim:
+
+```bash
+cp templates/project/test-harness-sandbox.ts.template      "$PROJECT/src/test-harness/sandbox.ts"
+cp templates/project/test-harness-prompt-input.ts.template "$PROJECT/src/test-harness/prompt-input.ts"
+cp templates/project/test-harness-index.ts.template        "$PROJECT/src/test-harness/index.ts"
+```
+
+These compile against an EMPTY tools array (the prompt-input harness lazy-imports the model + tools, so it needs no credentials at typecheck time). The `package.json.template` already declares the `test:sandbox` / `test:prompt` / `test:all` scripts that drive them.
+
 ## Step 7: npm install
 
 ```bash
@@ -164,13 +181,13 @@ cd "$PROJECT"
 # 1. Typecheck — should pass with an empty tools array
 npx tsc --noEmit
 ```
-Expected: zero errors. (The empty `tools: []` and stub prompt typecheck fine — both are intentional empty starts.)
+Expected: zero errors. (The empty `tools: []`, stub prompt, and the shared test harness all typecheck fine against zero tools — intentional empty start. The prompt-input harness lazy-imports the model/tools, so it needs no Azure creds to typecheck.)
 
 ```bash
-# 2. Library runner tests — should be 20/20
+# 2. Library runner tests — all should pass (currently 53; count may grow)
 npx tsc && node --test dist/agent-step/runner.test.js
 ```
-Expected: 20 passing, 0 failing. This validates the library copy is intact.
+Expected: zero failures. This validates the library copy is intact.
 
 ```bash
 # 3. Dev server boot — should start cleanly
@@ -182,8 +199,9 @@ Wait for `Welcome to LangGraph.js dev server` (or similar). Kill the process aft
 
 Tell the user:
 - ✅ Bootstrap complete at `<PROJECT>`.
-- The project has graph, agent, state, prompt, and CLI scaffolding, but **no tools yet**.
-- Next: `cd <PROJECT> && /create-tool` to add the first tool.
+- The project has graph, agent, state, prompt, CLI, and the **shared test harness** scaffolding, but **no tools yet**.
+- Test scripts are wired: `npm test` (runner unit, fast), `npm run test:sandbox` (per-tool sandbox tests, needs the local sandbox up), `npm run test:prompt` (prompt-input, live model). The sandbox/prompt scripts are no-ops until the first tool ships its tests.
+- Next: `cd <PROJECT> && /create-tool` to add the first tool — it scaffolds that tool's tests against the harness shipped here.
 - Reminder: `.env` doesn't exist yet — they need to copy `.env.example` to `.env` and fill in Azure OpenAI keys before `npm run dev` or `npm run cli` will work.
 
 ## Optional: initial commit
@@ -200,10 +218,10 @@ cd "$PROJECT" && git init && git add -A && git commit -m "Bootstrap <project_nam
 <success_criteria>
 Workflow complete when:
 - [ ] Plan was written and explicitly confirmed by the user
-- [ ] All ~20 files exist at the target project directory
+- [ ] All ~23 files exist at the target project directory (incl. `src/test-harness/`)
 - [ ] `npm install` succeeded
-- [ ] `npx tsc --noEmit` passes with zero errors
-- [ ] 20/20 runner tests pass
+- [ ] `npx tsc --noEmit` passes with zero errors (library + scaffold + shared test harness against zero tools)
+- [ ] All runner unit tests pass (zero failures)
 - [ ] `npm run dev` starts cleanly (server reaches "Welcome" / equivalent)
-- [ ] User informed of `.env` setup requirement + next step (`/create-tool`)
+- [ ] User informed of `.env` setup requirement, the `test` / `test:sandbox` / `test:prompt` scripts, and the next step (`/create-tool`)
 </success_criteria>

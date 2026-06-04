@@ -61,7 +61,11 @@ export const {{TOOL_NAME}}Config = defineConfig<ActionName, PrereqName>({
         // be the only step in the batch. Use the strict `soleStep: true`
         // instead if the mutation must never share a batch, regardless of mode.
         soleOnExecute: true,
-        requiresConfirmation: { maxAttempts: 3, ttlMs: 300_000 },
+        // requiresConfirmation opts:
+        //   maxAttempts — re-propose budget before the gate exhausts (default 3; almost always right).
+        //   lockdown    — defaults to true (unrelated batches refused while pending); leave it true.
+        //   ttlMs       — INERT: the runner no longer does time-based expiry, so don't set it.
+        requiresConfirmation: { maxAttempts: 3 },
       },
     },
   },
