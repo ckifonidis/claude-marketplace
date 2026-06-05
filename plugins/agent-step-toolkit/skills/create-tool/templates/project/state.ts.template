@@ -54,6 +54,11 @@ export const AgentState = Annotation.Root({
   // }),
 });
 
+/** The graph's full state type. Tools import this to type their state selectors
+ *  (each `stateSelector.ts` projects `State` down to one action's slice) and the
+ *  `ExecutorResult<State>` their executors return. */
+export type State = typeof AgentState.State;
+
 const AwaitingInputSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("confirmation"),

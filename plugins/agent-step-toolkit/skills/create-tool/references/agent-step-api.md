@@ -11,10 +11,13 @@ import { buildAgentStepTool } from "../../agent-step/index.js";
 export const myTool = buildAgentStepTool({
   config: myConfig,                // AgentStepConfig<ActionName, PrereqName>
   stateAnnotation: AgentState,     // LangGraph Annotation.Root for the graph
-  executors: { ... },              // ExecutorRegistry<T>
-  verifiers: { ... },              // VerifierRegistry<T>
+  selectors,                       // SelectorRegistry<T, ActionName> — one per action
+  executors,                       // ExecutorRegistry<T, typeof selectors>
+  verifiers,                       // VerifierRegistry<T>
 });
 ```
+
+`selectors` and `executors` are both **keyed 1:1 by the exact action name** (snake_case). Build `selectors` with `satisfies SelectorRegistry<State, ActionName>` (not a type annotation) so each selector's precise return type is preserved into `typeof selectors`; `executors` is then `ExecutorRegistry<State, typeof selectors>`, which types each executor's `state` param from its selector's return — a mismatch is a compile error here, at the construction boundary. See `<conventions>` §1.
 
 Returns a LangChain `StructuredTool` ready to register in `src/tools/index.ts`.
 </runner_signature>
@@ -143,8 +146,35 @@ interface ExecutorResult<T> {
   };
   ok: boolean;                     // false short-circuits the batch
 }
+```
 
-type Executor<T> = (params: unknown, state: T) => Promise<ExecutorResult<T>>;
+## Selector / SelectorRegistry
+
+```ts
+// Projects the host state T down to the slice ONE action's executor needs.
+// Trusted glue: may reshape/rename, not just narrow. Looked up by action name.
+type Selector<T> = (state: T) => unknown;
+
+// Selectors keyed 1:1 by action name (the key IS the action name).
+type SelectorRegistry<T, ActionName extends string> = Record<ActionName, Selector<T>>;
+```
+
+The runner runs `selectors[action](view)` and hands the result to the executor as its `state`. The executor never sees the whole state — only what its selector returned. Keep selectors pure (no I/O).
+
+## Executor / ExecutorRegistry
+
+```ts
+// Receives `Slice` — whatever the action's selector returned — NOT the whole
+// state. Returns an ExecutorResult<T> whose stateUpdate may still patch ANY
+// host slot (writes are unrestricted; the reducers merge them).
+type Executor<Slice, T> = (params: unknown, state: Slice) => Promise<ExecutorResult<T>>;
+
+// Keyed 1:1 by action name. Each entry's `state` param is derived from that
+// action's selector return (ReturnType<Selectors[K]>), so an executor whose
+// signature doesn't match what its selector produces is a compile error.
+type ExecutorRegistry<T, Selectors extends Record<string, Selector<T>>> = {
+  [K in keyof Selectors]: Executor<ReturnType<Selectors[K]>, T>;
+};
 ```
 
 ## AwaitingInput (library-managed)
@@ -186,22 +216,27 @@ Starting a different flow while another is active fails with `error: "flow_alrea
 </types>
 
 <conventions>
-## 1. Executor name from action name
+## 1. Selector + executor keyed by the exact action name
 
-The runner derives `executor_key` from `action_name` by snake-to-camel:
+Selectors and executors are registered **1:1 under the exact action name** (snake_case). There is NO name transformation — the registry key IS the action name. (Earlier versions derived a camelCase executor key by snake-to-camel; that convention is gone.)
+
+```ts
+const selectors = {
+  verify_customer: verifyCustomerSlice,   // getSlice from actions/verify_customer/stateSelector.ts
+  list_accounts:   listAccountsSlice,
+} satisfies SelectorRegistry<State, ActionName>;
+
+const executors: ExecutorRegistry<State, typeof selectors> = {
+  verify_customer: verifyCustomer,        // the function name is free; the KEY is the action name
+  list_accounts:   listAccounts,
+};
+```
+
+The executor function name itself is unconstrained (camelCase is conventional, e.g. `verifyCustomer`), but the **registry key** must be the action name. The runner throws at construction if either registry is missing an action's entry:
 
 ```
-verify_customer    → verifyCustomer
-list_accounts      → listAccounts
-fetch_card_status  → fetchCardStatus
-change_status      → changeStatus
-confirm_otp        → confirmOtp
-```
-
-The `executors` object passed to `buildAgentStepTool` must have keys that match these derived names. The runner throws at construction:
-
-```
-agent-step: action "verify_customer" expects an executor at executors["verifyCustomer"] (snake-to-camel convention) but none was found.
+agent-step: action "verify_customer" expects a state selector at selectors["verify_customer"] but none was found.
+agent-step: action "verify_customer" expects an executor at executors["verify_customer"] but none was found.
 ```
 
 ## 2. Verifier name = prereq name
@@ -251,7 +286,7 @@ When the LLM calls the tool with `[step1, step2, step3]`:
    a. Library-managed prereqs (`requiresFlow`, then `requiresOtp` / `requiresMatch`) → refuse if not gated.
    b. User-declared prereqs (verifiers) → refuse with denial body.
    c. Validate params via `paramsSchema.parse`.
-   d. Call the executor.
+   d. Run the action's selector against the running `view` to build the slice, then call the executor: `executors[action](params, selectors[action](view))`. If the executor throws, the runner catches it, marks the step `ok:false` (`error: "executor_error"`), and short-circuits — earlier steps' commits are preserved.
    e. Apply executor outputs in this order: `stateUpdate` → `startsFlow`+`flowData` → `lifecycle.issuesOtp` → auto-clear of `requiresOtp`/`requiresMatch` on ok → `startsMatchFor` → `endsFlow` → `lifecycle.clearAwaitingInput` / `lifecycle.abortFlow`. On ok:false + `verdict:"match_mismatch"`, decrement match attempts (or abort flow on exhaustion).
 6. Emit a single `ToolMessage` whose content is the JSON-stringified `RunnerResultBody = { summary, results, failed_at? }`.
 
@@ -394,7 +429,8 @@ The runner validates the config + registries at construction. These all throw at
 | Error message contains | Cause |
 |------------------------|-------|
 | `is a reserved action name` | You declared `abort_pending_input` in config.actions |
-| `expects an executor at executors["xxxX"]` | `executors` registry missing the camelCase key for an action |
+| `expects a state selector at selectors["xxx"]` | `selectors` registry missing the action-name key for an action |
+| `expects an executor at executors["xxx"]` | `executors` registry missing the action-name key for an action |
 | `is missing a non-empty description` | An action lacks `description` |
 | `verifiers["xxx"] was not provided` | A prereq referenced by some action has no verifier |
 | `at least one action must be defined` | Empty `config.actions` |
@@ -415,7 +451,7 @@ The runner does NOT validate at runtime that you declared `awaitingInput` / `cur
 For ground truth, read these files in the project (don't paraphrase — they ARE the contract):
 
 - `src/agent-step/types.ts` — every type listed above
-- `src/agent-step/runner.ts` — the runtime; especially `validateConfig`, `runSteps`, `toExecutorKey`, `buildMergerFromAnnotation`, lockdown handling, lifecycle ordering
+- `src/agent-step/runner.ts` — the runtime; especially `validateConfig`, `runSteps`, the selector→executor dispatch (`selectors[action](view)` → `executors[action]`), `buildMergerFromAnnotation`, lockdown handling, lifecycle ordering
 - `src/agent-step/index.ts` — what's exported (only what's here is part of the API)
 - `src/agent-step/runner.test.ts` — worked examples covering every runner branch; should all pass on `npm test`
 </key_files_to_inspect>

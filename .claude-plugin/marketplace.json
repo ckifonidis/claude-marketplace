@@ -12,7 +12,7 @@
       "name": "agent-step-toolkit",
       "source": "./plugins/agent-step-toolkit",
       "description": "Build agent-step LangGraph projects and tools: bootstrap a new project (runner library + streaming CLI + scaffold), add domain tools (actions / executors / verifiers / controller hooks + invalidatesOnChange), version the embedded runner library (/bump-version + /pull-library), and lay down the three-layer test methodology.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "Charalampos Kyfonidis"
       },

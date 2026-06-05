@@ -8,10 +8,9 @@
 import { postBackend } from "../../backend/client.js";
 import { {{TOOL_NAME}}Env } from "../../backend/env.js";
 // import { tryResolve{{ENTITY}} } from "../../shared/resolve-{{entity}}.js"; // if needed
-import type { AgentState } from "../../../../state.js";
+import type { State } from "../../../../state.js";
 import type { ExecutorResult } from "../../../../agent-step/index.js";
-
-type State = typeof AgentState.State;
+import type { Slice } from "./stateSelector.js";
 
 interface {{ACTION_PARAMS_TYPE}} {
   // {{PARAM_FIELDS}}
@@ -30,9 +29,12 @@ async function read{{ENTITY}}State({{ENTITY_ID}}: string): Promise<string> {
   return resp?.payload?.state ?? "unknown";
 }
 
+// `state` is the SLICE this action's stateSelector returned — not the whole
+// state. Read only what the selector handed you. The result's `stateUpdate`,
+// though, may still patch any host slot (ExecutorResult<State>).
 export async function {{EXECUTOR_FN_NAME}}(
   rawParams: unknown,
-  state: State,
+  state: Slice,
 ): Promise<ExecutorResult<State>> {
   const p = rawParams as {{ACTION_PARAMS_TYPE}};
 

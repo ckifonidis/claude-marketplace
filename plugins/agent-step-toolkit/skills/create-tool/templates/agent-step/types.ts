@@ -30,11 +30,39 @@ export interface ExecutorResult<T> {
   ok: boolean;
 }
 
-/** Executor called by the runner for each step. Mutations that need
- *  verification (e.g. read-back after the write) handle it internally — the
- *  library has no wrap concept. */
-export type Executor<T> = (params: unknown, state: T) => Promise<ExecutorResult<T>>;
-export type ExecutorRegistry<T> = Record<string, Executor<T>>;
+/** Projects the host state down to the slice one action's executor needs. The
+ *  runner runs the action's selector (looked up by action name, like the
+ *  executor) and hands the result to the executor as its `state` — the executor
+ *  never sees the whole state, and never declares its own slice. A selector is
+ *  trusted glue: it may reshape/rename, not just narrow. */
+export type Selector<T> = (state: T) => unknown;
+
+/** Selectors keyed 1:1 by action name. The runner looks the selector up by the
+ *  step's action name (no transformation — the key IS the action name) and runs
+ *  it to build the executor's `state`. */
+export type SelectorRegistry<T, ActionName extends string> = Record<ActionName, Selector<T>>;
+
+/** Executor called by the runner for each step. Receives `Slice` — whatever the
+ *  action's selector returned — NOT the whole state, so it can't see anything
+ *  the selector didn't hand it. Returns an `ExecutorResult` whose `stateUpdate`
+ *  may patch any host slot (writes are unrestricted; the reducers merge them).
+ *  Mutations that need verification (e.g. read-back after the write) handle it
+ *  internally — the library has no wrap concept. */
+export type Executor<Slice, T> = (
+  params: unknown,
+  state: Slice,
+) => Promise<ExecutorResult<T>>;
+
+/** The executor registry, keyed 1:1 by action name. Each entry's `state` param
+ *  is derived from that action's selector return (`ReturnType<Selectors[K]>`),
+ *  so an executor whose signature doesn't match what its selector produces is a
+ *  compile error. */
+export type ExecutorRegistry<
+  T,
+  Selectors extends Record<string, Selector<T>>,
+> = {
+  [K in keyof Selectors]: Executor<ReturnType<Selectors[K]>, T>;
+};
 
 /** Self-contained prereq: the predicate that tests state plus the denial body
  *  the runner emits when the predicate is false. The key in the registry is

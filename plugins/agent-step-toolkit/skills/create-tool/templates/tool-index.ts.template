@@ -1,18 +1,26 @@
 // FILE: src/tools/{{TOOL_NAME}}/index.ts
 //
-// Wire-up: import every executor and verifier by name, build the registries,
-// call buildAgentStepTool. This is the ONLY file in the tool directory that
-// touches the agent-step library directly.
+// Wire-up: import every state selector, executor, and verifier by name, build
+// the registries, call buildAgentStepTool. This is the ONLY file in the tool
+// directory that touches the agent-step library directly.
 
 import { buildAgentStepTool } from "../../agent-step/index.js";
 import type {
   ExecutorRegistry,
+  SelectorRegistry,
   VerifierRegistry,
 } from "../../agent-step/index.js";
-import { AgentState } from "../../state.js";
-import { {{TOOL_NAME}}Config } from "./config.js";
+import { AgentState, type State } from "../../state.js";
+import { {{TOOL_NAME}}Config, type ActionName } from "./config.js";
 
-// ─── Action executors — one file per action under actions/<name>/executor.ts
+// ─── State selectors — one file per action under actions/<name>/stateSelector.ts.
+//     Each projects the full state down to the slice its executor receives; the
+//     runner runs them by action name.
+import { getSlice as {{ACTION_1}}Slice } from "./actions/{{ACTION_1}}/stateSelector.js";
+import { getSlice as {{ACTION_2}}Slice } from "./actions/{{ACTION_2}}/stateSelector.js";
+import { getSlice as {{ACTION_3}}Slice } from "./actions/{{ACTION_3}}/stateSelector.js";
+
+// ─── Action executors — one file per action under actions/<name>/executor.ts.
 import { {{EXECUTOR_FN_1}} } from "./actions/{{ACTION_1}}/executor.js";
 import { {{EXECUTOR_FN_2}} } from "./actions/{{ACTION_2}}/executor.js";
 import { {{EXECUTOR_FN_3}} } from "./actions/{{ACTION_3}}/executor.js";
@@ -21,12 +29,25 @@ import { {{EXECUTOR_FN_3}} } from "./actions/{{ACTION_3}}/executor.js";
 import { {{PREREQ_1}} } from "./verifiers/{{PREREQ_1_KEBAB}}.js";
 import { {{PREREQ_2}} } from "./verifiers/{{PREREQ_2_KEBAB}}.js";
 
-type State = typeof AgentState.State;
+// Keyed 1:1 by action name (snake_case) — NOT by the executor's function name.
+// `satisfies` (not an annotation) checks every action has a State-selector while
+// preserving each selector's precise return type into `typeof selectors` — which
+// the executor registry reads back to type each executor's `state` param.
+// Annotating with the type instead would widen every return to `unknown` and
+// collapse the slices.
+const selectors = {
+  {{ACTION_1}}: {{ACTION_1}}Slice,
+  {{ACTION_2}}: {{ACTION_2}}Slice,
+  {{ACTION_3}}: {{ACTION_3}}Slice,
+} satisfies SelectorRegistry<State, ActionName>;
 
-const executors: ExecutorRegistry<State> = {
-  {{EXECUTOR_FN_1}},
-  {{EXECUTOR_FN_2}},
-  {{EXECUTOR_FN_3}},
+// Keyed 1:1 by action name too. Each entry's `state` param is typed from its
+// selector's return (`ReturnType<(typeof selectors)[K]>`), so an executor that
+// doesn't match what its selector produces fails to compile here.
+const executors: ExecutorRegistry<State, typeof selectors> = {
+  {{ACTION_1}}: {{EXECUTOR_FN_1}},
+  {{ACTION_2}}: {{EXECUTOR_FN_2}},
+  {{ACTION_3}}: {{EXECUTOR_FN_3}},
 };
 
 const verifiers: VerifierRegistry<State> = {
@@ -37,6 +58,7 @@ const verifiers: VerifierRegistry<State> = {
 export const {{TOOL_NAME}}Tool = buildAgentStepTool({
   config: {{TOOL_NAME}}Config,
   stateAnnotation: AgentState,
+  selectors,
   executors,
   verifiers,
 });

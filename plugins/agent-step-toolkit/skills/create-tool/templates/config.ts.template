@@ -6,7 +6,9 @@
 import { z } from "zod";
 import { defineConfig } from "../../agent-step/index.js";
 
-type ActionName =
+// Exported: the tool's index.ts imports `ActionName` to type the selector
+// registry (`satisfies SelectorRegistry<State, ActionName>`).
+export type ActionName =
   | "{{ACTION_1}}"
   | "{{ACTION_2}}"
   | "{{ACTION_3}}";

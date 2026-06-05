@@ -85,14 +85,27 @@ interface MockOpts {
   changeOk?: boolean;
   cardOk?: boolean;
   customerOk?: boolean;
+  /** Make verify_card THROW (simulates a fetcher/backend hard failure) rather
+   *  than return ok:false — exercises the runner's executor-throw boundary. */
+  cardThrows?: boolean;
 }
+
+// Identity selectors — these unit tests exercise the runner's flow control, not
+// state projection, so each action's selector just hands the executor the full
+// state. Keyed 1:1 by action name (the runner looks them up by name).
+const baseSelectors = {
+  verify_customer: (s: S) => s,
+  verify_card: (s: S) => s,
+  fetch_card_status: (s: S) => s,
+  change_status: (s: S) => s,
+};
 
 function makeOpts(
   mock: MockOpts = {},
-): { opts: BuildAgentStepToolOptions<S, string, string>; calls: Calls } {
+): { opts: BuildAgentStepToolOptions<S, string, string, typeof baseSelectors>; calls: Calls } {
   const calls: Calls = { verifyCustomer: 0, verifyCard: 0, fetchCardStatus: 0, changeStatus: 0 };
-  const executors: ExecutorRegistry<S> = {
-    verifyCustomer: async (params) => {
+  const executors: ExecutorRegistry<S, typeof baseSelectors> = {
+    verify_customer: async (params) => {
       calls.verifyCustomer++;
       const ok = mock.customerOk ?? true;
       const code = (params as { code: string }).code;
@@ -107,8 +120,9 @@ function makeOpts(
             ok: false,
           };
     },
-    verifyCard: async (params) => {
+    verify_card: async (params) => {
       calls.verifyCard++;
+      if (mock.cardThrows) throw new Error("boom: backend exploded");
       const ok = mock.cardOk ?? true;
       const pan = (params as { pan: string }).pan;
       return ok
@@ -122,12 +136,12 @@ function makeOpts(
             ok: false,
           };
     },
-    fetchCardStatus: async () => {
+    fetch_card_status: async () => {
       calls.fetchCardStatus++;
       const fv = mock.fetchCardStatusValue ?? { state: "active", summary: "state active" };
       return { resultBody: fv, ok: true };
     },
-    changeStatus: async (params) => {
+    change_status: async (params) => {
       calls.changeStatus++;
       const ok = mock.changeOk ?? true;
       return {
@@ -154,6 +168,7 @@ function makeOpts(
     opts: {
       config: makeConfig(),
       stateAnnotation: testStateAnnotation,
+      selectors: baseSelectors,
       executors,
       verifiers,
     },
@@ -166,8 +181,8 @@ const EMPTY: S = { customer: null, card: null };
 test("construction throws when executor name is missing", () => {
   const { opts } = makeOpts();
   const bad = { ...opts, executors: { ...opts.executors } };
-  delete (bad.executors as Record<string, unknown>).verifyCustomer;
-  assert.throws(() => buildAgentStepTool(bad), /executors\["verifyCustomer"\]/);
+  delete (bad.executors as Record<string, unknown>).verify_customer;
+  assert.throws(() => buildAgentStepTool(bad), /executors\["verify_customer"\]/);
 });
 
 test("construction throws when prereq verifier is missing", () => {
@@ -175,6 +190,31 @@ test("construction throws when prereq verifier is missing", () => {
   const bad = { ...opts, verifiers: { ...opts.verifiers } };
   delete (bad.verifiers as Record<string, unknown>).cardVerified;
   assert.throws(() => buildAgentStepTool(bad), /prereq "cardVerified"/);
+});
+
+test("executor that throws → ok:false step, short-circuit, earlier commits preserved", async () => {
+  // The runner must convert an executor throw into an ok:false StepResult (not
+  // let it escape), so the LLM still gets the envelope AND the prior step's
+  // stateUpdate survives in `committed` (cumulative commit on partial failure).
+  const { opts, calls } = makeOpts({ cardThrows: true });
+  const { body, committed } = await runSteps(
+    opts,
+    [
+      { action: "verify_customer", params: { code: "C1" } },
+      { action: "verify_card", params: { pan: "P1" } },
+    ],
+    EMPTY,
+  );
+  assert.equal(calls.verifyCustomer, 1);
+  assert.equal(calls.verifyCard, 1);
+  assert.equal(body.results.length, 2);
+  assert.equal(body.results[0].ok, true);
+  assert.equal(body.results[1].ok, false);
+  assert.equal(body.results[1].error, "executor_error");
+  assert.match(body.results[1].summary as string, /boom: backend exploded/);
+  assert.equal(body.failed_at, 1);
+  // verify_customer's commit is NOT discarded by the later throw.
+  assert.deepEqual(committed.customer, { code: "C1" });
 });
 
 test("single-action ok", async () => {
@@ -316,7 +356,7 @@ test("empty batch is schema-valid (no minItems) and runs as a no-op", async () =
 function makeConfirmOpts(
   mock: MockOpts = {},
   confirm: { maxAttempts?: number; ttlMs?: number; lockdown?: boolean } = {},
-): { opts: BuildAgentStepToolOptions<S, string, string>; calls: Calls } {
+): { opts: BuildAgentStepToolOptions<S, string, string, typeof baseSelectors>; calls: Calls } {
   const base = makeOpts(mock);
   const cfg = makeConfig();
   cfg.actions.change_status.controller!.requiresConfirmation = {
@@ -605,15 +645,22 @@ interface FlowCalls {
   openB: number;
 }
 
+const flowSelectors = {
+  open_flow_a: (s: S) => s,
+  validate_a_otp: (s: S) => s,
+  finish_flow_a: (s: S) => s,
+  open_flow_b: (s: S) => s,
+};
+
 function makeFlowOpts(mock?: {
   validateOutcome?: "ok" | "wrong" | "timeout" | "lock";
 }): {
-  opts: BuildAgentStepToolOptions<S, FlowActionName, string>;
+  opts: BuildAgentStepToolOptions<S, FlowActionName, string, typeof flowSelectors>;
   calls: FlowCalls;
 } {
   const calls: FlowCalls = { openA: 0, validateA: 0, finishA: 0, openB: 0 };
-  const executors: ExecutorRegistry<S> = {
-    openFlowA: async () => {
+  const executors: ExecutorRegistry<S, typeof flowSelectors> = {
+    open_flow_a: async () => {
       calls.openA++;
       return {
         ok: true,
@@ -622,7 +669,7 @@ function makeFlowOpts(mock?: {
         lifecycle: { issuesOtp: { challengeId: `ch-${calls.openA}`, mobile_masked: "***1234" } },
       };
     },
-    validateAOtp: async () => {
+    validate_a_otp: async () => {
       calls.validateA++;
       switch (mock?.validateOutcome) {
         case "wrong":
@@ -648,14 +695,14 @@ function makeFlowOpts(mock?: {
           };
       }
     },
-    finishFlowA: async () => {
+    finish_flow_a: async () => {
       calls.finishA++;
       return {
         ok: true,
         resultBody: { summary: "flow A finished", success: true },
       };
     },
-    openFlowB: async () => {
+    open_flow_b: async () => {
       calls.openB++;
       return {
         ok: true,
@@ -708,7 +755,7 @@ function makeFlowOpts(mock?: {
     },
   });
   return {
-    opts: { config: cfg, stateAnnotation: testStateAnnotation, executors, verifiers },
+    opts: { config: cfg, stateAnnotation: testStateAnnotation, selectors: flowSelectors, executors, verifiers },
     calls,
   };
 }
@@ -1017,8 +1064,13 @@ const soeAnnotation = Annotation.Root({
   }),
 });
 
+const soeSelectors = {
+  read_thing: (s: SoeS) => s,
+  mutate_thing: (s: SoeS) => s,
+};
+
 function makeSoeOpts(): {
-  opts: BuildAgentStepToolOptions<SoeS, string, string>;
+  opts: BuildAgentStepToolOptions<SoeS, string, string, typeof soeSelectors>;
   calls: { read: number; mutate: number };
 } {
   const calls = { read: 0, mutate: 0 };
@@ -1041,12 +1093,12 @@ function makeSoeOpts(): {
       },
     },
   });
-  const executors: ExecutorRegistry<SoeS> = {
-    readThing: async () => {
+  const executors: ExecutorRegistry<SoeS, typeof soeSelectors> = {
+    read_thing: async () => {
       calls.read++;
       return { resultBody: { summary: "read" }, ok: true };
     },
-    mutateThing: async (params) => {
+    mutate_thing: async (params) => {
       calls.mutate++;
       return {
         resultBody: {
@@ -1060,7 +1112,7 @@ function makeSoeOpts(): {
   };
   const verifiers: VerifierRegistry<SoeS> = {};
   return {
-    opts: { config, stateAnnotation: soeAnnotation, executors, verifiers },
+    opts: { config, stateAnnotation: soeAnnotation, selectors: soeSelectors, executors, verifiers },
     calls,
   };
 }
@@ -1199,8 +1251,14 @@ interface MatchMockOpts {
   forceCommit?: "match" | "mismatch" | "backend_failed";
 }
 
+const matchSelectors = {
+  open_flow: (s: MatchS) => s,
+  capture_value: (s: MatchS) => s,
+  commit_value: (s: MatchS) => s,
+};
+
 function makeMatchOpts(mock: MatchMockOpts = {}): {
-  opts: BuildAgentStepToolOptions<MatchS, string, string>;
+  opts: BuildAgentStepToolOptions<MatchS, string, string, typeof matchSelectors>;
   calls: MatchCalls;
 } {
   const calls: MatchCalls = { open: 0, capture: 0, commit: 0 };
@@ -1234,12 +1292,12 @@ function makeMatchOpts(mock: MatchMockOpts = {}): {
       },
     },
   });
-  const executors: ExecutorRegistry<MatchS> = {
-    openFlow: async () => {
+  const executors: ExecutorRegistry<MatchS, typeof matchSelectors> = {
+    open_flow: async () => {
       calls.open++;
       return { resultBody: { summary: "flow opened" }, ok: true };
     },
-    captureValue: async (params) => {
+    capture_value: async (params) => {
       calls.capture++;
       const v = (params as { v: string }).v;
       // store the captured value in flow data — the consumer will compare
@@ -1249,7 +1307,7 @@ function makeMatchOpts(mock: MatchMockOpts = {}): {
         ok: true,
       };
     },
-    commitValue: async (params, state) => {
+    commit_value: async (params, state) => {
       calls.commit++;
       const v = (params as { v: string }).v;
       const stored = (state.currentFlow?.data as { captured?: string } | undefined)
@@ -1281,6 +1339,7 @@ function makeMatchOpts(mock: MatchMockOpts = {}): {
     opts: {
       config,
       stateAnnotation: matchAnnotation,
+      selectors: matchSelectors,
       executors,
       verifiers: {},
     },
@@ -1300,7 +1359,7 @@ function threadMatch(prev: MatchS, committed: Partial<MatchS>): MatchS {
 }
 
 async function seedFlowAndCapture(): Promise<{
-  opts: BuildAgentStepToolOptions<MatchS, string, string>;
+  opts: BuildAgentStepToolOptions<MatchS, string, string, typeof matchSelectors>;
   calls: MatchCalls;
   state: MatchS;
 }> {
@@ -1498,7 +1557,17 @@ const invalidateStateAnnotation = Annotation.Root({
 
 type InvActionName = "set_card" | "set_amount";
 
-function makeInvalidateOpts(): BuildAgentStepToolOptions<InvalidateS, InvActionName, never> {
+const invSelectors = {
+  set_card: (s: InvalidateS) => s,
+  set_amount: (s: InvalidateS) => s,
+};
+
+function makeInvalidateOpts(): BuildAgentStepToolOptions<
+  InvalidateS,
+  InvActionName,
+  never,
+  typeof invSelectors
+> {
   return {
     config: defineConfig<InvActionName, never>({
       tool: { name: "test_tool", description: "test tool" },
@@ -1519,13 +1588,14 @@ function makeInvalidateOpts(): BuildAgentStepToolOptions<InvalidateS, InvActionN
       },
     }),
     stateAnnotation: invalidateStateAnnotation,
+    selectors: invSelectors,
     executors: {
-      setCard: async (params) => ({
+      set_card: async (params) => ({
         resultBody: { summary: "card set", verdict: "ok" },
         stateUpdate: { pan: (params as { pan: string }).pan },
         ok: true,
       }),
-      setAmount: async (params) => ({
+      set_amount: async (params) => ({
         resultBody: { summary: "amount set", verdict: "ok" },
         stateUpdate: {
           amount: (params as { amount: number }).amount,
@@ -1641,7 +1711,8 @@ test("invalidatesOnChange: executor's own writes to downstream slots win over th
       default: () => null,
     }),
   });
-  const opts: BuildAgentStepToolOptions<SelfS, "set_amount", never> = {
+  const selfSelectors = { set_amount: (s: SelfS) => s };
+  const opts: BuildAgentStepToolOptions<SelfS, "set_amount", never, typeof selfSelectors> = {
     config: defineConfig<"set_amount", never>({
       tool: { name: "test_tool", description: "test tool" },
       actions: {
@@ -1656,8 +1727,9 @@ test("invalidatesOnChange: executor's own writes to downstream slots win over th
       },
     }),
     stateAnnotation: annotation,
+    selectors: selfSelectors,
     executors: {
-      setAmount: async (params) => {
+      set_amount: async (params) => {
         const p = params as { amount: number; tx: string };
         return {
           resultBody: { summary: "ok", verdict: "ok" },

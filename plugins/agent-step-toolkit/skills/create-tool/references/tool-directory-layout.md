@@ -11,8 +11,10 @@ src/tools/<name>/
 ├── index.ts                                 # wire-up: buildAgentStepTool({...})
 ├── actions/
 │   ├── <action_1>/
-│   │   └── executor.ts                      # exports the executor function (camelCase name)
+│   │   ├── stateSelector.ts                 # exports getSlice + Slice — projects state to this action's slice
+│   │   └── executor.ts                      # exports the executor function (receives the slice)
 │   ├── <action_2>/
+│   │   ├── stateSelector.ts
 │   │   └── executor.ts
 │   └── ...
 ├── verifiers/
@@ -40,14 +42,20 @@ src/tools/<name>/
 
 ## index.ts
 - The ONLY file where `agent-step/index.js` is consumed.
-- Imports every executor from `actions/<name>/executor.js` by the convention name (e.g. `import { verifyCustomer } from "./actions/verify_customer/executor.js"`).
+- Imports every state selector from `actions/<name>/stateSelector.js` (e.g. `import { getSlice as verifyCustomerSlice } from "./actions/verify_customer/stateSelector.js"`) and every executor from `actions/<name>/executor.js`.
 - Imports every verifier from `verifiers/<name>.js`.
-- Builds the registries and calls `buildAgentStepTool({...})`.
+- Builds `selectors` (with `satisfies SelectorRegistry<State, ActionName>`) and `executors` (`ExecutorRegistry<State, typeof selectors>`), both **keyed by the exact action name**, plus `verifiers`, then calls `buildAgentStepTool({ config, stateAnnotation, selectors, executors, verifiers })`.
 - Exports the tool as `export const <name>Tool = ...`.
 
+## actions/<action_name>/stateSelector.ts
+- Exports `getSlice = (s: State) => ({ ... })` — projects the full state down to exactly the slot(s) this action's executor needs. Pure (no I/O).
+- Exports `export type Slice = ReturnType<typeof getSlice>` — the executor imports this as its `state` param type, keeping projection and consumer in lockstep.
+- Use `satisfies SelectorRegistry<State, ActionName>` on the registry in `index.ts` (not a type annotation) so each selector's precise return type survives into `typeof selectors`.
+
 ## actions/<action_name>/executor.ts
-- Exports ONE function with the snake-to-camel name (e.g. action `verify_customer` → export `verifyCustomer`).
-- Signature: `async (rawParams: unknown, state: State) => Promise<ExecutorResult<State>>`.
+- Exports ONE function. The function name is free (camelCase conventional, e.g. `verifyCustomer`); the **registry key in index.ts is the exact action name**.
+- Signature: `async (rawParams: unknown, state: Slice) => Promise<ExecutorResult<State>>` — `state` is the SLICE this action's selector returned, NOT the whole state. The return `stateUpdate` may still patch any host slot.
+- Imports its slice type: `import type { Slice } from "./stateSelector.js";`.
 - Casts `rawParams` to the concrete params interface (Zod has already parsed at the runner level).
 - Calls backend helpers via `backend/client.js`.
 - Returns `{ resultBody, stateUpdate?, ok }`.
@@ -105,16 +113,17 @@ Create files in this order — each step only depends on what's already created:
 2. `backend/client.ts`     — imports env
 3. `shared/*.ts`           — may import env (rare); typically state-only
 4. `verifiers/*.ts`        — no internal imports beyond state types
-5. `actions/<x>/executor.ts` × N — import client, shared, state types
-6. `config.ts`             — imports nothing except Zod + defineConfig
-7. `index.ts`              — wires everything together
+5. `actions/<x>/stateSelector.ts` × N — imports only the `State` type; exports `getSlice` + `Slice`
+6. `actions/<x>/executor.ts` × N — imports client, shared, state types, AND its `Slice` from `./stateSelector.js`
+7. `config.ts`             — imports nothing except Zod + defineConfig; `export type ActionName`
+8. `index.ts`              — wires everything together (selectors + executors + verifiers)
 
-This order also makes incremental verification possible: after step 5 you can `npx tsc --noEmit` on the new tool's files even before `index.ts` exists.
+This order also makes incremental verification possible: after step 6 you can `npx tsc --noEmit` on the new tool's files even before `index.ts` exists.
 </file_creation_order>
 
 <naming_rules>
 - **Action names** — snake_case, verb-led (`verify_customer`, `list_accounts`, `fetch_balance`, `change_status`). Becomes the literal in the discriminated union AND the directory name under `actions/`.
-- **Executor function names** — camelCase of the action name. Matches the registry key the runner derives by convention.
+- **Executor function names** — camelCase of the action name (e.g. `verifyCustomer`) by convention. The function name is free, though: what the runner matches is the **registry key**, which must be the exact action name (`verify_customer`). Same for the selector — `getSlice` per file, registered under the action name.
 - **Prereq names** — camelCase, predicate-style (`customerVerified`, `accountActive`). Same string in `ActionDef.prereqs[]`, in `verifiers` registry, and in the verifier file name (kebab-case file, e.g. `verifiers/customer-verified.ts`).
 - **Backend env constants** — UPPER_SNAKE_CASE in `.env`, camelCase in `backend/env.ts` (`CUSTOMER_API_BASE_URL` → `customerApiBaseUrl`).
 - **Tool export** — `<name>Tool` (e.g. `cardsTool`, `accountsTool`).

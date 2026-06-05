@@ -20,8 +20,11 @@ import { {{TOOL_NAME}}Config } from "../../config.js";
 import { {{TOOL_NAME}}Env } from "../../backend/env.js";
 import { readFile } from "node:fs/promises";
 
-// Executors + verifiers — mirror the registries in the tool's index.ts. Keep in
-// sync: the same snake-to-camel keys the runner validates at construction.
+// Selectors + executors + verifiers — mirror the registries in the tool's
+// index.ts. Keep in sync: selectors and executors are keyed 1:1 by the EXACT
+// action name (snake_case), which the runner validates at construction.
+import { getSlice as {{ACTION_1}}Slice } from "../../actions/{{ACTION_1}}/stateSelector.js";
+// import { getSlice as {{ACTION_2}}Slice } from "../../actions/{{ACTION_2}}/stateSelector.js";
 import { {{EXECUTOR_FN_1}} } from "../../actions/{{ACTION_1}}/executor.js";
 // import { {{EXECUTOR_FN_2}} } from "../../actions/{{ACTION_2}}/executor.js";
 import { {{PREREQ_1}} } from "../../verifiers/{{PREREQ_1_KEBAB}}.js";
@@ -29,13 +32,18 @@ import { {{PREREQ_1}} } from "../../verifiers/{{PREREQ_1_KEBAB}}.js";
 type State = typeof AgentState.State;
 
 /** Bundle passed as the first arg to runSteps. Untyped on purpose — runSteps
- *  infers T/ActionName/PrereqName from config + the registries. */
+ *  infers T/ActionName/PrereqName/Selectors from config + the registries. Mirror
+ *  index.ts: selectors and executors keyed by action name. */
 export const toolOpts = {
   config: {{TOOL_NAME}}Config,
   stateAnnotation: AgentState,
+  selectors: {
+    {{ACTION_1}}: {{ACTION_1}}Slice,
+    // {{ACTION_2}}: {{ACTION_2}}Slice,
+  },
   executors: {
-    {{EXECUTOR_FN_1}},
-    // {{EXECUTOR_FN_2}},
+    {{ACTION_1}}: {{EXECUTOR_FN_1}},
+    // {{ACTION_2}}: {{EXECUTOR_FN_2}},
   },
   verifiers: {
     {{PREREQ_1}},

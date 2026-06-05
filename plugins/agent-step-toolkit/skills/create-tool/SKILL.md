@@ -9,7 +9,7 @@ This skill builds a new domain tool that plugs into the **existing** `src/agent-
 **1. The runner is the backbone.** The deliverable is a `src/tools/<name>/` directory plus graph-level wiring. The runner in `src/agent-step/runner.ts` handles batching, prereq resolution, state threading, batch-shape enforcement, the confirmation propose/execute lifecycle, OTP and double-entry-match gates, multi-turn flow lifecycle, and lockdown. The new tool only declares actions, executors, and verifiers — it does NOT reimplement runner behavior.
 
 **2. Conventions are construction-time enforced.**
-- **Executor names** are derived from action names by snake-to-camel: action `verify_customer` → executor `verifyCustomer`. The runner throws at construction if the mapping is missing.
+- **Selectors + executors are keyed by the exact action name** (snake_case) — 1:1, no name transformation. Each action has a `stateSelector.ts` (`getSlice` + `Slice`) projecting the state down to the slice its executor receives; the executor sees only that slice. Build `selectors` with `satisfies SelectorRegistry<State, ActionName>` and `executors` as `ExecutorRegistry<State, typeof selectors>`, so a selector/executor type mismatch is a compile error. The runner throws at construction if either registry is missing an action's entry.
 - **Verifier shape** is `{ check, denial }` — a record, NOT a function. Each verifier file owns both the predicate and the denial body.
 - **Action `abort_pending_input`** is reserved by the library and auto-injected into the tool schema whenever any lifecycle opt (confirmation, OTP, match, or flow) is declared. Never declare it in `config.actions`.
 - **Per-action `description`** is required (non-empty string); the library composes it into the tool's overall description AND into the Zod schema's `.describe()`.
@@ -59,10 +59,11 @@ What do you want to do?
 **Tool directory layout (canonical):**
 ```
 src/tools/<name>/
-├── config.ts                         # defineConfig({ tool, actions }) — lifecycle opts inline on ActionDef.controller
-├── index.ts                          # buildAgentStepTool wire-up
-├── actions/<action_name>/executor.ts # one per action; exports camelCase fn
-├── verifiers/<prereq-name>.ts        # one per prereq; exports record
+├── config.ts                              # defineConfig({ tool, actions }); export type ActionName — lifecycle opts inline on ActionDef.controller
+├── index.ts                               # buildAgentStepTool wire-up (selectors + executors + verifiers, keyed by action name)
+├── actions/<action_name>/stateSelector.ts # one per action; exports getSlice + Slice (projects state → slice)
+├── actions/<action_name>/executor.ts      # one per action; receives the slice
+├── verifiers/<prereq-name>.ts             # one per prereq; exports record
 ├── backend/env.ts                    # per-tool env constants
 ├── backend/client.ts                 # postBackend helper (or whatever protocol)
 └── shared/                           # cross-action helpers (e.g. resolve-X.ts)
@@ -130,6 +131,7 @@ All in `templates/`:
 
 **Tool scaffold** (used by create-tool.md):
 - `config.ts.template`, `tool-index.ts.template`, `verifier.ts.template`
+- `state-selector.ts.template` (per-action `stateSelector.ts` — `getSlice` + `Slice`)
 - `executor-read.ts.template`, `executor-mutation.ts.template`
 - `backend-env.ts.template`, `backend-client.ts.template`
 - `plan.md.template` (proposed-plan document the workflow writes before file edits)

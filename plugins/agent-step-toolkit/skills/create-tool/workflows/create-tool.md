@@ -95,15 +95,16 @@ Use the `templates/` files as starting points. Fill in concrete values from the 
 2. `src/tools/<name>/backend/client.ts` — HTTP helper (see `templates/backend-client.ts.template`; adapt to backend protocol)
 3. `src/tools/<name>/shared/` — any shared helpers (e.g. resolve-entity); create only if multiple actions need them
 4. `src/tools/<name>/verifiers/<prereq>.ts` — one file per unique prereq (see `templates/verifier.ts.template`)
-5. `src/tools/<name>/actions/<action>/executor.ts` — one directory per action (see `templates/executor-read.ts.template` or `executor-mutation.ts.template`)
-6. `src/tools/<name>/config.ts` — pure data (see `templates/config.ts.template`)
-7. `src/tools/<name>/index.ts` — wire-up (see `templates/tool-index.ts.template`)
+5. `src/tools/<name>/actions/<action>/stateSelector.ts` — one per action; exports `getSlice` + `Slice` (see `templates/state-selector.ts.template`). Narrow to the slots the action reads.
+6. `src/tools/<name>/actions/<action>/executor.ts` — one per action; imports its `Slice` from `./stateSelector.js` (see `templates/executor-read.ts.template` or `executor-mutation.ts.template`)
+7. `src/tools/<name>/config.ts` — pure data; `export type ActionName` (see `templates/config.ts.template`)
+8. `src/tools/<name>/index.ts` — wire-up: `selectors` (`satisfies SelectorRegistry<State, ActionName>`) + `executors` (`ExecutorRegistry<State, typeof selectors>`), both keyed by action name (see `templates/tool-index.ts.template`)
 
 Then graph-level wiring:
 
-8. `src/state.ts` — add the per-tool state slots with explicit reducers (`awaitingInput` and `currentFlow` are already declared by the bootstrap; reuse them)
-9. `src/tools/index.ts` — register the new tool in the `tools` array
-10. `src/prompt.ts` — add ACTIONS block(s) and (if mutations exist) extend MUTATION SAFETY
+9. `src/state.ts` — add the per-tool state slots with explicit reducers (`awaitingInput` and `currentFlow` are already declared by the bootstrap; reuse them). Ensure `export type State = typeof AgentState.State;` is present — selectors and executors import it.
+10. `src/tools/index.ts` — register the new tool in the `tools` array
+11. `src/prompt.ts` — add ACTIONS block(s) and (if mutations exist) extend MUTATION SAFETY
 
 ## Step 4b: Scaffold the tool's tests
 
@@ -111,7 +112,7 @@ The shared test harness (`src/test-harness/`) already exists from bootstrap. Sca
 
 Create under `src/tools/<name>/tests/`:
 
-1. `tests/tool/_setup.ts` ← `templates/tool-test-setup.ts.template` — wire `toolOpts` (config + stateAnnotation + executors + verifiers, mirroring `index.ts`), `seedState`, and `resetToSeed` (adapt the reset to the backend's sandbox protocol).
+1. `tests/tool/_setup.ts` ← `templates/tool-test-setup.ts.template` — wire `toolOpts` (config + stateAnnotation + selectors + executors + verifiers, mirroring `index.ts`; selectors and executors keyed by action name), `seedState`, and `resetToSeed` (adapt the reset to the backend's sandbox protocol).
 2. `tests/tool/seed.json` ← `templates/tool-seed.json.template` — the canonical seed `resetToSeed` resets to.
 3. `tests/tool/<action>.test.ts` ← `templates/tool-sandbox-test.ts.template` — one sandbox test file per action (or per cohesive action group). Fill the coverage bar: happy verdict, each terminal verdict, one short-circuit, plus any flow-controller mode the action declares.
 4. `tests/tool/FINDINGS.md` ← `templates/findings.md.template` (substitute `{{LAYER}}` = `sandbox`).
@@ -148,7 +149,8 @@ Expected (when run): the prompt routes user utterances to the right steps/params
 npm run dev
 ```
 Expected: the dev server starts cleanly. If it throws `agent-step: ...` at startup, the construction-time check caught a misconfig — fix and retry. Common causes:
-- `executors["xxxX"]` missing → action name doesn't snake-to-camel to that key
+- `selectors["xxx"]` missing → the `selectors` registry lacks an entry keyed by that exact action name
+- `executors["xxx"]` missing → the `executors` registry lacks an entry keyed by that exact action name (keys are the action name, not a camelCase function name)
 - `verifiers["xxx"]` missing for an action's prereq
 - action `abort_pending_input` declared (reserved name — library auto-injects it)
 - a `controller` hook (e.g. `issuesOtp.consumer_action`, `requiresMatch.capturer`) names an action that doesn't exist

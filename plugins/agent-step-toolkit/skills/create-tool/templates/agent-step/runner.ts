@@ -16,7 +16,7 @@
  *
  *   2. Sequential execution. For each planned step: resolve prereqs against
  *      the running `view`, validate params with the action's Zod schema, call
- *      `executors[snake_to_camel(action_name)](params, view)`, fold the
+ *      `executors[action_name](params, selectors[action_name](view))`, fold the
  *      executor's `stateUpdate` into both `view` (for downstream steps in this
  *      batch) and `committed` (for the LangGraph `Command` emitted at the
  *      end). Short-circuit on the first non-ok step.
@@ -36,10 +36,12 @@ import { Command, getCurrentTaskInput } from "@langchain/langgraph";
 import { ToolMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import type {
+  ActionDef,
   AgentStepConfig,
   ConfirmationOpts,
   ExecutorResult,
   ExecutorRegistry,
+  Selector,
   ControllerHooks,
   VerifierRegistry,
   StepResult,
@@ -53,23 +55,28 @@ import type { AwaitingInput, CurrentFlow, LibraryManagedSlots } from "./state.js
 interface PendingConfirmation {
   action: string;
   params: Record<string, unknown>;
-  proposedAt: number;
   attemptsLeft: number;
 }
 
-/** Snake-to-camel transformation. Action name `verify_customer` becomes
- *  executor key `verifyCustomer`. Single source for the executor-naming
- *  convention used throughout the runner. */
-function toExecutorKey(actionName: string): string {
-  const parts = actionName.split("_").filter((p) => p.length > 0);
-  if (parts.length === 0) return actionName;
-  return (
-    parts[0] +
-    parts
-      .slice(1)
-      .map((p) => p[0].toUpperCase() + p.slice(1))
-      .join("")
-  );
+/** Selectors and executors are registered 1:1 under their action name — no name
+ *  transformation. The registry key IS the action name.
+ *
+ *  Loosely-typed *supertypes* of the public, per-action-typed shapes, used
+ *  inside the runner — which indexes actions/selectors/executors by a runtime
+ *  string. They are deliberate supertypes (not casts-through-unknown): any
+ *  precise `AgentStepConfig` / `SelectorRegistry` / `ExecutorRegistry` assigns to
+ *  them directly. The executor `state` param and selector return are contravariant
+ *  / covariant respectively, so `any` is the only param type to which every
+ *  concrete slice is assignable — a real `unknown`/`{}` would reject the
+ *  assignment and force an `as unknown as` double-cast. The `any` is confined to
+ *  these dispatch-boundary aliases; per-action safety is enforced at the
+ *  `BuildAgentStepToolOptions` construction boundary. */
+type AnyActionDef = ActionDef<string>;
+type AnySelector = (state: any) => unknown;
+type AnyExecutor = (params: unknown, state: any) => Promise<ExecutorResult<any>>;
+interface AnyConfig {
+  tool: { name: string; description: string };
+  actions: Record<string, AnyActionDef>;
 }
 
 /** Minimal shape of a LangGraph `Annotation.Root` we depend on: a `spec` map.
@@ -141,7 +148,6 @@ function getPending<T>(view: Partial<T>): PendingConfirmation | null {
   return {
     action: awaiting.for_action,
     params: awaiting.params,
-    proposedAt: 0, // timestamps removed; runner no longer does TTL
     attemptsLeft: awaiting.attempts_left,
   };
 }
@@ -259,12 +265,19 @@ export interface BuildAgentStepToolOptions<
   T extends LibraryManagedSlots,
   ActionName extends string,
   PrereqName extends string,
+  Selectors extends Record<ActionName, Selector<T>>,
 > {
   config: AgentStepConfig<ActionName, PrereqName>;
   /** LangGraph `Annotation.Root` for the host's state. Library derives the
    *  intra-batch merger from each channel's reducer. `messages` is skipped. */
   stateAnnotation: LangGraphAnnotationLike;
-  executors: ExecutorRegistry<T>;
+  /** State selectors keyed 1:1 by action name. The runner runs the selector for
+   *  the step's action and hands its return to the executor as `state`. */
+  selectors: Selectors;
+  /** Executors keyed 1:1 by action name. Each entry's `state` param is typed
+   *  from its selector's return, so an executor that doesn't match what its
+   *  selector produces fails to compile here, at the construction boundary. */
+  executors: ExecutorRegistry<T, Selectors>;
   verifiers: VerifierRegistry<T>;
 }
 
@@ -278,12 +291,13 @@ export interface RunResult<T> {
   committed: Partial<T>;
 }
 
-function validateConfig<
-  T extends LibraryManagedSlots,
-  ActionName extends string,
-  PrereqName extends string,
->(opts: BuildAgentStepToolOptions<T, ActionName, PrereqName>): void {
-  const { config, executors, verifiers } = opts;
+function validateConfig(opts: {
+  config: AnyConfig;
+  selectors: Record<string, unknown>;
+  executors: Record<string, unknown>;
+  verifiers: Record<string, unknown>;
+}): void {
+  const { config, selectors, executors, verifiers } = opts;
   const actionNames = Object.keys(config.actions);
   if (actionNames.includes(ABORT_ACTION)) {
     throw new Error(
@@ -291,11 +305,16 @@ function validateConfig<
     );
   }
   for (const a of actionNames) {
-    const action = config.actions[a as ActionName];
-    const key = toExecutorKey(a);
-    if (!executors[key]) {
+    const action = config.actions[a];
+    // Selectors and executors are registered 1:1 under the action name.
+    if (typeof selectors[a] !== "function") {
       throw new Error(
-        `agent-step: action "${a}" expects an executor at executors["${key}"] (snake-to-camel convention) but none was found.`,
+        `agent-step: action "${a}" expects a state selector at selectors["${a}"] but none was found.`,
+      );
+    }
+    if (typeof executors[a] !== "function") {
+      throw new Error(
+        `agent-step: action "${a}" expects an executor at executors["${a}"] but none was found.`,
       );
     }
     if (typeof action.description !== "string" || action.description.length === 0) {
@@ -318,9 +337,7 @@ function validateConfig<
 
 /** True if any action opts into a library-managed gate or flow lifecycle —
  *  triggers the auto-inject of `abort_pending_input` into the schema. */
-function hasAnyLifecycleOpt<ActionName extends string, PrereqName extends string>(
-  config: AgentStepConfig<ActionName, PrereqName>,
-): boolean {
+function hasAnyLifecycleOpt(config: AnyConfig): boolean {
   for (const action of Object.values(config.actions)) {
     const opt = (action as { controller?: ControllerHooks }).controller;
     if (!opt) continue;
@@ -340,12 +357,10 @@ function hasAnyLifecycleOpt<ActionName extends string, PrereqName extends string
   return false;
 }
 
-function buildStepSchema<ActionName extends string, PrereqName extends string>(
-  config: AgentStepConfig<ActionName, PrereqName>,
-) {
+function buildStepSchema(config: AnyConfig) {
   const actionNames = Object.keys(config.actions);
   const stepVariants = actionNames.map((name) => {
-    const action = config.actions[name as ActionName];
+    const action = config.actions[name];
     return z
       .object({ action: z.literal(name), params: action.paramsSchema })
       .describe(action.description);
@@ -380,9 +395,7 @@ function buildStepSchema<ActionName extends string, PrereqName extends string>(
 /** Compose the LangChain tool's `description` field from the config's lead
  *  paragraph plus a bulleted list of per-action summaries. The Zod schema
  *  carries the same per-action descriptions via `.describe()`. */
-function composeToolDescription<ActionName extends string, PrereqName extends string>(
-  config: AgentStepConfig<ActionName, PrereqName>,
-): string {
+function composeToolDescription(config: AnyConfig): string {
   const lead = config.tool.description.trim();
   const lines = [lead, "", "Actions:"];
   // Index of actions only. The full per-action mechanics (`description`) reach
@@ -429,12 +442,20 @@ export async function runSteps<
   T extends LibraryManagedSlots,
   ActionName extends string,
   PrereqName extends string,
+  Selectors extends Record<ActionName, Selector<T>>,
 >(
-  opts: BuildAgentStepToolOptions<T, ActionName, PrereqName>,
+  opts: BuildAgentStepToolOptions<T, ActionName, PrereqName, Selectors>,
   userSteps: { action: string; params: unknown }[],
   initialState: T,
 ): Promise<RunResult<T>> {
-  const { config, executors, verifiers, stateAnnotation } = opts;
+  const { verifiers, stateAnnotation } = opts;
+  // Widen to the erased supertypes for the execution loop, which indexes
+  // actions, selectors and executors by a runtime string. Plain assignments (no
+  // cast) — the precise typing already did its job at the construction boundary;
+  // here we build each executor's slice dynamically by running its selector.
+  const config: AnyConfig = opts.config;
+  const selectors: Record<string, AnySelector> = opts.selectors;
+  const executors: Record<string, AnyExecutor> = opts.executors;
   const mergeState = buildMergerFromAnnotation<T>(stateAnnotation);
 
   // `view` is the in-batch threaded snapshot: each step's `stateUpdate` folds
@@ -454,7 +475,7 @@ export async function runSteps<
   for (let i = 0; i < userSteps.length; i++) {
     const name = userSteps[i].action;
     if (name === ABORT_ACTION) continue;
-    if (config.actions[name as ActionName]) continue;
+    if (config.actions[name]) continue;
     const summary = `Unknown action "${name}".`;
     const body: RunnerResultBody = {
       summary,
@@ -491,7 +512,7 @@ export async function runSteps<
   if (awaiting) {
     let isLocked = true;
     if (awaiting.kind === "confirmation") {
-      const m = config.actions[awaiting.for_action as ActionName]?.controller;
+      const m = config.actions[awaiting.for_action]?.controller;
       const confirm = normalizeConfirmation(m?.requiresConfirmation);
       // Confirmation lockdown defaults to true and is overridable by opts.
       isLocked = confirm?.lockdown !== false;
@@ -504,7 +525,7 @@ export async function runSteps<
       // entry without aborting the flow.
       let capturer: string | null = null;
       if (awaiting.kind === "match") {
-        const consumer = config.actions[awaiting.for_action as ActionName]?.controller;
+        const consumer = config.actions[awaiting.for_action]?.controller;
         if (consumer?.requiresMatch) {
           capturer = consumer.requiresMatch.capturer;
         }
@@ -551,7 +572,7 @@ export async function runSteps<
   //     OTP via `request_*`) without resetting `currentFlow.data`.
   const currentFlow = getCurrentFlow(view);
   if (currentFlow && userSteps[0]) {
-    const m0 = config.actions[userSteps[0].action as ActionName]?.controller;
+    const m0 = config.actions[userSteps[0].action]?.controller;
     if (m0?.startsFlow && m0.startsFlow.name !== currentFlow.name) {
       const summary = `Cannot start flow "${m0.startsFlow.name}" while flow "${currentFlow.name}" is active; abort the current flow first.`;
       const body: RunnerResultBody = {
@@ -584,7 +605,7 @@ export async function runSteps<
   const soleCheckPending = getPending(view);
   for (let i = 0; i < userSteps.length; i++) {
     const s = userSteps[i];
-    const m = config.actions[s.action as ActionName]?.controller;
+    const m = config.actions[s.action]?.controller;
     if (!m) continue;
     if (m.soleStep && userSteps.length > 1) {
       const summary = `Mutation "${s.action}" must be the only step in the batch.`;
@@ -659,7 +680,7 @@ export async function runSteps<
       planned.push({ action: ABORT_ACTION, params: s.params });
       continue;
     }
-    const m = config.actions[s.action as ActionName]?.controller;
+    const m = config.actions[s.action]?.controller;
     const confirm = normalizeConfirmation(m?.requiresConfirmation);
     if (m && confirm) {
       const p = getPending(view);
@@ -734,8 +755,8 @@ export async function runSteps<
       continue;
     }
 
-    const action = config.actions[step.action as ActionName];
-    const stepMutationEarly = config.actions[step.action as ActionName]?.controller;
+    const action = config.actions[step.action];
+    const stepMutationEarly = config.actions[step.action]?.controller;
 
     // ─── Library-managed prereqs run BEFORE confirm-mode resolution. A
     //     confirm-required mutation that also `requiresFlow` would otherwise
@@ -819,14 +840,13 @@ export async function runSteps<
         failedAt = results.length - 1;
         break;
       }
-      const m = config.actions[step.action as ActionName]?.controller;
+      const m = config.actions[step.action]?.controller;
       const confirm = normalizeConfirmation(m?.requiresConfirmation);
       const maxAttempts = confirm?.maxAttempts ?? CONFIRMATION_DEFAULTS.maxAttempts;
       const attemptsLeft = step.proposeAttemptsLeft ?? maxAttempts;
       const newPending: PendingConfirmation = {
         action: step.action,
         params: params as Record<string, unknown>,
-        proposedAt: Date.now(),
         attemptsLeft,
       };
       view = mergeState(view, setPendingPatch<T>(newPending, maxAttempts));
@@ -955,9 +975,36 @@ export async function runSteps<
       for (const k of watchedKeys) preWatched[k] = viewRec[k];
     }
 
-    // ─── Execute. Executor key derived from action name by convention.
-    const executor = executors[toExecutorKey(step.action)];
-    const result = await executor(params, view as T);
+    // ─── Execute. Selector + executor are registered 1:1 under the action
+    //     name. The selector projects the running `view` down to the slice this
+    //     executor needs, so the executor never sees the whole state — it can't
+    //     read anything the selector didn't hand it.
+    const selector = selectors[step.action];
+    const executor = executors[step.action];
+    const slice = selector(view);
+    let result: Awaited<ReturnType<typeof executor>>;
+    try {
+      result = await executor(params, slice);
+    } catch (err) {
+      // Executors — and the fetchers / backend client they call — throw on hard
+      // failures (backend 5xx, non-JSON, a required URL missing). Convert the
+      // throw into an ok:false step and short-circuit, exactly like a returned
+      // ok:false: the LLM still receives the { summary, results, failed_at }
+      // envelope, and every earlier step's stateUpdate stays in `committed`
+      // (cumulative commit on partial failure). Without this the throw escapes
+      // runSteps, no Command is emitted, and those earlier commits are lost.
+      const message = err instanceof Error ? err.message : String(err);
+      const entry: StepResult = {
+        action: step.action,
+        ok: false,
+        summary: `Action "${step.action}" failed: ${message}`,
+        error: "executor_error",
+      };
+      results.push(entry);
+      lastSummary = entry.summary as string;
+      failedAt = results.length - 1;
+      break;
+    }
 
     const entry: StepResult = {
       action: step.action,
@@ -1088,7 +1135,7 @@ export async function runSteps<
       // is already awaiting replaces the awaiting slot.
       if (stepMutation?.startsMatchFor) {
         const consumerName = stepMutation.startsMatchFor.consumer_action;
-        const consumer = config.actions[consumerName as ActionName]?.controller;
+        const consumer = config.actions[consumerName]?.controller;
         if (!consumer?.requiresMatch) {
           throw new Error(
             `agent-step: action "${step.action}" declares startsMatchFor "${consumerName}" but that consumer doesn't declare requiresMatch.`,
@@ -1197,7 +1244,8 @@ export function buildAgentStepTool<
   T extends LibraryManagedSlots,
   ActionName extends string,
   PrereqName extends string,
->(opts: BuildAgentStepToolOptions<T, ActionName, PrereqName>) {
+  Selectors extends Record<ActionName, Selector<T>>,
+>(opts: BuildAgentStepToolOptions<T, ActionName, PrereqName, Selectors>) {
   validateConfig(opts);
   const InputSchema = buildStepSchema(opts.config);
 

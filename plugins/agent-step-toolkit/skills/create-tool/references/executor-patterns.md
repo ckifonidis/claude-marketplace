@@ -20,7 +20,10 @@ All share the same TypeScript signature; the differences are in what they read/w
 Every executor matches:
 
 ```ts
-type Executor<T> = (params: unknown, state: T) => Promise<ExecutorResult<T>>;
+// `Slice` is whatever this action's stateSelector returned — NOT the whole
+// state. The executor receives only its slice; its result may still patch any
+// host slot via stateUpdate (ExecutorResult<T>, T = full state).
+type Executor<Slice, T> = (params: unknown, state: Slice) => Promise<ExecutorResult<T>>;
 
 interface ExecutorResult<T> {
   resultBody: object;              // JSON-serializable; spread into the StepResult the LLM sees
@@ -40,7 +43,7 @@ interface ExecutorResult<T> {
 
 Key points:
 - `params` is `unknown` because the runner has already validated against `paramsSchema`. The first line of the executor should cast: `const p = params as MyParams;`
-- `state` is the snapshot at the START of the step (including any in-batch updates from earlier steps).
+- `state` is the **slice** this action's `stateSelector.ts` produced from the step-start snapshot (which includes any in-batch updates from earlier steps). Import the slice type as `import type { Slice } from "./stateSelector.js"`. The executor sees only what the selector handed it — narrow the selector to what the action actually reads.
 - `resultBody` should always contain a `summary` field (human-readable for the LLM) plus structured fields the prompt expects (`verdict`, `error`, action-specific data).
 - `ok: false` ends the batch but commits all preceding state updates.
 - `flowData` and `lifecycle` are reserved for actions opted into the corresponding `controller.*` lifecycle hook. Returning them outside that context will (for `flowData`/`issuesOtp`) throw at runtime.

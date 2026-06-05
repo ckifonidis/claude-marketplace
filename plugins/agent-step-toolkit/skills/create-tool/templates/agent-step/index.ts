@@ -2,6 +2,8 @@ export type {
   ExecutorResult,
   Executor,
   ExecutorRegistry,
+  Selector,
+  SelectorRegistry,
   Verifier,
   VerifierRegistry,
   ActionDef,

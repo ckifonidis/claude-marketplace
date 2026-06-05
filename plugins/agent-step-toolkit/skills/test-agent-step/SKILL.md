@@ -43,7 +43,7 @@ If a slice needs more than one layer, write more than one. They're cheap (except
 <phase name="2_sandbox_test">
 **Phase 2: the sandbox / tool test**
 
-File: `src/tools/<tool>/tests/tool/<name>.test.ts`. It imports everything from the directory's `_setup.ts` — `runSteps`, `toolOpts` (the bundled config + stateAnnotation + executors + verifiers), `seedState`, `resetToSeed`, `foldCommitted`, `assert` — which in turn re-exports the shared `src/test-harness/sandbox.ts`. Never import runner internals directly. Read the generated `_setup.ts` for the exact helper names; the shape:
+File: `src/tools/<tool>/tests/tool/<name>.test.ts`. It imports everything from the directory's `_setup.ts` — `runSteps`, `toolOpts` (the bundled config + stateAnnotation + selectors + executors + verifiers, selectors and executors keyed by action name), `seedState`, `resetToSeed`, `foldCommitted`, `assert` — which in turn re-exports the shared `src/test-harness/sandbox.ts`. Never import runner internals directly. Read the generated `_setup.ts` for the exact helper names; the shape:
 
 - A `before` hook asserts the sandbox is reachable, routes the env at it, and resets it to the checked-in seed. Layer any per-suite fixtures on top of the seed via the setup helpers — don't edit the seed file unless the data is broadly useful.
 - Each `test` invokes `runSteps` with a hand-crafted step batch and asserts on the **result**, not on HTTP.

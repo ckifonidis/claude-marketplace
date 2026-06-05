@@ -1,0 +1,21 @@
+// FILE: src/tools/{{TOOL_NAME}}/actions/{{ACTION_NAME}}/stateSelector.ts
+//
+// State selector for one action. The runner looks this up by the EXACT action
+// name (1:1 with the executor) and runs it to build the slice the executor
+// receives as its `state` — the executor never sees the whole state, only what
+// this selector hands it. A selector is trusted glue: it may reshape/rename,
+// not just narrow. Keep it pure (no I/O, no backend calls).
+
+import type { State } from "../../../../state.js";
+
+/** Project the full state down to exactly what {{ACTION_NAME}}'s executor needs.
+ *  Narrow to the slots this action reads — do NOT return the whole state unless
+ *  the executor genuinely needs all of it. The return type IS the executor's
+ *  `state` type (read back via `ReturnType` in the tool's index.ts). */
+export const getSlice = (s: State) => ({
+  // {{SLICE_FIELDS}}  — e.g. userId: s.userId, customerCode: s.customerCode,
+});
+
+/** The slice type the executor receives. Import this in executor.ts as the
+ *  `state` param type — keeping the projection and its consumer in lockstep. */
+export type Slice = ReturnType<typeof getSlice>;
