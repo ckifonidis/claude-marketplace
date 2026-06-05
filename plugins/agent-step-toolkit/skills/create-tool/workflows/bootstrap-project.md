@@ -52,6 +52,7 @@ Target: /absolute/path/to/<project_name>/
 - src/agent-step/runner.test.ts
 - src/agent-step/define-config.ts
 - src/agent-step/index.ts
+- src/agent-step/VERSION  (library version marker; lets `/pull-library` know what the project currently vendors)
 
 ### Graph scaffold (tool-empty; first tool added via /create-tool)
 - src/llm-env.ts
@@ -134,6 +135,7 @@ cp templates/agent-step/runner.ts       "$PROJECT/src/agent-step/runner.ts"
 cp templates/agent-step/runner.test.ts  "$PROJECT/src/agent-step/runner.test.ts"
 cp templates/agent-step/define-config.ts "$PROJECT/src/agent-step/define-config.ts"
 cp templates/agent-step/index.ts        "$PROJECT/src/agent-step/index.ts"
+cp templates/agent-step/VERSION         "$PROJECT/src/agent-step/VERSION"
 ```
 
 Don't edit them. If the templates need updating later, treat that as a separate maintenance task (sync new library changes back into `templates/agent-step/`).
