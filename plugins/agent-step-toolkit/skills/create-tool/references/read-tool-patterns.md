@@ -19,6 +19,8 @@ This prevents token blow-ups and stops the model re-deriving data it can't see i
 ## Pagination
 
 Page over a large set with an explicit `offset`/`cursor` + `limit` param. The full set lives in state (fetched once, or page-by-page); the result body carries one page plus `{ total, offset, hasMore }`. The prompt teaches the model to advance the cursor on "show me more."
+
+A ready-made starting point for this (plus the reslice-cache below) ships as `templates/executor-read-paginated.ts.template` + `templates/reslice-cache.ts.template` — the single-source shape with `page`/`pageSize`, full rows → state, one page → the model.
 </pagination>
 
 <windowing>

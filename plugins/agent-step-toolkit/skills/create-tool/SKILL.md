@@ -133,6 +133,7 @@ All in `templates/`:
 - `config.ts.template`, `tool-index.ts.template`, `verifier.ts.template`
 - `state-selector.ts.template` (per-action `stateSelector.ts` — `getSlice` + `Slice`)
 - `executor-read.ts.template`, `executor-mutation.ts.template`
+- `executor-read-paginated.ts.template` (large/list read: full rows → state, one page → model, reslice-cache) + `reslice-cache.ts.template` (`querySignature` helper)
 - `backend-env.ts.template`, `backend-client.ts.template`
 - `plan.md.template` (proposed-plan document the workflow writes before file edits)
 

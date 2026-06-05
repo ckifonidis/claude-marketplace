@@ -93,10 +93,10 @@ Use the `templates/` files as starting points. Fill in concrete values from the 
 
 1. `src/tools/<name>/backend/env.ts` — env constants (see `templates/backend-env.ts.template`)
 2. `src/tools/<name>/backend/client.ts` — HTTP helper (see `templates/backend-client.ts.template`; adapt to backend protocol)
-3. `src/tools/<name>/shared/` — any shared helpers (e.g. resolve-entity); create only if multiple actions need them
+3. `src/tools/<name>/shared/` — any shared helpers (e.g. resolve-entity); create only if multiple actions need them. For a paginated read, add `shared/reslice-cache.ts` (see `templates/reslice-cache.ts.template`).
 4. `src/tools/<name>/verifiers/<prereq>.ts` — one file per unique prereq (see `templates/verifier.ts.template`)
 5. `src/tools/<name>/actions/<action>/stateSelector.ts` — one per action; exports `getSlice` + `Slice` (see `templates/state-selector.ts.template`). Narrow to the slots the action reads.
-6. `src/tools/<name>/actions/<action>/executor.ts` — one per action; imports its `Slice` from `./stateSelector.js` (see `templates/executor-read.ts.template` or `executor-mutation.ts.template`)
+6. `src/tools/<name>/actions/<action>/executor.ts` — one per action; imports its `Slice` from `./stateSelector.js`. Pick by shape: `templates/executor-read.ts.template` (fixed-size read), `templates/executor-read-paginated.ts.template` (large/list read — full rows → state, one page → model, reslice-cache; also add the rows + cache state slots in Step 9 and `page`/`pageSize` params in config), or `templates/executor-mutation.ts.template` (mutation).
 7. `src/tools/<name>/config.ts` — pure data; `export type ActionName` (see `templates/config.ts.template`)
 8. `src/tools/<name>/index.ts` — wire-up: `selectors` (`satisfies SelectorRegistry<State, ActionName>`) + `executors` (`ExecutorRegistry<State, typeof selectors>`), both keyed by action name (see `templates/tool-index.ts.template`)
 

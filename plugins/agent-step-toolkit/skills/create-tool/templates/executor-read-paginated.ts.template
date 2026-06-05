@@ -1,0 +1,121 @@
+// FILE: src/tools/{{TOOL_NAME}}/actions/{{ACTION_NAME}}/executor.ts
+//
+// Paginated read executor. Use for an action that returns a LARGE or unbounded
+// list (search, browse, history). Two audiences, split on purpose:
+//   - FULL rows → state    (authoritative; later/analysis actions read them)
+//   - ONE page  → the model (bounded result body — keeps tokens sane)
+// Plus a reslice-cache: a follow-up call with the SAME query (same signature)
+// re-pages from state instead of re-hitting the backend; a DIFFERENT query
+// refetches. The model advances pages by re-calling with `page: n+1`.
+//
+// This is the SINGLE-SOURCE shape. For multi-source merge, last-N / walk-back
+// windowing, or a fetch-vs-analyze split, see references/read-tool-patterns.md.
+
+import { postBackend } from "../../backend/client.js";
+import { {{TOOL_NAME}}Env } from "../../backend/env.js";
+import { querySignature } from "../../shared/reslice-cache.js";
+import type { State } from "../../../../state.js";
+import type { ExecutorResult } from "../../../../agent-step/index.js";
+import type { Slice } from "./stateSelector.js";
+
+interface Params {
+  // {{FILTER_FIELDS}} — the fields that DEFINE the result set (a query string,
+  //                     a date range, an entity ref). These feed the signature.
+  page?: number; // 1-based; defaults to 1
+  pageSize?: number; // clamped to [1, MAX_PAGE_SIZE]
+}
+
+interface Row {
+  // {{ROW_FIELDS}} — one item the model sees per page. Keep it to what the
+  //                  model needs to speak; the full backend record can stay
+  //                  in state if a downstream action needs more.
+}
+
+const DEFAULT_PAGE_SIZE = 10;
+const MAX_PAGE_SIZE = 50;
+
+// `state` is the SLICE this action's stateSelector returned. For a paginated
+// read the selector MUST expose the cache slot (and any inventory the fetch
+// needs) — e.g. `{{CACHE_SLOT}}: s.{{CACHE_SLOT}}`.
+export async function {{EXECUTOR_FN_NAME}}(
+  rawParams: unknown,
+  state: Slice,
+): Promise<ExecutorResult<State>> {
+  const p = rawParams as Params;
+  const pageSize = Math.min(Math.max(1, p.pageSize ?? DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
+
+  // Signature = the normalized parts that DEFINE the set. Include every filter
+  // field; do NOT include page/pageSize (paging within one set must hit cache).
+  // Array-valued parts are order-independent; scalars are positional.
+  const signature = querySignature(/* {{FILTER_FIELDS}} */);
+
+  // ── Cache hit: reslice rows already in state, no backend call ─────────────
+  const cache = state.{{CACHE_SLOT}};
+  if (cache && cache.signature === signature) {
+    return page(cache.rows, p.page, pageSize, true, {});
+  }
+
+  // ── Miss: fetch the FULL set once, broadly ────────────────────────────────
+  const resp = await postBackend<{ payload?: { items?: Row[] } }>(
+    {{TOOL_NAME}}Env.{{BASE_URL_FIELD}},
+    "{{BACKEND_ENDPOINT}}",
+    {
+      // {{BACKEND_REQUEST_FIELDS}} — send the filter; fetch the whole set, not a page.
+    },
+    { envelope: "{{ENVELOPE_MODE}}" }, // "full" or "payload-only"
+  );
+  const rows: Row[] = resp?.payload?.items ?? [];
+  // (Optional) sort into a STABLE order so page boundaries are deterministic:
+  // rows.sort((a, b) => /* … */);
+
+  // Persist FULL rows + the cache. Later actions (and re-paging) read these;
+  // the model only ever sees a page.
+  const stateUpdate: Partial<State> = {
+    {{ROWS_SLOT}}: rows, // authoritative full set (omit if you only need the cache)
+    {{CACHE_SLOT}}: { signature, rows },
+  } as Partial<State>;
+
+  return page(rows, p.page, pageSize, false, stateUpdate);
+}
+
+/** Slice rows into one page and build the bounded result envelope. */
+function page(
+  rows: Row[],
+  pageParam: number | undefined,
+  pageSize: number,
+  fromCache: boolean,
+  stateUpdate: Partial<State>,
+): ExecutorResult<State> {
+  const totalCount = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const current = Math.min(Math.max(1, pageParam ?? 1), totalPages);
+  const items = rows.slice((current - 1) * pageSize, current * pageSize);
+  return {
+    resultBody: {
+      summary: `Page ${current}/${totalPages} — showing ${items.length} of ${totalCount} item(s).`,
+      page: current,
+      pageSize,
+      totalCount,
+      totalPages,
+      hasMore: current < totalPages,
+      items, // ONLY the page — never the full set
+      fromCache,
+    },
+    stateUpdate,
+    ok: true,
+  };
+}
+
+// ─── State + config notes ─────────────────────────────────────────────────── //
+//
+// state.ts — declare two slots (replace-on-write reducers are fine):
+//   {{ROWS_SLOT}}:  Row[] | null
+//   {{CACHE_SLOT}}: { signature: string; rows: Row[] } | null
+//
+// config.ts — this action's params: the filter fields + `page` + `pageSize`.
+//   page:     z.number().int().positive().optional()
+//   pageSize: z.number().int().positive().optional()
+//
+// prompt — teach the model: results are paged; the body carries
+//   { page, totalPages, hasMore, totalCount }; to see more, re-call the SAME
+//   action with `page: <n+1>` (same filters) — it re-pages from state for free.
