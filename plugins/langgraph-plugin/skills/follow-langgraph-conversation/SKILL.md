@@ -16,14 +16,35 @@ Graph-agnostic. This skill knows the LangGraph dev-server and LangSmith **API sh
 <quick_start>
 Given a thread_id, run through these phases in order:
 
+0. **Discover config** — the dev-server port and the LangSmith credentials, read from the project's files.
 1. **LangGraph dev server** — thread state, runs list, full checkpoint history.
 2. **LangSmith cloud** — trace tree, LLM prompts and responses (only if LangSmith is enabled — see Phase 2 prerequisites).
 3. **Analysis** — state-progression table, root-cause identification.
 
-All queries use `curl` piped to `python3` for JSON parsing. Replace `2024` with the project's port if different.
+All queries use `curl` piped to `python3` for JSON parsing. This doc writes `2024` as a placeholder — use the port resolved in Phase 0.
 </quick_start>
 
 <process>
+
+<phase name="0_discover_config">
+**Phase 0: Discover the configuration**
+
+Read the project before assuming anything. Two things live in the project, not in defaults — the dev-server **port** and the **LangSmith credentials**.
+
+**Port.** Scan, in order: `langgraph.json` (the `graphs` map gives candidate graph ids; the `env` key names the env file the server loads), `package.json` dev script (a `--port` flag, else the CLI default `2024`), `docker-compose.y*ml` (the published `host:container` port mapping for the langgraph service), and the README. Resolve to one port; if it's unclear and `/info` isn't reachable, **ask the user**.
+
+**LangSmith credentials.** The API key and project name almost always live in the agent's **`.env`** — specifically the file `langgraph.json`'s `env` key points at (commonly `.env`, sometimes a nested path like `config/<agent>/.env`). Read them straight from there:
+
+```bash
+grep -E '^(LANGSMITH_API_KEY|LANGCHAIN_API_KEY|LANGSMITH_PROJECT|LANGSMITH_TRACING|LANGCHAIN_TRACING_V2)=' .env
+```
+
+- `LANGSMITH_API_KEY` (or legacy `LANGCHAIN_API_KEY`) — the key for Phase 2.
+- `LANGSMITH_PROJECT` — the session/project name to query in Phase 2.
+- `LANGSMITH_TRACING=true` (or legacy `LANGCHAIN_TRACING_V2=true`) — tracing is only being **recorded** when this is on. If it's absent/false, expect no cloud traces and lean on Phase 1.
+
+If the server runs in a container and the values are injected there rather than committed to a local `.env`, read them from the running process instead: `docker exec <container> printenv LANGSMITH_API_KEY`. Only ask the user for a key if neither source has it.
+</phase>
 
 <phase name="1_langgraph_dev_server">
 **Phase 1: LangGraph dev server queries**
@@ -105,13 +126,11 @@ To inspect a large field (retrieved docs, full conversation, a big formatted blo
 
 LangSmith provides the detailed LLM-level traces (prompts, responses, token counts) that the dev server doesn't expose.
 
-**Prerequisites**: LangSmith is opt-in and often **off by default**. It's enabled when the app runs with:
+**Prerequisites**: LangSmith is opt-in and often **off by default**. You already located the key, project name, and tracing flag in Phase 0 (from the agent's `.env`, or the running container). Export the key for the queries below:
+```bash
+export LANGSMITH_API_KEY=$(grep -E '^LANGSMITH_API_KEY=' .env | cut -d= -f2-)
 ```
-LANGCHAIN_TRACING_V2=true   (or LANGSMITH_TRACING=true)
-LANGSMITH_PROJECT=<project-name>
-LANGSMITH_API_KEY=<key>
-```
-Source the key from wherever the project keeps it (a local `.env`, or the running process — e.g. `LANGSMITH_API_KEY=$(docker exec <container> printenv LANGSMITH_API_KEY)`). If LangSmith is not enabled, **skip Phase 2 entirely** and rely on Phase 1 + the final assistant message — there will be no cloud traces.
+If the tracing flag wasn't on (`LANGSMITH_TRACING` / `LANGCHAIN_TRACING_V2`), or no key exists anywhere, **skip Phase 2 entirely** and rely on Phase 1 + the final assistant message — there will be no cloud traces to retrieve.
 
 **2a. Find the project/session ID**
 

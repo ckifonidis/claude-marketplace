@@ -12,27 +12,42 @@ Input (from the user invocation): a natural-language description of what to ask 
 <assumptions>
 This skill talks to the **LangGraph.js dev server** over HTTP (the server `npx @langchain/langgraph-cli dev` / `langgraph dev` exposes, default port `2024`). It is graph-agnostic: it discovers the registered graph and passes whatever input fields the user supplies. Nothing here is specific to any one project.
 
-Two things vary per project and must be discovered, not assumed:
-- **The port** — default `2024`; override if the project runs elsewhere.
+Several things vary per project and must be **discovered, not assumed** — read them from the project's own files (Phase 0):
+- **The port** — read it from the dev script / compose mapping / env; treat `2024` as a last-resort default, and ask the user if it's unclear.
 - **The graph id** (`assistant_id`) — discover it from `/assistants/search`; do not hardcode a name.
 - **How the server is started** — `npm run dev`, `langgraph dev`, a `docker compose` service, etc. Probe first; only suggest a start command if it's down.
 </assumptions>
 
 <quick_start>
-1. Ensure the dev server is up (probe `/info`; start it only if down).
-2. Discover the registered graph id via `/assistants/search`.
-3. Create a fresh thread via `POST /threads`.
-4. For each turn the user specified, call `POST /threads/{id}/runs/wait` with messages + any input-state fields.
-5. Echo the turn-by-turn exchange back to the user along with the `thread_id`.
-6. Invoke the `follow-langgraph-conversation` skill with that `thread_id`.
+1. Discover the server config (port, start command, graph) by scanning the project's files.
+2. Ensure the dev server is up on the discovered port (probe `/info`; start it only if down).
+3. Discover the registered graph id via `/assistants/search`.
+4. Create a fresh thread via `POST /threads`.
+5. For each turn the user specified, call `POST /threads/{id}/runs/wait` with messages + any input-state fields.
+6. Echo the turn-by-turn exchange back to the user along with the `thread_id`.
+7. Invoke the `follow-langgraph-conversation` skill with that `thread_id`.
 </quick_start>
 
 <process>
 
+<phase name="0_discover_config">
+**Phase 0: Discover the server configuration**
+
+Don't assume port `2024` or how the server starts — read it from the project first. Scan, in order, and stop once you have a port + a start command:
+
+- **`langgraph.json`** (repo root) — confirms a LangGraph.js project. Its `graphs` map lists the registered graph ids (candidates for `assistant_id`); its `env` key names the env file (commonly `.env`) the dev server loads.
+- **`package.json` scripts** — the dev script is the real start command and often pins the port, e.g. `"dev": "langgraph dev --port 8123"` or `"@langchain/langgraph-cli dev --port …"`. No `--port` flag → the CLI default is `2024`.
+- **`docker-compose.y*ml`** — if the server runs in a container, the published host port is the `ports:` mapping (`host:container`) for the langgraph service, and the start command is `docker compose up -d <service>`.
+- **`.env` / `.env.*`** (including the file `langgraph.json`'s `env` points at) — a `PORT` / `LANGGRAPH_PORT` var if the project wires one.
+- **README** — for a documented port or start command.
+
+Resolve the port from the strongest signal (dev-script `--port` > compose mapping > explicit env var > default `2024`). If sources conflict, or none is found and `/info` isn't reachable, **ask the user** for the port. Carry the resolved port through every URL below (this doc writes `2024` as a placeholder).
+</phase>
+
 <phase name="1_ensure_server">
 **Phase 1: Ensure the dev server is running and find the graph**
 
-Probe first (replace `2024` if the project uses another port):
+Probe on the port resolved in Phase 0:
 ```bash
 curl -s -o /dev/null -w "%{http_code}" http://localhost:2024/info
 ```
@@ -128,6 +143,10 @@ Always probe `/info` first. If it's down, start it with the project's documented
 
 <pitfall name="assuming_the_graph_id">
 Don't hardcode `assistant_id: "agent"`. Discover the registered `graph_id` from `/assistants/search` and use it. A wrong id fails the run.
+</pitfall>
+
+<pitfall name="assuming_the_port">
+Don't assume `2024`. Resolve the port from the project (Phase 0: dev script `--port`, compose port mapping, env var) and ask the user if it's unclear. Probing the wrong port reads as "server down" and sends you starting a server that's already running elsewhere.
 </pitfall>
 
 <pitfall name="using_non_blocking_runs">
