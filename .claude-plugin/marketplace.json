@@ -21,6 +21,20 @@
       "keywords": ["langgraph", "agent-step", "scaffolding", "typescript", "react-agent", "testing", "versioning"],
       "category": "development",
       "tags": ["agent", "langgraph", "scaffold", "tooling"]
+    },
+    {
+      "name": "langgraph-plugin",
+      "source": "./plugins/langgraph-plugin",
+      "description": "Run and debug LangGraph.js conversations: /run-langgraph-conversation executes a single- or multi-turn test conversation against the local dev server and captures the thread; /follow-langgraph-conversation investigates any thread end-to-end (dev-server checkpoint history + optional LangSmith traces) and produces root-cause analysis.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Charalampos Kyfonidis"
+      },
+      "repository": "https://github.com/ckifonidis/claude-marketplace",
+      "license": "MIT",
+      "keywords": ["langgraph", "langsmith", "debugging", "tracing", "dev-server", "thread", "observability"],
+      "category": "development",
+      "tags": ["langgraph", "langsmith", "debugging", "observability"]
     }
   ]
 }

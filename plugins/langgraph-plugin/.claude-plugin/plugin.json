@@ -1,0 +1,9 @@
+{
+  "name": "langgraph-plugin",
+  "version": "0.1.0",
+  "description": "Run and debug LangGraph.js conversations. /run-langgraph-conversation executes a single- or multi-turn test conversation against the local dev server and captures the thread; /follow-langgraph-conversation investigates any thread end-to-end (dev-server checkpoint history + optional LangSmith traces) and produces root-cause analysis.",
+  "author": {
+    "name": "Charalampos Kyfonidis"
+  },
+  "keywords": ["langgraph", "langsmith", "debugging", "tracing", "dev-server", "thread", "observability", "react-agent"]
+}

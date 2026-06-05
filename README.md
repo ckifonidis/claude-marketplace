@@ -40,14 +40,41 @@ Ships two skills:
 The bundled runner library is a **versioned snapshot**. The canonical source lives in
 the agent projects; when it changes, bump `agent-step-toolkit`'s version and re-sync.
 
+### langgraph-plugin
+
+Run and debug **any** LangGraph.js conversation against the local dev server. Graph-agnostic:
+it discovers the registered graph and your state fields rather than assuming a fixed schema.
+
+Install:
+
+```
+/plugin install langgraph-plugin@ckifonidis-marketplace
+```
+
+Ships two skills:
+
+- **`run-langgraph-conversation`** — execute a single- or multi-turn test conversation against
+  the local dev server (probe `/info`, discover the `graph_id`, create a thread, run each turn
+  with `/runs/wait`, reuse the `thread_id`), surface the replies + any decision signals, then hand
+  off the captured `thread_id` to the analysis skill.
+- **`follow-langgraph-conversation`** — investigate a thread end-to-end: dev-server thread state,
+  runs, and full checkpoint history (state progression), plus LangSmith traces (LLM prompts /
+  responses / token usage) when tracing is enabled — ending in a state-progression table and
+  root-cause analysis.
+
 ## Layout
 
 ```
 .claude-plugin/marketplace.json     # marketplace manifest (lists plugins)
 plugins/
-└── agent-step-toolkit/
+├── agent-step-toolkit/
+│   ├── .claude-plugin/plugin.json   # plugin manifest
+│   └── skills/
+│       ├── create-tool/             # full skill + workflows + references + templates (incl. agent-step library)
+│       └── test-agent-step/         # single-file skill
+└── langgraph-plugin/
     ├── .claude-plugin/plugin.json   # plugin manifest
     └── skills/
-        ├── create-tool/             # full skill + workflows + references + templates (incl. agent-step library)
-        └── test-agent-step/         # single-file skill
+        ├── run-langgraph-conversation/      # execute a test conversation, capture thread_id
+        └── follow-langgraph-conversation/   # investigate a thread (dev server + LangSmith) → root cause
 ```
