@@ -11,14 +11,14 @@
     {
       "name": "agent-step-toolkit",
       "source": "./plugins/agent-step-toolkit",
-      "description": "Build agent-step LangGraph projects and tools: bootstrap a new project (runner library + streaming CLI + scaffold), add domain tools (actions / executors / verifiers / controller hooks + invalidatesOnChange), and lay down the three-layer test methodology.",
-      "version": "0.1.0",
+      "description": "Build agent-step LangGraph projects and tools: bootstrap a new project (runner library + streaming CLI + scaffold), add domain tools (actions / executors / verifiers / controller hooks + invalidatesOnChange), version the embedded runner library (/bump-version + /pull-library), and lay down the three-layer test methodology.",
+      "version": "0.2.0",
       "author": {
         "name": "Charalampos Kyfonidis"
       },
       "repository": "https://github.com/ckifonidis/claude-marketplace",
       "license": "MIT",
-      "keywords": ["langgraph", "agent-step", "scaffolding", "typescript", "react-agent", "testing"],
+      "keywords": ["langgraph", "agent-step", "scaffolding", "typescript", "react-agent", "testing", "versioning"],
       "category": "development",
       "tags": ["agent", "langgraph", "scaffold", "tooling"]
     }
