@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsc && node --test dist/agent-step/runner.test.js",
+    "test": "tsc && node --test dist/agent-step/*.test.js",
     "test:sandbox": "tsc && sh -c 'F=$(find dist/tools -path \"*/tests/tool/*.test.js\" 2>/dev/null); [ -n \"$F\" ] && node --test $F || echo \"no sandbox tests yet\"'",
     "test:prompt": "tsc && sh -c 'F=$(find dist/tools -path \"*/tests/prompt-input/*.test.js\" 2>/dev/null); [ -n \"$F\" ] && PROMPT_INPUT_LIVE=1 node --test $F || echo \"no prompt-input tests yet\"'",
     "test:all": "npm run test && npm run test:sandbox",

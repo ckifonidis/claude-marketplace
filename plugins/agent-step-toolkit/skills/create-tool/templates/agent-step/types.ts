@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { PageableSpec } from "./paginate.js";
 
 /** Result a single executor returns to the runner. `resultBody` is the
  *  JSON-serializable object the LLM sees as that step's payload. `stateUpdate`
@@ -101,6 +102,16 @@ export interface ActionDef<PrereqName extends string> {
    *  Host annotations should accept `null` as the "unset" sentinel for any
    *  slot listed here. */
   invalidatesOnChange?: Record<string, string[]>;
+  /** Opt this read into uniform pagination. `true` self-paginates (executor
+   *  returns the FULL set in `resultBody.items`; the runner slices + caches it
+   *  in `pagedRead`, skipping the executor on a same-query re-page); `"delegate"`
+   *  means the backend pages (executor reads the injected `page`/`pageSize`,
+   *  returns the page in `resultBody.items` + `resultBody.totalCount`; the runner
+   *  just wraps it). The object form tunes page size. The runner injects
+   *  `page`/`pageSize` params and emits a uniform `{ page, pageSize, totalCount,
+   *  totalPages, hasMore, items, fromCache }` envelope. Requires a `z.object`
+   *  params schema. Omit for non-list reads. */
+  pageable?: PageableSpec;
   /** Optional library-coordinated lifecycle hooks: confirmation gating, OTP
    *  issue/consume, flow open/close, double-entry capture/consume, and
    *  batch-isolation flags. Omit for plain reads and collection steps that

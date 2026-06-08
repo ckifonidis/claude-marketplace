@@ -27,3 +27,17 @@ export {
   agentStepZodShape,
 } from "./state.js";
 export type { AwaitingInput, CurrentFlow, LibraryManagedSlots } from "./state.js";
+
+// Read-pagination primitives. Pure, domain-agnostic helpers for tool read
+// executors — the runner does not use them. A tool's list reads use these to
+// present one uniform paginated envelope (delegate to a paging backend, or
+// self-paginate via a consumer-declared cache slot of shape `PagedCache`).
+export {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  clampPageSize,
+  querySignature,
+  pageRows,
+  buildPageEnvelope,
+} from "./paginate.js";
+export type { PageEnvelope, PagedCache, PageableSpec } from "./paginate.js";

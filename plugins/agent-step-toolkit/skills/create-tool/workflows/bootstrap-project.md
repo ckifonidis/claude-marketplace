@@ -50,6 +50,8 @@ Target: /absolute/path/to/<project_name>/
 - src/agent-step/state.ts
 - src/agent-step/runner.ts
 - src/agent-step/runner.test.ts
+- src/agent-step/paginate.ts
+- src/agent-step/paginate.test.ts
 - src/agent-step/define-config.ts
 - src/agent-step/index.ts
 - src/agent-step/VERSION  (library version marker; lets `/pull-library` know what the project currently vendors)
@@ -57,7 +59,7 @@ Target: /absolute/path/to/<project_name>/
 ### Graph scaffold (tool-empty; first tool added via /create-tool)
 - src/llm-env.ts
 - src/cli-env-init.ts          (suppresses backend trace in the CLI)
-- src/state.ts                 (messages + awaitingInput + currentFlow; per-tool slots added later)
+- src/state.ts                 (messages + awaitingInput + currentFlow + pagedRead; per-tool slots added later)
 - src/agent.ts
 - src/graph.ts
 - src/prompt.ts                (sections with TBD placeholders for tool-specific content)
@@ -133,6 +135,8 @@ cp templates/agent-step/types.ts        "$PROJECT/src/agent-step/types.ts"
 cp templates/agent-step/state.ts        "$PROJECT/src/agent-step/state.ts"
 cp templates/agent-step/runner.ts       "$PROJECT/src/agent-step/runner.ts"
 cp templates/agent-step/runner.test.ts  "$PROJECT/src/agent-step/runner.test.ts"
+cp templates/agent-step/paginate.ts      "$PROJECT/src/agent-step/paginate.ts"
+cp templates/agent-step/paginate.test.ts "$PROJECT/src/agent-step/paginate.test.ts"
 cp templates/agent-step/define-config.ts "$PROJECT/src/agent-step/define-config.ts"
 cp templates/agent-step/index.ts        "$PROJECT/src/agent-step/index.ts"
 cp templates/agent-step/VERSION         "$PROJECT/src/agent-step/VERSION"
@@ -186,8 +190,8 @@ npx tsc --noEmit
 Expected: zero errors. (The empty `tools: []`, stub prompt, and the shared test harness all typecheck fine against zero tools — intentional empty start. The prompt-input harness lazy-imports the model/tools, so it needs no Azure creds to typecheck.)
 
 ```bash
-# 2. Library runner tests — all should pass (currently 53; count may grow)
-npx tsc && node --test dist/agent-step/runner.test.js
+# 2. Library tests (runner + paginate) — all should pass; count grows as the library evolves
+npx tsc && node --test dist/agent-step/*.test.js
 ```
 Expected: zero failures. This validates the library copy is intact.
 

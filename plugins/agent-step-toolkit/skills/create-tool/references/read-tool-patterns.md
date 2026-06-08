@@ -16,11 +16,14 @@ This prevents token blow-ups and stops the model re-deriving data it can't see i
 </bound_what_the_model_sees>
 
 <pagination>
-## Pagination
+## Pagination — use the library's `pageable`
 
-Page over a large set with an explicit `offset`/`cursor` + `limit` param. The full set lives in state (fetched once, or page-by-page); the result body carries one page plus `{ total, offset, hasMore }`. The prompt teaches the model to advance the cursor on "show me more."
+Pagination is a **first-class library feature** — don't hand-roll it. Declare `pageable` on the read's `ActionDef` and the runner injects `page`/`pageSize` params, slices the result, and emits a uniform envelope `{ page, pageSize, totalCount, totalPages, hasMore, items, fromCache }`:
 
-A ready-made starting point for this (plus the reslice-cache below) ships as `templates/executor-read-paginated.ts.template` + `templates/reslice-cache.ts.template` — the single-source shape with `page`/`pageSize`, full rows → state, one page → the model.
+- **`pageable: true`** (self) — your executor returns the **FULL set** in `resultBody.items`; the runner slices the page and caches the full set in the library-managed `pagedRead` slot, so a same-query re-page skips the executor (`fromCache: true`). Use when the backend returns everything.
+- **`pageable: "delegate"`** — the backend pages; your executor reads `page`/`pageSize` and returns that page in `items` + `totalCount`. No cache.
+
+Constraint: a `pageable` action's `paramsSchema` must be a `z.object` (page params are merged in). The prompt teaches the model to re-call with `page: n+1` (same filters) for "show me more". Starting point: `templates/executor-read-paginated.ts.template`. Contract: `agent-step-api.md` `<pagination>`.
 </pagination>
 
 <windowing>
@@ -38,7 +41,9 @@ When one user-level answer spans several backend collections, merge them inside 
 <reslice_cache>
 ## Reslice cache
 
-If the same underlying set is filtered or sorted repeatedly, cache it under a **query signature** (the normalized parameters that define the set). A request with the same signature reslices the cached rows from state instead of re-fetching; a different signature refetches. Keeps repeated "now sort by X / filter to Y" cheap.
+If the same underlying set is paged repeatedly, the result should be cached under a **query signature** (the normalized params that define the set, excluding `page`/`pageSize`) so a same-query re-page reslices instead of re-fetching; a different signature refetches.
+
+For a `pageable: true` read this is **automatic** — the runner stores the full set in the library-managed `pagedRead` slot and re-pages from it. Only hand-roll a cache (with the exported `querySignature` helper) for a bespoke read that can't use `pageable` — e.g. one whose "set" is defined by something other than its params, or that merges multiple sources under a custom key.
 </reslice_cache>
 
 <retrieve_vs_analyze>

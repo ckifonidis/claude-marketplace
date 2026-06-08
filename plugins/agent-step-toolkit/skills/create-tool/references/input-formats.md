@@ -113,7 +113,7 @@ After processing inputs, verify every action has:
 - [ ] `mutation?` flag with `soleStep` / `soleOnExecute` + `requiresConfirmation` opts if true
 - [ ] lifecycle opts (`startsFlow` / `endsFlow` / `requiresFlow` / `issuesOtp` / `requiresOtp` / `startsMatchFor` / `requiresMatch`) for multi-turn actions
 - [ ] Backend endpoints + envelope shape
-- [ ] **result size** — could this read return a large or unbounded list (search / browse / history)? If yes, it's a **paginated read**: full rows → state, one page → the model, `page`/`pageSize` params, optional reslice-cache. Use `executor-read-paginated.ts.template` + `reslice-cache.ts.template`; see `read-tool-patterns.md`. A small fixed-size read needs none of this.
+- [ ] **result size** — could this read return a large or unbounded list (search / browse / history)? If yes, it's a **paginated read**: declare `pageable` on the action (`z.object` params schema required); the runner injects `page`/`pageSize`, returns one page, and caches the full set in the library `pagedRead` slot. Use `executor-read-paginated.ts.template`; see `read-tool-patterns.md` + `agent-step-api.md` `<pagination>`. A small fixed-size read needs none of this.
 
 And every prereq has:
 

@@ -54,6 +54,9 @@ interface ActionDef<PrereqName extends string> {
                                    // slots to reset to null when the watched slot's value CHANGES
                                    // (non-null → different value). First-time set / same-value
                                    // writes do NOT fire. See <invalidates_on_change>.
+  pageable?: PageableSpec;         // opt a LIST read into uniform pagination. The runner injects
+                                   // page/pageSize params, slices the result, and emits a standard
+                                   // envelope. Requires a z.object paramsSchema. See <pagination>.
   controller?: ControllerHooks;    // lifecycle hooks coordinated by the runner (confirmation /
                                    // OTP / match / flow / batch-isolation). Omit for plain reads.
 }
@@ -212,6 +215,21 @@ interface CurrentFlow {
 ```
 
 Starting a different flow while another is active fails with `error: "flow_already_active"`. Re-entering the SAME flow is idempotent — the executor runs (e.g. to re-issue an OTP), and `flowData` shallow-merges into the existing `currentFlow.data` (no reset).
+
+## PagedCache (library-managed)
+
+The reslice-cache for `pageable` reads (self mode). On a cache miss the runner stores the full result set + the query signature; on a same-query re-page it serves the page from here WITHOUT re-running the executor. One active set at a time; untouched unless an action declares `pageable`.
+
+```ts
+interface PagedCache<Row> {
+  key: string;                       // the action name that produced the set
+  signature: string;                 // params signature (excludes page/pageSize)
+  rows: Row[];                       // the FULL set
+  extras: Record<string, unknown>;   // the executor's non-`items` result fields, replayed per page
+}
+```
+
+Host the slot as `pagedRead: PagedCache<unknown> | null` (it's in the bootstrap state template, alongside `awaitingInput` / `currentFlow`).
 
 </types>
 
@@ -398,6 +416,26 @@ The customer provides a value once, then again; the system verifies they match. 
 While `awaitingInput.kind === "match"`, only three actions are allowed as the first step: the consumer, the capturer (re-capture), or `abort_pending_input`.
 </match_lifecycle>
 
+<pagination>
+## Read pagination (`pageable`)
+
+A LIST read opts in with `pageable` on its `ActionDef`. The runner then injects optional `page` / `pageSize` params into the action's schema (so the model can ask for a page), runs/serves the read, and emits a **uniform envelope** spread into the StepResult:
+
+```ts
+{ page, pageSize, totalCount, totalPages, hasMore, items, fromCache }
+```
+
+The executor's other `resultBody` fields (e.g. `summary`) are preserved on every page, including cache hits. Two modes:
+
+- **`pageable: true`** — **self-paginate.** The executor returns the **FULL set** in `resultBody.items`; the runner slices the requested page and caches the full set in the library-managed `pagedRead` slot. A same-query re-page (same params minus `page`/`pageSize`) is served from the cache **without re-running the executor** (`fromCache: true`).
+- **`pageable: "delegate"`** — **backend pages.** The executor reads the injected `page`/`pageSize`, returns that page in `resultBody.items` plus `resultBody.totalCount`; the runner just wraps it (no cache).
+- **`pageable: { mode, pageSize?, maxPageSize? }`** — same, with tuned sizes (defaults: `DEFAULT_PAGE_SIZE=10`, `MAX_PAGE_SIZE=50`).
+
+**Constraint:** a `pageable` action's `paramsSchema` MUST be a `z.object` (the runner merges `page`/`pageSize` in) — otherwise construction throws.
+
+**Primitives** (exported from `index.ts`, for hand-rolled cases — the runner uses them internally): `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE`, `clampPageSize`, `querySignature`, `pageRows`, `buildPageEnvelope`, and types `PageEnvelope`, `PagedCache`, `PageableSpec`. Prefer the `pageable` opt over hand-rolling.
+</pagination>
+
 <result_envelope>
 ## What the LLM sees per tool call
 
@@ -433,6 +471,7 @@ The runner validates the config + registries at construction. These all throw at
 | `expects an executor at executors["xxx"]` | `executors` registry missing the action-name key for an action |
 | `is missing a non-empty description` | An action lacks `description` |
 | `verifiers["xxx"] was not provided` | A prereq referenced by some action has no verifier |
+| `pageable action's paramsSchema must be a z.object` | A `pageable` action's `paramsSchema` isn't a `z.object` (the runner can't merge `page`/`pageSize` in) |
 | `at least one action must be defined` | Empty `config.actions` |
 
 Runtime errors raised by the runner (not construction-time, but loud):
@@ -444,7 +483,7 @@ Runtime errors raised by the runner (not construction-time, but loud):
 | `reported lifecycle.issuesOtp but config lacks issuesOtp opt` | Executor returned the lifecycle signal but mutation config didn't declare `issuesOtp` |
 | `declares startsMatchFor "X" but that consumer doesn't declare requiresMatch` | Capturer / consumer mismatch |
 
-The runner does NOT validate at runtime that you declared `awaitingInput` / `currentFlow` in state when using the lifecycle opts. If you forget, the runner will write a patch to a non-existent slot and the library-managed gates will silently misbehave. Always add both slots — they're already in the bootstrap state template.
+The runner does NOT validate at runtime that you declared `awaitingInput` / `currentFlow` / `pagedRead` in state when using the lifecycle / pagination opts. If you forget, the runner will write a patch to a non-existent slot and the library-managed gates will silently misbehave. Always add all three slots — they're already in the bootstrap state template.
 </construction_time_checks>
 
 <key_files_to_inspect>
@@ -452,6 +491,7 @@ For ground truth, read these files in the project (don't paraphrase — they ARE
 
 - `src/agent-step/types.ts` — every type listed above
 - `src/agent-step/runner.ts` — the runtime; especially `validateConfig`, `runSteps`, the selector→executor dispatch (`selectors[action](view)` → `executors[action]`), `buildMergerFromAnnotation`, lockdown handling, lifecycle ordering
+- `src/agent-step/paginate.ts` — the read-pagination primitives + the `pageable` orchestration the runner uses (self / delegate, the cache, the envelope)
 - `src/agent-step/index.ts` — what's exported (only what's here is part of the API)
-- `src/agent-step/runner.test.ts` — worked examples covering every runner branch; should all pass on `npm test`
+- `src/agent-step/runner.test.ts` + `src/agent-step/paginate.test.ts` — worked examples covering every runner branch + the pagination primitives; all pass on `npm test`
 </key_files_to_inspect>
