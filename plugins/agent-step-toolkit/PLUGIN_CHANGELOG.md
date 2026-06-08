@@ -11,6 +11,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.5.0] — 2026-06-08
+
+### Changed
+- Ships agent-step runner library **1.1.0** — native read pagination via the `pageable` action opt
+  (the runner injects `page`/`pageSize`, returns a uniform envelope, and caches the full set in the
+  library-managed `pagedRead` slot). See [`CHANGELOG.md`](CHANGELOG.md) and
+  [migrations/1.0.0-to-1.1.0.md](migrations/1.0.0-to-1.1.0.md).
+- `create-tool` pagination reconciled to the library opt: `executor-read-paginated.ts.template` now
+  uses `pageable`; the hand-rolled `reslice-cache.ts.template` from 0.4.0 is **removed**
+  (`querySignature` is now a library export); the `pagedRead` library-managed slot is added to the
+  bootstrap state template; references/workflows updated; the bootstrap `test` script runs
+  `dist/agent-step/*.test.js` (runner + paginate).
+
+### Notes
+- Downstream projects pull the new library via `/pull-library` (additive; `pageable` is opt-in, so
+  existing tools are unaffected).
+
 ## [0.4.0] — 2026-06-05
 
 ### Added
