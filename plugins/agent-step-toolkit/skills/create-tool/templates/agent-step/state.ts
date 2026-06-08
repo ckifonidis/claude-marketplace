@@ -1,5 +1,6 @@
 import { Annotation } from "@langchain/langgraph";
 import { z } from "zod";
+import type { PagedCache } from "./paginate.js";
 
 /** Schema for the library-managed `awaitingInput` slot. This is the single
  *  source of truth: the `AwaitingInput` TS type is inferred from it, and the
@@ -75,12 +76,24 @@ export type AwaitingInput = z.infer<typeof AwaitingInputSchema>;
  *  {@link CurrentFlowSchema}. */
 export type CurrentFlow = z.infer<typeof CurrentFlowSchema>;
 
+/** Schema for the library-managed `pagedRead` slot — the reslice cache for
+ *  `pageable: true` reads. The runner writes it (full set + query signature +
+ *  the executor's non-`items` fields) on a cache miss and re-pages from it on a
+ *  same-query hit, skipping the executor. One active set at a time. */
+export const PagedCacheSchema = z.object({
+  key: z.string(),
+  signature: z.string(),
+  rows: z.array(z.unknown()),
+  extras: z.record(z.string(), z.unknown()),
+});
+
 /** The library-managed slots, as a plain shape. Any host state type the runner
  *  operates over must structurally include these (the runner constrains its
  *  generic against this so an omission is a compile error, not a runtime one). */
 export interface LibraryManagedSlots {
   awaitingInput?: AwaitingInput | null;
   currentFlow?: CurrentFlow | null;
+  pagedRead?: PagedCache<unknown> | null;
 }
 
 const replaceNull = <T>() => ({
@@ -103,6 +116,7 @@ const replaceNull = <T>() => ({
 export const agentStepStateSpec = {
   awaitingInput: Annotation<AwaitingInput | null>(replaceNull<AwaitingInput>()),
   currentFlow: Annotation<CurrentFlow | null>(replaceNull<CurrentFlow>()),
+  pagedRead: Annotation<PagedCache<unknown> | null>(replaceNull<PagedCache<unknown>>()),
 };
 
 /** Zod shape fragment for the library-managed slots. Spread into the
@@ -119,4 +133,5 @@ export const agentStepStateSpec = {
 export const agentStepZodShape = {
   awaitingInput: AwaitingInputSchema.nullable().optional().default(null),
   currentFlow: CurrentFlowSchema.nullable().optional().default(null),
+  pagedRead: PagedCacheSchema.nullable().optional().default(null),
 };

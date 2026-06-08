@@ -49,9 +49,9 @@ sessionUserKey: Annotation<string | null>({
 
 And remember: a default — even one reading an env var — does **not** fill state. The **caller must pass these fields in the invoke input on every run**; the launcher (CLI, server handler, scheduler) owns reading the environment/request and threading them in. A `sessionReady` verifier then just checks presence.
 
-## Library-managed slots (awaitingInput + currentFlow)
+## Library-managed slots (awaitingInput + currentFlow + pagedRead)
 
-These two slots are required whenever the new tool declares any lifecycle opt on a mutation (`requiresConfirmation`, `requiresOtp`, `issuesOtp`, `requiresMatch`, `startsMatchFor`, `startsFlow`, `endsFlow`, `requiresFlow`). They're scaffolded into the bootstrap template — most projects already have them:
+`awaitingInput` / `currentFlow` are required whenever the new tool declares any lifecycle opt on a mutation (`requiresConfirmation`, `requiresOtp`, `issuesOtp`, `requiresMatch`, `startsMatchFor`, `startsFlow`, `endsFlow`, `requiresFlow`); `pagedRead` is required whenever an action declares `pageable`. All three are scaffolded into the bootstrap template — most projects already have them:
 
 ```ts
 import type { AwaitingInput, CurrentFlow } from "./agent-step/index.js";
@@ -85,7 +85,7 @@ verifiedAccounts: z.record(z.string(), VerifiedAccountSchema).optional().default
 activeAccountNumber: z.string().nullable().optional().default(null),
 ```
 
-The `awaitingInput` / `currentFlow` Zod schemas are already in the bootstrap template — discriminated union over `confirmation` | `otp` | `match` for awaiting; `{ name, data }` for flow.
+The `awaitingInput` / `currentFlow` / `pagedRead` Zod schemas are already in the bootstrap template — discriminated union over `confirmation` | `otp` | `match` for awaiting; `{ name, data }` for flow; `{ key, signature, rows, extras }` for the paged-read cache.
 </state_ts>
 
 <tools_index_ts>

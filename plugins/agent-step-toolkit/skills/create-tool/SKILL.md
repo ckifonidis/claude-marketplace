@@ -24,7 +24,7 @@ This skill builds a new domain tool that plugs into the **existing** `src/agent-
 
 **7. Identity has two models — don't force the wrong one.** Either collect-and-verify (for mutations / proof-of-identity) OR session-context (identity passed in at invoke, for pre-authenticated / read-only tools — no verify action, a `sessionReady` presence check). Match the tool. See `identity-patterns.md`.
 
-**8. Reads should be self-sufficient; the surface is for the user, not the backend.** Prereqs are safety gates, not sequencing hints — a read action should load what it needs rather than gate on a prior step, and the prompt must never report "none" from a slot that may simply be unloaded. Design actions around the user task: fold endpoint boundaries (list→details) into one action, keep sibling entity types symmetric. See `executor-patterns.md`, `read-tool-patterns.md`, `input-formats.md`.
+**8. Reads should be self-sufficient; the surface is for the user, not the backend.** Prereqs are safety gates, not sequencing hints — a read action should load what it needs rather than gate on a prior step, and the prompt must never report "none" from a slot that may simply be unloaded. Design actions around the user task: fold endpoint boundaries (list→details) into one action, keep sibling entity types symmetric. For a large/list read, declare `pageable` (the runner handles paging + the `pagedRead` cache) rather than hand-rolling pagination. See `executor-patterns.md`, `read-tool-patterns.md`, `input-formats.md`.
 </essential_principles>
 
 <intake>
@@ -126,14 +126,14 @@ All in `templates/`:
 - `project/test-harness-sandbox.ts.template`, `project/test-harness-prompt-input.ts.template`, `project/test-harness-index.ts.template`
 
 **Agent-step library** (verbatim copy by bootstrap; no substitution):
-- `agent-step/types.ts`, `agent-step/state.ts`, `agent-step/runner.ts`, `agent-step/runner.test.ts`, `agent-step/define-config.ts`, `agent-step/index.ts`
+- `agent-step/types.ts`, `agent-step/state.ts`, `agent-step/runner.ts`, `agent-step/runner.test.ts`, `agent-step/paginate.ts`, `agent-step/paginate.test.ts`, `agent-step/define-config.ts`, `agent-step/index.ts`
 - `agent-step/VERSION` — the library version marker. Bumped by `/bump-version` when the embedded copy is refreshed; read by `/pull-library` to upgrade a downstream project's vendored copy. Travels into every bootstrapped project at `src/agent-step/VERSION`.
 
 **Tool scaffold** (used by create-tool.md):
 - `config.ts.template`, `tool-index.ts.template`, `verifier.ts.template`
 - `state-selector.ts.template` (per-action `stateSelector.ts` — `getSlice` + `Slice`)
 - `executor-read.ts.template`, `executor-mutation.ts.template`
-- `executor-read-paginated.ts.template` (large/list read: full rows → state, one page → model, reslice-cache) + `reslice-cache.ts.template` (`querySignature` helper)
+- `executor-read-paginated.ts.template` (large/list read via the library `pageable` opt — runner injects page/pageSize, slices, and caches in the `pagedRead` slot)
 - `backend-env.ts.template`, `backend-client.ts.template`
 - `plan.md.template` (proposed-plan document the workflow writes before file edits)
 

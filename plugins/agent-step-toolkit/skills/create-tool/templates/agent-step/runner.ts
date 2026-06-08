@@ -48,6 +48,13 @@ import type {
   RunnerResultBody,
 } from "./types.js";
 import type { AwaitingInput, CurrentFlow, LibraryManagedSlots } from "./state.js";
+import {
+  resolvePageable,
+  applyPagination,
+  tryPageFromCache,
+  type ResolvedPageable,
+  type PagedCache,
+} from "./paginate.js";
 
 /** Internal adapter shape for confirmation gating. The runner reads/writes the
  *  canonical `awaitingInput.kind === "confirmation"` slot; this struct is just
@@ -357,12 +364,33 @@ function hasAnyLifecycleOpt(config: AnyConfig): boolean {
   return false;
 }
 
+/** Page params the runner injects into a `pageable` action's schema, so the
+ *  consumer never declares them. */
+const PAGE_PARAMS = {
+  page: z.number().int().positive().optional(),
+  pageSize: z.number().int().positive().optional(),
+};
+
+/** The params schema actually validated for an action — its declared schema,
+ *  plus `page`/`pageSize` when the action is `pageable`. Pageable actions must
+ *  use a `z.object` schema so the page params can be merged in. */
+function effectiveParamsSchema(action: ActionDef<string>): z.ZodTypeAny {
+  if (!resolvePageable(action.pageable)) return action.paramsSchema;
+  const schema = action.paramsSchema;
+  if (!(schema instanceof z.ZodObject)) {
+    throw new Error(
+      `agent-step: pageable action's paramsSchema must be a z.object (got ${schema?.constructor?.name ?? typeof schema}).`,
+    );
+  }
+  return (schema as z.ZodObject<z.ZodRawShape>).extend(PAGE_PARAMS);
+}
+
 function buildStepSchema(config: AnyConfig) {
   const actionNames = Object.keys(config.actions);
   const stepVariants = actionNames.map((name) => {
     const action = config.actions[name];
     return z
-      .object({ action: z.literal(name), params: action.paramsSchema })
+      .object({ action: z.literal(name), params: effectiveParamsSchema(action) })
       .describe(action.description);
   });
   if (hasAnyLifecycleOpt(config)) {
@@ -943,10 +971,12 @@ export async function runSteps<
     // ─── User-declared prereqs were already checked above (before confirm-
     //     mode resolution) so propose and execute share the same gate.
 
-    // ─── Params.
+    // ─── Params. Pageable actions validate against the schema with the
+    //     library-injected page/pageSize merged in.
+    const pageable: ResolvedPageable | null = resolvePageable(action.pageable);
     let params: unknown;
     try {
-      params = action.paramsSchema.parse(step.params);
+      params = effectiveParamsSchema(action).parse(step.params);
     } catch (err) {
       const message =
         err instanceof z.ZodError
@@ -962,6 +992,21 @@ export async function runSteps<
       lastSummary = entry.summary as string;
       failedAt = results.length - 1;
       break;
+    }
+
+    // ─── Pageable self-paginate cache hit: re-page from the library-managed
+    //     `pagedRead` slot WITHOUT calling the executor (no backend re-fetch).
+    //     A same-query (same action + signature) call serves the requested page
+    //     straight from the cached full set.
+    if (pageable?.mode === "self") {
+      const cache = (view as { pagedRead?: PagedCache<unknown> | null }).pagedRead ?? null;
+      const cachedBody = tryPageFromCache(step.action, pageable, params, cache);
+      if (cachedBody) {
+        const entry: StepResult = { action: step.action, ok: true, ...cachedBody };
+        results.push(entry);
+        lastSummary = (cachedBody.summary as string | undefined) ?? lastSummary;
+        continue;
+      }
     }
 
     // ─── Snapshot watched-slot values BEFORE the executor runs. Used by the
@@ -1006,10 +1051,26 @@ export async function runSteps<
       break;
     }
 
+    // ─── Pageable transform: turn the executor's result into the uniform page
+    //     envelope. SELF slices `resultBody.items` (the full set) and emits a
+    //     cache patch; DELEGATE wraps the backend's page using `totalCount`.
+    let pageCachePatch: Partial<T> | null = null;
+    let entryBody = result.resultBody as Record<string, unknown>;
+    if (result.ok && pageable) {
+      const outcome = applyPagination(
+        step.action,
+        pageable,
+        params,
+        result.resultBody as Record<string, unknown>,
+      );
+      entryBody = outcome.body;
+      pageCachePatch = outcome.cachePatch as Partial<T> | null;
+    }
+
     const entry: StepResult = {
       action: step.action,
       ok: result.ok,
-      ...result.resultBody,
+      ...entryBody,
     };
     results.push(entry);
 
@@ -1059,6 +1120,13 @@ export async function runSteps<
     if (result.stateUpdate) {
       view = mergeState(view, result.stateUpdate);
       committed = mergeState(committed, result.stateUpdate);
+    }
+
+    // Self-paginate cache miss: persist the full set under its query signature
+    // so a same-query re-page next turn hits the cache and skips the executor.
+    if (pageCachePatch) {
+      view = mergeState(view, pageCachePatch);
+      committed = mergeState(committed, pageCachePatch);
     }
 
     if (result.ok) {

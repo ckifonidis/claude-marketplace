@@ -1,9 +1,9 @@
 // FILE: src/state.ts
 //
 // Graph-level state. Per-tool slots get added as tools are introduced.
-// `awaitingInput` + `currentFlow` are library-managed slots used by the
-// runner to coordinate confirmation gates, OTP gates, double-entry-match
-// gates, and multi-turn flows. The library writes them via each action's
+// `awaitingInput` + `currentFlow` + `pagedRead` are library-managed slots used
+// by the runner to coordinate confirmation gates, OTP gates, double-entry-match
+// gates, multi-turn flows, and the `pageable` read reslice-cache. The library writes them via each action's
 // inline `controller` opts (ControllerHooks: `requiresConfirmation`,
 // `requiresOtp`, `issuesOtp`, `startsFlow`, `endsFlow`, `requiresMatch`,
 // `startsMatchFor`) and clears them via `abort_pending_input` (an action the
@@ -13,7 +13,7 @@
 
 import { Annotation, MessagesAnnotation, MessagesZodState } from "@langchain/langgraph";
 import { z } from "zod";
-import type { AwaitingInput, CurrentFlow } from "./agent-step/index.js";
+import type { AwaitingInput, CurrentFlow, PagedCache } from "./agent-step/index.js";
 
 export const AgentState = Annotation.Root({
   ...MessagesAnnotation.spec,
@@ -41,6 +41,16 @@ export const AgentState = Annotation.Root({
    *  read scratch data via `currentFlow.data` (merged shallowly from
    *  `ExecutorResult.flowData`). */
   currentFlow: Annotation<CurrentFlow | null>({
+    reducer: (_, n) => n,
+    default: () => null,
+  }),
+
+  /** Library-managed reslice-cache for `pageable` read actions. On a cache miss
+   *  the runner stores the full result set + the query signature here; on a
+   *  same-query re-page it serves the page from this slot WITHOUT re-running the
+   *  executor. One active set at a time. Untouched unless an action declares
+   *  `pageable`. */
+  pagedRead: Annotation<PagedCache<unknown> | null>({
     reducer: (_, n) => n,
     default: () => null,
   }),
@@ -87,9 +97,17 @@ const CurrentFlowSchema = z.object({
   data: z.record(z.string(), z.unknown()),
 });
 
+const PagedCacheSchema = z.object({
+  key: z.string(),
+  signature: z.string(),
+  rows: z.array(z.unknown()),
+  extras: z.record(z.string(), z.unknown()),
+});
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const AgentStateSchema: z.ZodObject<any> = MessagesZodState.extend({
   awaitingInput: AwaitingInputSchema.nullable().optional().default(null),
   currentFlow: CurrentFlowSchema.nullable().optional().default(null),
+  pagedRead: PagedCacheSchema.nullable().optional().default(null),
   // Mirror per-tool slots here as they get added.
 });

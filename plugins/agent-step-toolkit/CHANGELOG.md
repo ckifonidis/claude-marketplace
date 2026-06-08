@@ -12,6 +12,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [1.1.0] — 2026-06-08
+
+Additive: native read-pagination. Opt a list read into uniform pagination with `pageable` on its
+action; the runner injects `page`/`pageSize` params, returns a standard
+`{ page, pageSize, totalCount, totalPages, hasMore, items, fromCache }` envelope, and (self mode)
+caches the full set in the new library-managed `pagedRead` slot so a same-query re-page skips the
+executor. Opt-in — existing tools are unaffected. Migration: [migrations/1.0.0-to-1.1.0.md](migrations/1.0.0-to-1.1.0.md).
+
+### Added
+- `paginate.ts` (new library file): `PageableSpec` / `PageEnvelope` / `PagedCache` types +
+  `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE`, `clampPageSize`, `querySignature`, `pageRows`,
+  `buildPageEnvelope`. Exported from `index.ts`.
+- `ActionDef.pageable?: PageableSpec` — `true` (self-paginate), `"delegate"` (backend pages), or
+  `{ mode, pageSize?, maxPageSize? }`.
+- Library-managed `pagedRead` state slot (`PagedCacheSchema`; added to `agentStepStateSpec` +
+  `agentStepZodShape`).
+
+### Changed
+- New construction-time check: a `pageable` action's `paramsSchema` must be a `z.object` (the runner
+  merges `page`/`pageSize` into it).
+- `package.json` `test` script broadened to `dist/agent-step/*.test.js` (runs the new `paginate.test.js`
+  alongside `runner.test.js`).
+
 ## [1.0.0] — 2026-06-05
 
 Breaking: per-action **state selectors**. The runner now projects the host state down

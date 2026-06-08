@@ -102,4 +102,15 @@ export const {{TOOL_NAME}}Config = defineConfig<ActionName, PrereqName>({
 // Downstream-slot invalidation is NOT a controller opt — it is the separate
 // per-action `invalidatesOnChange` field shown on {{ACTION_2}} above.
 //
+// Read pagination is ALSO a top-level ActionDef field (not a controller opt):
+//   pageable: true          — self-paginate (executor returns the FULL set in
+//                             resultBody.items; the runner slices + caches it in
+//                             the library `pagedRead` slot, skipping the executor
+//                             on a same-query re-page).
+//   pageable: "delegate"    — backend pages (executor reads injected page/pageSize,
+//                             returns the page + resultBody.totalCount).
+//   pageable: { mode: true, pageSize, maxPageSize }  — tune page sizes.
+// The runner injects `page`/`pageSize` params and emits a uniform envelope. A
+// pageable action's paramsSchema MUST be a z.object. See executor-read-paginated.
+//
 // See `references/agent-step-api.md` for the full lifecycle table.

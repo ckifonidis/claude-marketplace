@@ -23,7 +23,7 @@ The shape produced by the `bootstrap-project` workflow. This is a complete LangG
     │   └── index.ts
     ├── llm-env.ts                # AZURE_OPENAI_* env loader
     ├── cli-env-init.ts           # side-effect-only: suppresses backend trace logs in CLI
-    ├── state.ts                  # graph state — messages + awaitingInput + currentFlow
+    ├── state.ts                  # graph state — messages + awaitingInput + currentFlow + pagedRead
     ├── agent.ts                  # createReactAgent wire-up
     ├── graph.ts                  # exports `graph` (langgraph.json points here)
     ├── prompt.ts                 # system prompt with TBD section placeholders
@@ -86,7 +86,7 @@ Verbatim copy of the runner library. The skill treats these as templates-by-copy
 
 **cli-env-init.ts** — Side-effect-only module imported FIRST by `cli.ts`. Sets `CARDS_BACKEND_TRACE=0` (or equivalent per tool) by default so the CLI's structured per-step output isn't drowned by raw backend chatter. Override by setting `<TOOL>_BACKEND_TRACE=1` explicitly.
 
-**state.ts** — `Annotation.Root({...})` with `MessagesAnnotation.spec` spread in + two library-managed slots (`awaitingInput`, `currentFlow`). Per-tool slots are added in this file as tools are introduced. Also exports a Zod `AgentStateSchema` for input validation, including a discriminated-union schema for `awaitingInput` (confirmation / otp / match) and a `{ name, data }` schema for `currentFlow`.
+**state.ts** — `Annotation.Root({...})` with `MessagesAnnotation.spec` spread in + three library-managed slots (`awaitingInput`, `currentFlow`, `pagedRead`). Per-tool slots are added in this file as tools are introduced. Also exports a Zod `AgentStateSchema` for input validation, including a discriminated-union schema for `awaitingInput` (confirmation / otp / match), a `{ name, data }` schema for `currentFlow`, and a `{ key, signature, rows, extras }` schema for `pagedRead` (the `pageable` reslice-cache).
 
 **agent.ts** — Builds the `createReactAgent` with `AzureChatOpenAI` LLM + `MemorySaver` checkpointer + the tools registered in `src/tools/index.ts` + the prompt builder.
 
