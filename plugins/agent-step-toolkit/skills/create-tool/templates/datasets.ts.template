@@ -1,0 +1,134 @@
+// FILE: src/tools/{{TOOL_NAME}}/shared/datasets.ts
+//
+// Single source of truth for the analyze action's datasets. This ONE module
+// drives THREE consumers so the prompt's schema and the runtime data can never
+// drift (executor Pattern 9 — see references/data-analysis-pattern.md):
+//   1. buildDatasets(state)   — the plain-object arrays injected into the VM.
+//   2. DATASETS (schema)      — the static field/type list rendered into the prompt.
+//   3. buildDataSummary(state) — the live per-turn "AVAILABLE DATA" block (row
+//      counts + sample categorical values), so the model writes code against
+//      what actually exists this turn.
+//
+// The column `name`s below are the SAME identifiers the analysis code reads, so
+// the model can write `{{EXAMPLE_DATASET}}.filter(r => ...)` against exactly these.
+
+import type { DatasetSource } from "../../../state.js";
+
+// One literal per analyzable dataset. These keys ARE the variable names the
+// snippet sees in the VM and the headers the prompt documents.
+export type DatasetName =
+  // {{DATASET_NAMES}} — e.g. "transactions" | "accounts" | "holdings";
+  string;
+
+export type ColType = "number" | "date" | "string" | "boolean";
+
+export interface ColumnSpec {
+  name: string;
+  type: ColType;
+  /** Object/string column whose distinct values are worth sampling for the model. */
+  categorical?: boolean;
+  /** Stable, domain-guaranteed enum values (e.g. a creditDebit flag). Unlike the
+   *  live per-turn sample, these are rendered into the STATIC schema, so the model
+   *  can trust them even when it authors the analyze action in the SAME turn as
+   *  the fetch (before any data has loaded). Only set when the value set is fixed. */
+  values?: string[];
+  /** Stable note rendered into the static schema — sign conventions, currency
+   *  semantics, date formats, gotchas the model cannot infer from a same-turn-empty
+   *  data block. THIS is where you encode "don't sum across currencies",
+   *  "debits are negative", "ISO date — slice(0,10) to range-filter", etc. */
+  note?: string;
+}
+
+export interface DatasetSpec {
+  description: string;
+  columns: ColumnSpec[];
+}
+
+// {{DATASETS}} — one entry per dataset. Columns are the exact fields the snippet
+// reads. Add `categorical: true` to string columns worth sampling, `values` for
+// fixed enums, and `note` for any convention the model must not get wrong.
+export const DATASETS: Record<DatasetName, DatasetSpec> = {
+  // "{{EXAMPLE_DATASET}}": {
+  //   description: "Posted transactions (one row per transaction).",
+  //   columns: [
+  //     { name: "id", type: "string" },
+  //     {
+  //       name: "amount",
+  //       type: "number",
+  //       note: "signed — debits NEGATIVE, credits positive; in this row's own `currency`, NOT converted. Never sum across currencies.",
+  //     },
+  //     { name: "currency", type: "string", categorical: true },
+  //     { name: "kind", type: "string", categorical: true, values: ["debit", "credit"] },
+  //     {
+  //       name: "date",
+  //       type: "date",
+  //       note: "ISO-8601 with time; range-filter via `date.slice(0,10) >= \"2025-01-01\"`.",
+  //     },
+  //     { name: "category", type: "string", categorical: true },
+  //     { name: "description", type: "string", categorical: true },
+  //   ],
+  // },
+};
+
+export type Datasets = Record<DatasetName, Array<Record<string, unknown>>>;
+
+/** Project one source row down to exactly the documented columns (null-filled). */
+function pick(obj: Record<string, unknown>, cols: ColumnSpec[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const c of cols) out[c.name] = obj[c.name] ?? null;
+  return out;
+}
+
+/** Build the datasets from current state as plain-object arrays. The slots read
+ *  here MUST be the ones DatasetSource (in state.ts) exposes and the analyze
+ *  action's stateSelector hands the executor. Flatten record-by-key slots with
+ *  `Object.values(...).flat()`; drop any hidden/soft-deleted rows. */
+export function buildDatasets(state: DatasetSource): Datasets {
+  // {{BUILD_DATASETS}} — one block per dataset, e.g.:
+  //   const transactions = Object.values(state.transactions ?? {})
+  //     .flat()
+  //     .map((t) => pick(t as unknown as Record<string, unknown>, DATASETS.transactions.columns));
+  //   const accounts = Object.values(state.accounts ?? {})
+  //     .filter((a) => !a.hiddenFlag)
+  //     .map((a) => pick(a as unknown as Record<string, unknown>, DATASETS.accounts.columns));
+  //   return { transactions, accounts };
+  return {} as Datasets;
+}
+
+/** Live "AVAILABLE DATA" block for the system prompt. Lists each dataset's row
+ *  count and, for categorical columns, up to 10 sample distinct values. Returns
+ *  "" when no data is loaded so the prompt section can be omitted entirely. */
+export function buildDataSummary(state: DatasetSource): string {
+  const datasets = buildDatasets(state);
+  const lines: string[] = [];
+  let anyData = false;
+
+  for (const name of Object.keys(DATASETS) as DatasetName[]) {
+    const rows = datasets[name];
+    if (!rows || rows.length === 0) {
+      lines.push(`${name}: 0 rows (empty)`);
+      continue;
+    }
+    anyData = true;
+    const spec = DATASETS[name];
+    const cols = spec.columns.map((c) => {
+      if (c.categorical) {
+        const seen: string[] = [];
+        for (const r of rows) {
+          const v = r[c.name];
+          if (v == null || v === "") continue;
+          const s = String(v);
+          if (!seen.includes(s)) seen.push(s);
+          if (seen.length >= 10) break;
+        }
+        const sample = seen.length > 0 ? ` values: ${seen.join(", ")}` : "";
+        return `${c.name}(${c.type}${sample})`;
+      }
+      return `${c.name}(${c.type})`;
+    });
+    lines.push(`${name}: ${rows.length} rows — ${cols.join(", ")}`);
+  }
+
+  if (!anyData) return "";
+  return lines.join("\n");
+}

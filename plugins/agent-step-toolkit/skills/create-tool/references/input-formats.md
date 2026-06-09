@@ -13,7 +13,7 @@ Sentences like "the customer asks if their account is overdrawn" or "the agent m
 
 - **Subject + verb** → an action. "asks if" / "wants to know" / "requests" → read action. "freezes" / "transfers" / "cancels" → mutation.
 - **Object** → params + state slots. "their account" requires the account to be in state (state slot + verifier). "their card" same with cards.
-- **Conditions** → prereqs. "after identifying themselves" → `customerVerified`. "for an active card" → `cardVerified`.
+- **Conditions** → prereqs. "after identifying themselves" → `customerVerified`. "for an active card" → `cardVerified`. This mapping is exactly how the user's journey position becomes a constraint: each condition names a point the user must have reached, and the prereq is the snapshot of that progress (principle #10).
 - **Confirmation language** → `requiresConfirmation`. "the customer says yes before we proceed" / "we recap and ask" / "we require explicit confirmation" → set the flag.
 
 Example:

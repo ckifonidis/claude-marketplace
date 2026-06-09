@@ -25,6 +25,10 @@ This skill builds a new domain tool that plugs into the **existing** `src/agent-
 **7. Identity has two models — don't force the wrong one.** Either collect-and-verify (for mutations / proof-of-identity) OR session-context (identity passed in at invoke, for pre-authenticated / read-only tools — no verify action, a `sessionReady` presence check). Match the tool. See `identity-patterns.md`.
 
 **8. Reads should be self-sufficient; the surface is for the user, not the backend.** Prereqs are safety gates, not sequencing hints — a read action should load what it needs rather than gate on a prior step, and the prompt must never report "none" from a slot that may simply be unloaded. Design actions around the user task: fold endpoint boundaries (list→details) into one action, keep sibling entity types symmetric. For a large/list read, declare `pageable` (the runner handles paging + the `pagedRead` cache) rather than hand-rolling pagination. See `executor-patterns.md`, `read-tool-patterns.md`, `input-formats.md`.
+
+**9. Paradigm, not blueprint.** The bundled `templates/` (plus `templates/agent-step/`) and this skill's references are the ONLY structural source of truth. When you are handed an existing or reference project — especially in port mode — treat it strictly as a *domain spec* (what capabilities the tool must offer, which backend endpoints, which business rules, which identity model). Never inherit its file structure, abstractions, control flow, layering, or naming idioms verbatim. Re-derive the action surface, state slots, and wiring from the agent-step paradigm every time. A referenced project tells you *what*, never *how*.
+
+**10. Prereqs express journey progress; `invalidatesOnChange` keeps it coherent.** A prereq is a snapshot of *where the user is* in their journey — identity acquired, entity selected, flow open — not a record of which step ran first (that distinction is principle #8). You model journey state by adding a state slot plus the verifier predicate that gates on it. When an upstream slot changes mid-journey (the user re-identifies, or picks a different entity), declare `ActionDef.invalidatesOnChange` so stale downstream journey slots are cleared automatically — this is a library-provided option at your disposal, not something an executor hand-rolls. See the `<invalidates_on_change>` section of `agent-step-api.md`.
 </essential_principles>
 
 <intake>
@@ -35,8 +39,9 @@ What do you want to do?
 1. **Bootstrap a new project** — empty target directory, you want the full scaffold (package.json, tsconfig, agent-step library, graph/agent/state/prompt skeleton, streaming CLI, Dockerfile, build_and_push.sh). After this, the project is agent-shaped but tool-empty.
 2. **Add a tool** to an existing project — `src/agent-step/` already exists in the cwd; you have backend API specs and/or a functionality description for the new tool.
 3. **Extend an existing tool** — add new actions/mutations to a tool that already exists under `src/tools/<name>/`.
+4. **Port an existing project** — you have a pre-agent-step project (any framework) and want to re-platform its capabilities onto agent-step. The source project is read as a *domain spec only* (principle #9); its architecture is never copied. See `workflows/port-project.md`.
 
-**Skip the intake if the user's request makes the intent obvious** (e.g. "bootstrap a new project at /path/X" → go straight to bootstrap; "create a tool named accounts" → go straight to create-tool).
+**Skip the intake if the user's request makes the intent obvious** (e.g. "bootstrap a new project at /path/X" → go straight to bootstrap; "create a tool named accounts" → go straight to create-tool; "port this project to agent-step" → go straight to port).
 
 **For bootstrap, also ask:** project directory (absolute path), project name (kebab-case), agent display name, one-line description, voice or chat, ACR registry + image name.
 
@@ -51,6 +56,7 @@ What do you want to do?
 | 1, "bootstrap", "new project", "from scratch" | `workflows/bootstrap-project.md` |
 | 2, "add a tool", "new tool" | `workflows/create-tool.md` |
 | 3, "extend", "add action to existing" | `workflows/create-tool.md` (uses ADD-MODE branch) |
+| 4, "port", "migrate", "re-platform", "onto agent-step" | `workflows/port-project.md` |
 
 **After reading the workflow, follow it exactly.**
 </routing>
@@ -86,6 +92,8 @@ src/tools/<name>/tests/{tool,prompt-input}/FINDINGS.md
 ```
 The `test-agent-step` skill is the authority on HOW to use these (three layers, assertion boundaries, coverage bars, findings-not-flakes).
 
+**Keeping journey state coherent:** when an action writes an upstream slot that downstream journey state depends on, declare `invalidatesOnChange` on that action (in `config.ts`) so the runner clears the stale downstream slots when the upstream value actually changes — don't re-clear them by hand in an executor. See the `<invalidates_on_change>` section of `agent-step-api.md`.
+
 **Reserved names — do NOT use as action names:** `abort_pending_input`.
 
 **Construction-time errors mean misconfig.** If the dev server crashes at startup with `agent-step: ...`, the config/registries don't match. Read the message; it names the missing piece.
@@ -101,6 +109,7 @@ All domain knowledge in `references/`:
 - **input-formats.md** — How to derive actions from user stories, transcripts, structured lists, OpenAPI specs; designing the action surface for the user task, not the endpoint boundary.
 - **identity-patterns.md** — The two identity models (collected-and-verified vs session-context / pre-authenticated), session-context state wiring, and the "a default is not a value source" gotcha. Read when the tool does NOT collect identity.
 - **read-tool-patterns.md** — Read ergonomics: bounding result size, pagination, windowing/last-N, multi-source merge, reslice cache, and the retrieve-vs-analyze boundary. Read for search / browse / history / analytics tools.
+- **data-analysis-pattern.md** — The LLM-authored-compute pattern (executor Pattern 9): an analyze action takes a JS snippet param, the host runs it in a `node:vm` over the in-state datasets; single-source-of-truth datasets module feeding VM + prompt schema + live data block; the state-dependent prompt upgrade; security posture. Read when the tool answers open-ended aggregate questions (totals / group-by / top-N) over fetched data.
 - **project-bootstrap-structure.md** — Top-level project layout produced by the bootstrap workflow; what each scaffold file is for.
 </reference_index>
 
@@ -109,6 +118,7 @@ All domain knowledge in `references/`:
 |----------|---------|
 | bootstrap-project.md | Scaffold a brand-new project: package.json, tsconfig, agent-step library copy, graph/agent/state/prompt skeleton, streaming CLI, Dockerfile, build script. Empty tools — runs `create-tool` next. |
 | create-tool.md | Build a new tool inside an existing project, or extend an existing tool with new actions. Parse inputs → plan → user confirms → write files → verify. |
+| port-project.md | Re-platform an existing (non-agent-step) project onto agent-step: read the source as a domain spec only, bootstrap if needed, then derive tools fresh via `create-tool.md`. Never copies the source's architecture. |
 </workflows_index>
 
 <templates_index>
@@ -136,6 +146,12 @@ All in `templates/`:
 - `executor-read-paginated.ts.template` (large/list read via the library `pageable` opt — runner injects page/pageSize, slices, and caches in the `pagedRead` slot)
 - `backend-env.ts.template`, `backend-client.ts.template`
 - `plan.md.template` (proposed-plan document the workflow writes before file edits)
+
+**Data-analysis scaffold** (LLM-authored compute over fetched data — executor Pattern 9; see `references/data-analysis-pattern.md`):
+- `executor-analysis.ts.template` (the analyze action's executor — runs an LLM-authored JS snippet via the VM)
+- `analysis-vm.ts.template` (`shared/analysis-vm.ts` — the constrained `node:vm` runner; largely domain-agnostic)
+- `datasets.ts.template` (`shared/datasets.ts` — the single source of truth: `DATASETS` schema + `buildDatasets` + `buildDataSummary`, feeding the VM, the static prompt schema, and the live data block)
+- `verifier-data-loaded.ts.template` (the `dataLoaded` prereq — refuse analysis until some dataset is populated)
 
 **Per-tool test scaffold** (used by create-tool.md; built on the shared harness):
 - `tool-test-setup.ts.template`, `tool-sandbox-test.ts.template`, `tool-seed.json.template`

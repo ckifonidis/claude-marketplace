@@ -464,6 +464,8 @@ export async function getItemDetails(rawParams, state): Promise<ExecutorResult<S
 Rules:
 - Keep the identity/session prereq as the only prereq; let the executor own everything downstream of identity.
 - Reserve prereq verifiers for genuine gates, not sequencing hints. (See also the "unloaded vs. empty" prompt rule in `state-and-prompt-integration.md`.)
+
+The flip side of this negative rule is the positive one (principle #10): the prereqs you *do* keep are how the tool encodes **where the user is in their journey** — identity acquired, entity selected, flow open. That's their job; sequencing isn't.
 </pattern_7_self_sufficient_read>
 
 <pattern_8_reference_resolver>
@@ -492,6 +494,8 @@ For open-ended analysis over data already in state ("what's the trend", "which i
 - Drive the available data from a **single source of truth** feeding three consumers: (a) the datasets exposed to the evaluator, (b) the schema described statically in the prompt, and (c) a live, per-turn "data available now" summary so the model writes code against what actually exists this turn. One schema, three projections — they cannot drift.
 
 Security caveat: an in-process evaluator is **not** a security boundary — it constrains accidents, not adversaries, and carries the same trust posture as any "run model-authored code" feature. If the input can't be trusted, isolate execution properly (a real sandbox / separate process with no ambient capabilities) instead of relying on the in-process evaluator.
+
+**Build recipe + templates:** `references/data-analysis-pattern.md` is the end-to-end how — the five pieces, the four-stage data flow, the single-source-of-truth datasets module, the state-dependent prompt upgrade, and the security posture. Templates: `executor-analysis.ts.template`, `analysis-vm.ts.template` (the `node:vm` runner), `datasets.ts.template`, `verifier-data-loaded.ts.template`.
 </pattern_9_compute_analysis>
 
 <state_update_shape>
@@ -546,12 +550,12 @@ Keep result bodies focused: enough for the LLM to compose a correct spoken reply
 </voice_safe_results>
 
 <backend_client_helpers>
-The cards tool ships two transport helpers in `src/tools/cards/backend/client.ts` that most new tools can copy verbatim:
+`templates/backend-client.ts.template` ships two transport helpers that most new tools can adapt with minimal change:
 
-- `postBackend<T>(apiBaseUrl, endpoint, payload, { envelope })` — JSON POST with `{ header, payload }` envelope (or `{ payload }` only when `envelope: "payload-only"`). Adds `sandbox-id` header when set. Trace logging gated by `CARDS_BACKEND_TRACE` env var.
-- `getBackend<T>(apiBaseUrl, endpoint, extraHeaders)` — JSON GET helper for REST-style sandbox endpoints that take their parameters via headers (e.g. customer-insights `detailsByVat` expects `vatnumber` + `application-id` headers).
+- `postBackend<T>(apiBaseUrl, endpoint, payload, { envelope })` — JSON POST with `{ header, payload }` envelope (or `{ payload }` only when `envelope: "payload-only"`). Adds `sandbox-id` header when set. Trace logging gated by a `<TOOL>_BACKEND_TRACE` env var.
+- `getBackend<T>(apiBaseUrl, endpoint, extraHeaders)` — JSON GET helper for REST-style sandbox endpoints that take their parameters via headers (e.g. a `detailsByVat` endpoint expecting `vatnumber` + `application-id` headers).
 
 Both throw on non-2xx or non-JSON responses with the upstream status + truncated body in the message. Executors don't need to wrap them — let them throw; the runner catches and surfaces `ok: false`.
 
-When copying for a new tool, rename the trace env var to `<TOOL>_BACKEND_TRACE` so the CLI can suppress it without affecting the cards tool's logs.
+Set the trace env var to `<TOOL>_BACKEND_TRACE` (per-tool) so the CLI can suppress one tool's logs without affecting another's.
 </backend_client_helpers>

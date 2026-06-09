@@ -146,12 +146,12 @@ For each multi-turn flow, teach the LLM:
 A state slot has two "empty" meanings the model cannot distinguish: *not fetched yet* and *fetched and genuinely empty*. If the prompt lets the model answer "you have none" straight from a slot, it will sometimes report absence for data it simply hasn't loaded. Rule for the prompt: **before reporting absence, ensure the relevant read ran this conversation** — or rely on self-sufficient read actions (see `executor-patterns.md`) that load on demand. State slots are a cache, not proof of absence.
 
 ### 6. TOOL USE / Recovery from denials
-If your tool introduces new prereq denials (e.g. `account_not_verified`), add a one-line recovery hint mirroring how cards handles `customer_not_verified` / `card_not_verified`.
+If your tool introduces new prereq denials (e.g. `account_not_verified`), add a one-line recovery hint in the same style as the existing identity denials (`customer_not_verified` / `card_not_verified`): tell the model what to collect or do to clear the gate.
 
 Library-emitted errors the prompt should recognise: `pending_confirmation_locked`, `otp_pending_locked`, `match_pending_locked`, `no_flow_active`, `wrong_flow`, `otp_not_pending`, `match_not_pending`, `flow_already_active`, `confirmation_attempts_exhausted`, `match_attempts_exhausted`, `mutation_must_be_sole_step`, `mutation_must_be_last_in_batch`.
 
 ### 7. EXAMPLES section
-Add one or two worked batch examples for the new tool. The format the cards tool uses:
+Add one or two worked batch examples for the new tool. The format:
 
 ```
 - Read flow — list accounts and fetch one's balance:

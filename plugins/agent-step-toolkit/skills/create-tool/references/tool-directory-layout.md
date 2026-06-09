@@ -1,7 +1,7 @@
 # Reference: Tool Directory Layout
 
 <overview>
-Every tool follows the same directory shape, mirroring `src/tools/cards/`. Adopting this layout uniformly means: predictable file locations, one-import-per-action wire-up, and convention-name lookups by the runner.
+Every tool follows the same directory shape — the canonical layout below, materialized from the bundled `templates/`. Adopting it uniformly means: predictable file locations, one-import-per-action wire-up, and convention-name lookups by the runner. The bundled templates (not any pre-existing tool you may find in the project) are the structural source of truth.
 </overview>
 
 <canonical_layout>
@@ -62,7 +62,7 @@ src/tools/<name>/
 - See `executor-patterns.md` for read vs mutation shapes.
 
 ## tests/ (optional)
-- Per-tool integration tests: `src/tools/<name>/tests/*.test.ts`. The cards tool uses this directory for sandbox-backed end-to-end checks (`npm run test:sandbox`).
+- Per-tool integration tests: `src/tools/<name>/tests/*.test.ts` — sandbox-backed end-to-end checks (`npm run test:sandbox`). Scaffolded from the `templates/tool-*.template` test files.
 - Keep file names ending in `.test.ts` so `node --test dist/**/*.test.js` picks them up after `tsc`.
 - These are OPTIONAL — the agent-step library has its own runner tests under `src/agent-step/runner.test.ts` that you should never need to touch.
 
@@ -97,7 +97,7 @@ src/tools/<name>/
 
 ## backend/client.ts
 - Transport helper. Patterns:
-  - For HTTP JSON APIs: `postBackend<T>(baseUrl, endpoint, payload, opts?) => Promise<T>` (see `src/tools/cards/backend/client.ts` as a reference).
+  - For HTTP JSON APIs: `postBackend<T>(baseUrl, endpoint, payload, opts?) => Promise<T>` (see `templates/backend-client.ts.template`).
   - For SOAP / gRPC / other: write the equivalent client and keep it stateless.
 - Centralize envelope building (headers, auth, sandbox id) here so executors stay focused on domain logic.
 
@@ -141,20 +141,25 @@ import type { AgentState } from "../../../../state.js";
 import type { ExecutorResult } from "../../../../agent-step/index.js";
 ```
 
-Four `../`s back to `src/state.ts` and `src/agent-step/index.js` from inside `actions/<x>/`. Three from inside `verifiers/` and `backend/`. Use the existing cards files for ground-truth examples.
+Four `../`s back to `src/state.ts` and `src/agent-step/index.js` from inside `actions/<x>/`. Three from inside `verifiers/` and `backend/`. The bundled `templates/` show the exact import paths.
 </imports_convention>
 
-<grep_for_examples>
-For a fully-worked example tool, read these files in this order:
+<templates_are_the_source_of_truth>
+For a worked example of each file, read the bundled templates in this order:
 
-1. `src/tools/cards/config.ts`                    — every config field shown
-2. `src/tools/cards/index.ts`                     — the wire-up
-3. `src/tools/cards/verifiers/customer-verified.ts` — verifier record shape
-4. `src/tools/cards/actions/verify_customer/executor.ts` — read executor
-5. `src/tools/cards/actions/change_status/executor.ts` — mutation executor with internal pre-check + post-read
-6. `src/tools/cards/backend/env.ts`               — env loader pattern
-7. `src/tools/cards/backend/client.ts`            — HTTP helper
-8. `src/tools/cards/shared/resolve-card.ts`       — cross-action helper
+1. `templates/config.ts.template`             — every config field shown (incl. commented `invalidatesOnChange`)
+2. `templates/tool-index.ts.template`         — the wire-up
+3. `templates/verifier.ts.template`           — verifier record shape
+4. `templates/state-selector.ts.template`     — per-action `getSlice` + `Slice`
+5. `templates/executor-read.ts.template`      — read executor
+6. `templates/executor-mutation.ts.template`  — mutation executor with internal pre-check + post-read
+7. `templates/executor-read-paginated.ts.template` — large/list read via the `pageable` opt
+8. `templates/backend-env.ts.template`        — env loader pattern
+9. `templates/backend-client.ts.template`     — HTTP helper
 
-Treat these as the source of truth. Anything you write should look structurally identical.
-</grep_for_examples>
+Treat **these templates** as the structural source of truth — your output should be structurally
+identical to the templates and the canonical layout above. If the project already contains another
+tool, or you are porting from a source project, do NOT treat that code as the model to copy: it is
+domain input (principle #9), and may encode decisions that don't belong in this paradigm. Derive
+structure from the templates every time.
+</templates_are_the_source_of_truth>

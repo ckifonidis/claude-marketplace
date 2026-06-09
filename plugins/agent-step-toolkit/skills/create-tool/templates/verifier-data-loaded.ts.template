@@ -1,0 +1,24 @@
+// FILE: src/tools/{{TOOL_NAME}}/verifiers/data-loaded.ts
+//
+// Prereq for the analyze action: at least one analyzable dataset has been fetched
+// this session. Without it the analyze action would run a snippet over empty
+// arrays and "helpfully" return 0 — so gate on presence and let the model fetch
+// first. List the SAME slots that DatasetSource (state.ts) exposes to analysis.
+
+import type { AgentState } from "../../../state.js";
+import type { Verifier } from "../../../agent-step/index.js";
+
+type State = typeof AgentState.State;
+
+export const dataLoaded: Verifier<State> = {
+  check: (s) =>
+    // {{DATASET_SLOTS}} — one presence check per analyzable slot, OR-joined:
+    //   Object.keys(s?.transactions ?? {}).length > 0 ||
+    //   Object.keys(s?.accounts ?? {}).length > 0,
+    false,
+  denial: {
+    summary:
+      "No data loaded yet — fetch the relevant records before analysing.",
+    error: "no_data_loaded",
+  },
+};

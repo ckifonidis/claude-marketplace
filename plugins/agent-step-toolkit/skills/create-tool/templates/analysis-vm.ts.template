@@ -1,0 +1,85 @@
+// FILE: src/tools/{{TOOL_NAME}}/shared/analysis-vm.ts
+//
+// Deterministic-host / LLM-authored analysis runner — the executor side of the
+// "the agent writes the computation, the host runs it" pattern (executor
+// Pattern 9; see references/data-analysis-pattern.md for the whole recipe).
+//
+// The react-agent LLM (already in the loop) writes a short JS snippet as the
+// analyze action's `code` param; we run it in a constrained `node:vm` context
+// with the datasets injected and a `result` slot to assign. No second LLM call.
+//
+// SECURITY NOTE: `node:vm` is NOT a hardened sandbox — determined code can reach
+// the outer realm. This constrains accidents, not adversaries, and carries the
+// same trust posture as any "run model-authored code" feature. It is acceptable
+// ONLY when the code author is your own trusted model in a controlled
+// deployment. We inject NO Node host objects (no require/process/Buffer), rely
+// on the context's own intrinsics (Math/JSON/Date/Array/Object), and cap wall
+// time. For true isolation, swap this module for `isolated-vm` (separate realm,
+// no ambient capabilities).
+
+import vm from "node:vm";
+import type { DatasetSource } from "../../../state.js";
+import { buildDatasets } from "./datasets.js";
+
+export interface AnalysisOutcome {
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+  /** Row count per dataset — handed back so a failing snippet can see what it
+   *  actually had to work with (e.g. "0 rows" explains an empty answer). */
+  datasetSizes: Record<string, number>;
+}
+
+const TIMEOUT_MS = 1000;
+
+export function runAnalysis(state: DatasetSource, code: string): AnalysisOutcome {
+  const datasets = buildDatasets(state);
+  const datasetSizes = Object.fromEntries(
+    Object.entries(datasets).map(([k, v]) => [k, v.length]),
+  );
+
+  // Only data + a `result` slot + a muted console are injected. The context's
+  // own intrinsics (Math, JSON, Date, Array, Object, parseInt, …) are used. The
+  // injected keys are the SAME identifiers the prompt schema documents and the
+  // model writes against — keep this list and DATASETS in datasets.ts in lockstep.
+  // Spreading `datasets` injects each one under its own key (`transactions`,
+  // `accounts`, …) — the same names DATASETS documents and the snippet reads.
+  // Prefer the explicit form below if you want the injected surface pinned in
+  // one place rather than driven by buildDatasets' return shape:
+  //   transactions: datasets.transactions,
+  //   accounts: datasets.accounts,
+  const sandbox: Record<string, unknown> = {
+    ...datasets,
+    result: undefined,
+    console: { log: () => {}, error: () => {}, warn: () => {} },
+  };
+
+  const context = vm.createContext(sandbox);
+  try {
+    vm.runInContext(code, context, { timeout: TIMEOUT_MS, displayErrors: true });
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+      datasetSizes,
+    };
+  }
+
+  const result = (sandbox as { result?: unknown }).result;
+  if (result === undefined) {
+    return {
+      ok: false,
+      error: "code did not assign a value to `result`",
+      datasetSizes,
+    };
+  }
+
+  // Guard against returning something un-serializable to the LLM.
+  let safeResult: unknown = result;
+  try {
+    JSON.stringify(result);
+  } catch {
+    safeResult = String(result);
+  }
+  return { ok: true, result: safeResult, datasetSizes };
+}
