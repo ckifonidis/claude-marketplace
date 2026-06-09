@@ -1,6 +1,6 @@
 // FILE: src/tools/{{TOOL_NAME}}/backend/client.ts
 //
-// Transport helper. For HTTP+JSON backends this matches the cards pattern.
+// Transport helper. This is the canonical HTTP+JSON pattern.
 // Adapt freely for other protocols (SOAP, gRPC, etc.); the contract is that
 // executors call postBackend (or whatever this exports) and don't worry about
 // envelopes, headers, sandbox-id, or auth.

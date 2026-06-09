@@ -11,6 +11,7 @@ Read these reference files NOW, in this order:
 Also read when applicable:
 - `references/identity-patterns.md` — if the tool is pre-authenticated / doesn't collect identity.
 - `references/read-tool-patterns.md` — if the tool is search / browse / history / analytics-heavy.
+- `references/data-analysis-pattern.md` — if the tool must answer open-ended aggregate questions (totals / group-by / top-N) over fetched data via an LLM-authored snippet (executor Pattern 9).
 </required_reading>
 
 <process>
@@ -36,6 +37,7 @@ For each action, capture:
 - **prereqs** — list of named state predicates the runner checks before invoking
 - **mutation?** — if yes: pick `soleStep` (strict alone) or `soleOnExecute` (propose may ride; execute alone); plus `requiresConfirmation` opts (`maxAttempts` default 3; `lockdown` default true — `ttlMs` exists but is currently inert, don't set it) if confirm-required
 - **lifecycle opts?** — if the action is part of a multi-turn flow: `startsFlow` / `endsFlow` / `requiresFlow`; OTP: `issuesOtp` / `requiresOtp`; double-entry: `startsMatchFor` / `requiresMatch`
+- **invalidatesOnChange?** — if the action writes an upstream slot that downstream journey state depends on (e.g. re-identifying a customer should drop the previously-selected card), declare which downstream slots to clear when that slot's value changes. The runner clears them automatically — don't re-clear in an executor. See `agent-step-api.md` `<invalidates_on_change>`.
 - **backend endpoints touched** — for the executor's implementation
 
 Then derive:
@@ -68,6 +70,9 @@ Produce a single short markdown plan with these sections (concrete values, not p
 ## Mutations
 - transfer_funds: soleOnExecute=true, requiresConfirmation={maxAttempts:3}
 
+## Downstream invalidation (invalidatesOnChange — only if any)
+- verify_customer: { verifiedCustomer: ["verifiedAccounts", "activeAccountNumber"] }  # re-identifying clears the prior account selection
+
 ## Multi-turn flows (if any)
 - transfer_otp_flow: opened by request_transfer (startsFlow + issuesOtp→confirm_otp), closed by commit_transfer (endsFlow)
 
@@ -96,7 +101,15 @@ Use the `templates/` files as starting points. Fill in concrete values from the 
 3. `src/tools/<name>/shared/` — any shared helpers (e.g. resolve-entity); create only if multiple actions need them. (Pagination needs no shared helper — it's a library opt; see step 6.)
 4. `src/tools/<name>/verifiers/<prereq>.ts` — one file per unique prereq (see `templates/verifier.ts.template`)
 5. `src/tools/<name>/actions/<action>/stateSelector.ts` — one per action; exports `getSlice` + `Slice` (see `templates/state-selector.ts.template`). Narrow to the slots the action reads.
-6. `src/tools/<name>/actions/<action>/executor.ts` — one per action; imports its `Slice` from `./stateSelector.js`. Pick by shape: `templates/executor-read.ts.template` (fixed-size read), `templates/executor-read-paginated.ts.template` (large/list read — declare `pageable` on the action with a `z.object` params schema; the runner injects `page`/`pageSize`, slices, and caches in the library `pagedRead` slot — no per-tool state slot or cache helper needed), or `templates/executor-mutation.ts.template` (mutation).
+6. `src/tools/<name>/actions/<action>/executor.ts` — one per action; imports its `Slice` from `./stateSelector.js`. Pick by shape: `templates/executor-read.ts.template` (fixed-size read), `templates/executor-read-paginated.ts.template` (large/list read — declare `pageable` on the action with a `z.object` params schema; the runner injects `page`/`pageSize`, slices, and caches in the library `pagedRead` slot — no per-tool state slot or cache helper needed), `templates/executor-mutation.ts.template` (mutation), or `templates/executor-analysis.ts.template` (LLM-authored compute over fetched data — see step 6b).
+
+6b. **Analyze action (only if the tool answers open-ended aggregate questions over fetched data).** Follow `references/data-analysis-pattern.md` and add, alongside the read/mutation actions:
+   - `src/tools/<name>/shared/datasets.ts` ← `templates/datasets.ts.template` — the single source of truth (`DATASETS` schema + `buildDatasets` + `buildDataSummary`). Its dataset keys are the variable names the snippet sees and the prompt documents.
+   - `src/tools/<name>/shared/analysis-vm.ts` ← `templates/analysis-vm.ts.template` — the `node:vm` runner (mostly verbatim; wire its `DatasetSource` import + injection list to your datasets). **Read the security note** — `node:vm` is not a hardened sandbox; ship it only for a trusted-author surface.
+   - `src/tools/<name>/verifiers/data-loaded.ts` ← `templates/verifier-data-loaded.ts.template` — the `dataLoaded` prereq (OR-join a presence check per analyzable slot).
+   - The analyze action's `stateSelector.ts` returns the `DatasetSource` slice (the cache slots only — no session/identity context).
+   - In `src/state.ts`, export a `DatasetSource = Pick<State, ...>` over the analyzable slots (the slice both the selector and `buildDatasets` consume).
+   - **Prompt upgrade (required):** make `src/prompt.ts` state-dependent — inject a static `# DATA SCHEMA` (from `DATASETS`) and a live `# AVAILABLE DATA` block (from `buildDataSummary(state)`). The bootstrap prompt is static; see the `<prompt_wiring>` section of the reference for the exact edit.
 7. `src/tools/<name>/config.ts` — pure data; `export type ActionName` (see `templates/config.ts.template`)
 8. `src/tools/<name>/index.ts` — wire-up: `selectors` (`satisfies SelectorRegistry<State, ActionName>`) + `executors` (`ExecutorRegistry<State, typeof selectors>`), both keyed by action name (see `templates/tool-index.ts.template`)
 

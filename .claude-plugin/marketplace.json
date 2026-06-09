@@ -11,8 +11,8 @@
     {
       "name": "agent-step-toolkit",
       "source": "./plugins/agent-step-toolkit",
-      "description": "Build agent-step LangGraph projects and tools: bootstrap a new project (runner library + streaming CLI + scaffold), add domain tools (actions / executors / verifiers / controller hooks + invalidatesOnChange), including read-tool patterns (native paginated reads via `pageable`), version the embedded runner library (/bump-version + /pull-library), and lay down the three-layer test methodology.",
-      "version": "0.5.0",
+      "description": "Build agent-step LangGraph projects and tools: bootstrap a new project (runner library + streaming CLI + scaffold), add domain tools (actions / executors / verifiers / controller hooks + invalidatesOnChange), port an existing project onto agent-step, including read-tool patterns (native paginated reads via `pageable`, LLM-authored data analysis over fetched data), version the embedded runner library (/bump-version + /pull-library), and lay down the three-layer test methodology.",
+      "version": "0.6.0",
       "author": {
         "name": "Charalampos Kyfonidis"
       },

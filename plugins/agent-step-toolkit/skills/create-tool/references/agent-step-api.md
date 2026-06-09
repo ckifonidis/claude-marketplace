@@ -129,6 +129,8 @@ interface Verifier<T> {
 
 Self-contained: the predicate AND the denial body live together in one file. The denial body is what appears in the result envelope when the prereq fails.
 
+The `check` predicate is a snapshot of **journey progress** — "is the user identified?", "is an entity selected?" — not a record of step ordering. Gate on *where the user is*, never on *what ran first*. The companion mechanism for keeping that progress coherent when an upstream slot changes is `invalidatesOnChange` (see `<invalidates_on_change>` below).
+
 ## ExecutorResult
 
 ```ts

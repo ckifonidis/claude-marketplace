@@ -55,4 +55,6 @@ Separate **retrieval** (fetch / select / paginate / window) from **analysis** (f
 - Analysis actions own *answering questions over rows already in state*.
 
 Don't bloat a retrieval action's params with filters or aggregations an analysis action already covers — duplicated surface confuses the model about which action to call. When an analysis action exists, the retrieval action should fetch broadly and let analysis narrow.
+
+For open-ended aggregation (totals / group-by / top-N / filtered sums) the analysis action is best built as an **LLM-authored snippet run in a host VM** rather than a fixed set of aggregation params. The full build recipe — datasets-as-single-source-of-truth, the `node:vm` runner, the `dataLoaded` prereq, and the prompt schema/data-block wiring — is in `data-analysis-pattern.md` (templates: `executor-analysis.ts.template`, `analysis-vm.ts.template`, `datasets.ts.template`, `verifier-data-loaded.ts.template`).
 </retrieve_vs_analyze>

@@ -1,0 +1,52 @@
+// FILE: src/tools/{{TOOL_NAME}}/actions/{{ANALYZE_ACTION_NAME}}/executor.ts
+//
+// Analysis executor (executor Pattern 9). Runs an LLM-authored JS snippet against
+// the data ALREADY fetched this session — read-only, no backend call. The snippet
+// reads the injected datasets and assigns its answer to `result`; the host runs it
+// in a constrained VM (shared/analysis-vm.ts) and returns the computed value.
+//
+// Pair this action with the `dataLoaded` prereq (verifier-data-loaded.ts.template)
+// so it refuses when nothing has been fetched yet, and a stateSelector that returns
+// the DatasetSource slice (every cached collection the snippet can aggregate over).
+
+import { runAnalysis } from "../../shared/analysis-vm.js";
+import type { State } from "../../../../state.js";
+import type { ExecutorResult } from "../../../../agent-step/index.js";
+import type { Slice } from "./stateSelector.js";
+
+interface Params {
+  code: string;
+}
+
+export async function {{ANALYZE_EXECUTOR_FN}}(
+  rawParams: unknown,
+  state: Slice,
+): Promise<ExecutorResult<State>> {
+  const p = rawParams as Params;
+  const outcome = runAnalysis(state, p.code);
+
+  if (!outcome.ok) {
+    // Failure is a NORMAL result, not a throw — hand the model the error + the
+    // row counts so it can read what went wrong and retry with corrected code.
+    return {
+      resultBody: {
+        summary: `Analysis could not be computed: ${outcome.error}.`,
+        error: "analysis_error",
+        verdict: "analysis_error",
+        detail: outcome.error,
+        datasetSizes: outcome.datasetSizes,
+      },
+      ok: false,
+    };
+  }
+
+  return {
+    resultBody: {
+      summary: "Analysis computed over the fetched data.",
+      result: outcome.result,
+      datasetSizes: outcome.datasetSizes,
+    },
+    ok: true,
+  };
+  // Read-only: no stateUpdate — analysis never writes back.
+}

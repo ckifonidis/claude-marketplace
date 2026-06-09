@@ -11,6 +11,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.6.0] — 2026-06-09
+
+### Added
+- **Port mode in `create-tool`.** New 4th intake option and `workflows/port-project.md`: re-platform
+  an existing (non-agent-step) project onto agent-step by reading the source as a *domain spec only*
+  (capabilities, endpoints, identity model, business rules), then deriving each tool fresh via
+  `create-tool.md`. Wired into `SKILL.md` intake / routing / workflows index.
+- **Data-analysis pattern in `create-tool`.** New `references/data-analysis-pattern.md` (the build
+  recipe for executor Pattern 9 — LLM-authored compute over fetched data) plus four templates:
+  `executor-analysis.ts.template`, `analysis-vm.ts.template` (the constrained `node:vm` runner),
+  `datasets.ts.template` (single-source-of-truth `DATASETS` schema feeding the VM, the static prompt
+  schema, and the live data block), and `verifier-data-loaded.ts.template`. Wired into `SKILL.md`
+  (reference + templates index), the `create-tool.md` workflow (new Step 6b + the required prompt
+  upgrade), and cross-linked from `executor-patterns.md` Pattern 9 and `read-tool-patterns.md`
+  `<retrieve_vs_analyze>`. Uses only existing runner primitives — no library change.
+
+### Changed
+- **Two essential principles made explicit in `create-tool/SKILL.md`:**
+  - *#9 — Paradigm, not blueprint.* The bundled `templates/` + references are the only structural
+    source of truth; a referenced/source project is domain input (the *what*), never architecture to
+    copy (the *how*).
+  - *#10 — Prereqs express journey progress; `invalidatesOnChange` keeps it coherent.* Prereqs encode
+    where the user is in their journey (identity acquired → entity selected → flow open); the
+    `invalidatesOnChange` library opt is now surfaced at planning time (SKILL quick reference + the
+    create-tool workflow's Step 2 derivation and Step 3 plan template) instead of only in the deep
+    API reference.
+- **Phantom `src/tools/cards/` references repointed to the bundled templates.** The reference docs
+  pointed agents at a non-existent `cards` reference tool as the "source of truth"; they now point at
+  `templates/*.template` and explicitly warn against copying a pre-existing or ported tool's code.
+  Touches `tool-directory-layout.md`, `executor-patterns.md`, `state-and-prompt-integration.md`,
+  `input-formats.md`, `agent-step-api.md`, and `templates/backend-client.ts.template`.
+
+### Notes
+- Docs/skill-only release — no agent-step runner library change (still **1.1.0**); no `/pull-library`
+  needed.
+
 ## [0.5.0] — 2026-06-08
 
 ### Changed
