@@ -77,6 +77,8 @@ Ships two skills:
 
 ```
 .claude-plugin/marketplace.json     # marketplace manifest (lists plugins)
+.claude/skills/
+└── publish-release/                 # repo-maintainer skill (not shipped): cut a plugin release — staleness sweep, version sync, changelog, release commit
 plugins/
 ├── agent-step-toolkit/
 │   ├── .claude-plugin/plugin.json   # plugin manifest
