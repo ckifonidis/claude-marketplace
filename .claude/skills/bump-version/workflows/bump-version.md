@@ -1,12 +1,12 @@
 # Workflow: bump-version
 
 Refresh the toolkit's embedded agent-step library from a newer source and propagate the change.
-Five phases with a hard approval gate after Phase 3. All toolkit paths below are relative to the
-plugin root (`plugins/agent-step-toolkit/`); resolve it from this skill's location (the plugin root
-is two levels up from `skills/bump-version/`).
+Five phases with a hard approval gate after Phase 3. This is a repo-maintainer skill living at
+`.claude/skills/bump-version/`; all toolkit paths below are relative to the plugin root,
+`plugins/agent-step-toolkit/` at the repo root.
 
-Read first: `references/tracked-assets.md` (the blast-radius map) and `../../migrations/README.md`
-(the migration file format).
+Read first: `references/tracked-assets.md` (this skill's blast-radius map) and the plugin's
+`migrations/README.md` (the migration file format).
 
 ---
 
@@ -28,7 +28,7 @@ Turn the user's reference into a local, read-only snapshot of the new `src/agent
 
 Then:
 - Confirm the core files exist: `types.ts`, `state.ts`, `runner.ts`, `runner.test.ts`,
-  `define-config.ts`, `index.ts`. (A `VERSION` in the source is informational — this skill assigns
+  `paginate.ts`, `paginate.test.ts`, `define-config.ts`, `index.ts`. (A `VERSION` in the source is informational — this skill assigns
   the toolkit's library version, it doesn't inherit the source project's.)
 - Capture the source project's `package.json` (for the dependency comparison in Phase 2/4).
 - Note the staged path; everything below diffs against `skills/create-tool/templates/agent-step/`.
@@ -89,7 +89,7 @@ In dependency order:
 
 1. **Verbatim replace** every Tier-1 file from the staged source:
    ```
-   cp "$staged"/{types,state,runner,runner.test,define-config,index}.ts skills/create-tool/templates/agent-step/
+   cp "$staged"/{types,state,runner,runner.test,paginate,paginate.test,define-config,index}.ts skills/create-tool/templates/agent-step/
    ```
    Mirror any added/removed library files into the bootstrap copy list
    (`workflows/bootstrap-project.md` Step 5 + file-list) and `create-tool/SKILL.md` `templates_index`.
@@ -108,7 +108,7 @@ In dependency order:
 5. **Prepend the CHANGELOG entry** to `CHANGELOG.md` (newest first): version, date, Added / Changed /
    Breaking sections, and a link to the migration file.
 
-6. **Write `migrations/<from>-to-<to>.md`** per `../../migrations/README.md` — prose + a
+6. **Write `migrations/<from>-to-<to>.md`** (plugin root) per the plugin's `migrations/README.md` — prose + a
    `<transforms>` section of ordered, specific, idempotent edit rules `/pull-library` applies to a
    consumer's tools, each with a `check`. (Additive-only: library replacement only; say so.)
 
@@ -119,7 +119,7 @@ In dependency order:
 The templates aren't a standalone TS project, so prove the bump by bootstrapping one:
 
 1. Bootstrap a throwaway project from the updated `create-tool` templates into a temp dir (follow
-   `../create-tool/workflows/bootstrap-project.md`, or copy the project + agent-step templates and
+   `skills/create-tool/workflows/bootstrap-project.md`, or copy the project + agent-step templates and
    substitute placeholders).
 2. Run:
    ```

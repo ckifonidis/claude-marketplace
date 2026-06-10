@@ -23,7 +23,7 @@ Install:
 /plugin install agent-step-toolkit@ckifonidis-marketplace
 ```
 
-Ships four skills:
+Ships three skills:
 
 - **`create-tool`** — bootstrap a new agent-step project (package.json, tsconfig,
   langgraph config, the agent-step runner **library**, graph/agent/state/prompt
@@ -39,12 +39,11 @@ Ships four skills:
   action: runner unit tests (flow-controller mechanics, no backend/LLM), sandbox/tool
   tests (runner + executors against a local sandbox, no LLM), and prompt-input tests
   (the LLM emits the right steps, no execution).
-- **`bump-version`** — maintainer side of library versioning: absorb a newer runner
-  into the embedded copy, propagate the contract change across templates/references,
-  append a `CHANGELOG.md` entry, and write a migration guide under `migrations/`.
-- **`pull-library`** — consumer side: run inside a downstream project to upgrade its
-  vendored `src/agent-step/` to the toolkit's version and apply the migration
-  transforms to the project's own tools.
+- **`pull-library`** — consumer side of library versioning: run inside a downstream
+  project to upgrade its vendored `src/agent-step/` to the toolkit's version and apply
+  the migration transforms to the project's own tools. (The maintainer side,
+  `bump-version`, lives in this repo at `.claude/skills/` — it edits the plugin's
+  source tree, so it isn't shipped.)
 
 The embedded runner library (`skills/create-tool/templates/agent-step/`) is the
 **canonical, versioned source** — its `VERSION` marker travels into every
@@ -77,8 +76,9 @@ Ships two skills:
 
 ```
 .claude-plugin/marketplace.json     # marketplace manifest (lists plugins)
-.claude/skills/
-└── publish-release/                 # repo-maintainer skill (not shipped): cut a plugin release — staleness sweep, version sync, changelog, release commit
+.claude/skills/                      # repo-maintainer skills (not shipped)
+├── bump-version/                    # absorb a newer agent-step runner into the toolkit's embedded library
+└── publish-release/                 # cut a plugin release — staleness sweep, version sync, changelog, release commit
 plugins/
 ├── agent-step-toolkit/
 │   ├── .claude-plugin/plugin.json   # plugin manifest
@@ -88,7 +88,6 @@ plugins/
 │   └── skills/
 │       ├── create-tool/             # bootstrap / add-tool / extend / port + workflows + references + templates (incl. the canonical agent-step library)
 │       ├── test-agent-step/         # three-layer testing methodology
-│       ├── bump-version/            # absorb a newer runner into the toolkit (maintainer side)
 │       └── pull-library/            # upgrade a downstream project's vendored library (consumer side)
 └── langgraph-plugin/
     ├── .claude-plugin/plugin.json   # plugin manifest

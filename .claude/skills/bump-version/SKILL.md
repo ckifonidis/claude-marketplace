@@ -4,7 +4,12 @@ description: Refresh the toolkit's embedded agent-step runner library from a new
 ---
 
 <objective>
-This skill is the **maintainer side** of agent-step library versioning. The toolkit ships a vendored
+This skill is the **maintainer side** of agent-step library versioning. It lives at the repo level
+(`.claude/skills/bump-version/`), NOT in the published plugin — it edits the plugin's source tree,
+which only exists in this repo checkout. Plugin-relative paths throughout this skill resolve against
+the plugin root, `plugins/agent-step-toolkit/`.
+
+The toolkit ships a vendored
 copy of the runner library at `skills/create-tool/templates/agent-step/` plus a layer of dependent
 assets that encode its contract. When a newer runner exists somewhere, this skill absorbs it: refresh
 the copy, propagate the contract change across every dependent asset, version it, and record how
@@ -89,8 +94,8 @@ before approval.
 
 <reference_index>
 - **references/tracked-assets.md** — the inventory of plugin assets that mirror the library contract, by tier, with "what touches it." The blast-radius map for Phase 2 and the edit list for Phase 4.
-- **../../migrations/README.md** — the migration file format (prose + `<transforms>`) this skill writes.
-- **../create-tool/references/agent-step-api.md** — the current written contract; the highest-fidelity Tier-4 asset to reconcile.
+- **plugins/agent-step-toolkit/migrations/README.md** — the migration file format (prose + `<transforms>`) this skill writes.
+- **plugins/agent-step-toolkit/skills/create-tool/references/agent-step-api.md** — the current written contract; the highest-fidelity Tier-4 asset to reconcile.
 </reference_index>
 
 <workflows_index>

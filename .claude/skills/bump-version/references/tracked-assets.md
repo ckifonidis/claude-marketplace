@@ -99,8 +99,8 @@ projected slice"), layout changes, template inventory changes.
 <not_tracked>
 ## Not tracked (do NOT touch on a library bump)
 - `.claude-plugin/plugin.json` `version` — the plugin package version is independent of the library version.
-- The new skills themselves (`skills/bump-version/`, `skills/pull-library/`) — they describe the
-  process, not the library contract.
+- The versioning skills themselves (this skill, at the repo-level `.claude/skills/bump-version/`,
+  and the plugin's `skills/pull-library/`) — they describe the process, not the library contract.
 - `CHANGELOG.md` / `migrations/` — these are *outputs* of the bump, written in Phase 4, not mirrors
   to reconcile.
 </not_tracked>

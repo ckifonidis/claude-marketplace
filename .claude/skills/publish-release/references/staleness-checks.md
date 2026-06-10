@@ -20,7 +20,7 @@ each inventory against the actual directory listing, both directions:
 
 1. **Every `SKILL.md` in the plugin** — `templates_index`, `reference_index`, `workflows_index`
    sections vs the real contents of `templates/`, `references/`, `workflows/`.
-2. **agent-step-toolkit only:** `skills/bump-version/references/tracked-assets.md` — every tier's
+2. **agent-step-toolkit only:** `.claude/skills/bump-version/references/tracked-assets.md` (repo-level maintainer skill) — every tier's
    file list vs the real tree (Tier 1 vs `templates/agent-step/*`, Tier 2 vs
    `templates/*.template`, Tier 3 vs `templates/project/*`, Tier 4 vs `references/*.md`,
    Tier 5 vs `workflows/*.md`). This file declares itself "the single place that knows what mirrors

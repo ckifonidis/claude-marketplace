@@ -11,6 +11,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.7.0] — 2026-06-10
+
+Removed-skill release, inert for consumers: the maintainer-side `bump-version` skill moved out of
+the published plugin into the marketplace repo (`.claude/skills/bump-version/`). It edits the
+plugin's **source tree**, which only exists in the repo checkout — from an installed plugin cache it
+never could function, and the cached copy lags the repo (observed running as its 0.5.0 snapshot
+against a 0.6.x repo). Consumers keep `/pull-library`; nothing usable was removed. By the semver
+rule a removed skill is major; with the plugin still pre-1.0 the breaking slot is the minor →
+**0.7.0**. Ships agent-step library **1.1.1** (unchanged since 0.6.1); no `/pull-library` needed.
+
+### Removed
+- **`skills/bump-version/`** — relocated to the repo-level `.claude/skills/bump-version/` together
+  with its `tracked-assets.md` blast-radius reference (its plugin-relative paths rewritten, and its
+  Tier-1 file list / copy command corrected to include `paginate.ts` + `paginate.test.ts`). The
+  marketplace description no longer advertises `/bump-version`.
+
+### Fixed
+- **`create-tool/workflows/create-tool.md`:** library unit-test count corrected 53 → 65
+  (runner + paginate).
+- **`pull-library/SKILL.md`:** the `/bump-version` complement is now described as a maintainer
+  skill in the marketplace repo (not "in the toolkit").
+
 ## [0.6.1] — 2026-06-09
 
 Ships agent-step runner library **1.1.1** (doc-comment corrections only — no behavior change).

@@ -9,8 +9,8 @@ project that vendored `src/agent-step/` from the toolkit. After the user updates
 `agent-step-toolkit` plugin (getting a newer embedded library), this skill pulls that library into
 the project and adapts the project's own tools so they keep compiling against the new contract.
 
-The complement is `/bump-version`, which runs in the toolkit to produce the newer library, the
-`VERSION`, the CHANGELOG, and the migration guides this skill consumes.
+The complement is `/bump-version`, a maintainer skill in the marketplace repo that produces the
+newer library, the `VERSION`, the CHANGELOG, and the migration guides this skill consumes.
 
 Scope (per project decision): **copy + attempt tool adaptation**. The library replacement and
 VERSION bump are mechanical and always done. The tool adaptation applies each migration's
