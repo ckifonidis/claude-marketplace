@@ -23,22 +23,33 @@ Install:
 /plugin install agent-step-toolkit@ckifonidis-marketplace
 ```
 
-Ships two skills:
+Ships four skills:
 
 - **`create-tool`** — bootstrap a new agent-step project (package.json, tsconfig,
   langgraph config, the agent-step runner **library**, graph/agent/state/prompt
-  skeleton, streaming CLI, Dockerfile, build script) **or** add a domain tool to an
+  skeleton, streaming CLI, Dockerfile, build script), add a domain tool to an
   existing one (actions, executors, verifiers, `controller` lifecycle hooks,
-  `invalidatesOnChange` cascades, state slots, prompt sections). The runner library
-  and the config/scaffold templates travel with the skill under
-  `skills/create-tool/templates/`.
+  `invalidatesOnChange` cascades, state slots, prompt sections), **or port an
+  existing project** onto agent-step (reading the source as a domain spec only).
+  Covers read-tool patterns (native paginated reads via `pageable`) and the
+  data-analysis pattern (an analyze action running LLM-authored snippets over
+  fetched data). The runner library and the config/scaffold templates travel with
+  the skill under `skills/create-tool/templates/`.
 - **`test-agent-step`** — the three-layer testing methodology for an agent-step
   action: runner unit tests (flow-controller mechanics, no backend/LLM), sandbox/tool
   tests (runner + executors against a local sandbox, no LLM), and prompt-input tests
   (the LLM emits the right steps, no execution).
+- **`bump-version`** — maintainer side of library versioning: absorb a newer runner
+  into the embedded copy, propagate the contract change across templates/references,
+  append a `CHANGELOG.md` entry, and write a migration guide under `migrations/`.
+- **`pull-library`** — consumer side: run inside a downstream project to upgrade its
+  vendored `src/agent-step/` to the toolkit's version and apply the migration
+  transforms to the project's own tools.
 
-The bundled runner library is a **versioned snapshot**. The canonical source lives in
-the agent projects; when it changes, bump `agent-step-toolkit`'s version and re-sync.
+The embedded runner library (`skills/create-tool/templates/agent-step/`) is the
+**canonical, versioned source** — its `VERSION` marker travels into every
+bootstrapped project at `src/agent-step/VERSION`. `CHANGELOG.md` tracks the library;
+`PLUGIN_CHANGELOG.md` tracks the plugin package itself.
 
 ### langgraph-plugin
 
@@ -69,9 +80,14 @@ Ships two skills:
 plugins/
 ├── agent-step-toolkit/
 │   ├── .claude-plugin/plugin.json   # plugin manifest
+│   ├── CHANGELOG.md                 # agent-step runner library version history
+│   ├── PLUGIN_CHANGELOG.md          # plugin package version history
+│   ├── migrations/                  # per-version migration guides (written by bump-version, applied by pull-library)
 │   └── skills/
-│       ├── create-tool/             # full skill + workflows + references + templates (incl. agent-step library)
-│       └── test-agent-step/         # single-file skill
+│       ├── create-tool/             # bootstrap / add-tool / extend / port + workflows + references + templates (incl. the canonical agent-step library)
+│       ├── test-agent-step/         # three-layer testing methodology
+│       ├── bump-version/            # absorb a newer runner into the toolkit (maintainer side)
+│       └── pull-library/            # upgrade a downstream project's vendored library (consumer side)
 └── langgraph-plugin/
     ├── .claude-plugin/plugin.json   # plugin manifest
     └── skills/
