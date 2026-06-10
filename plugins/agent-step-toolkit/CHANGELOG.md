@@ -12,6 +12,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [1.1.1] — 2026-06-09
+
+Internal: doc-comment corrections only — no behavior, signature, or export change. Surfaced by a
+contract audit comparing the library's documented guarantees against live runtime behavior across
+several consumers. Migration: [migrations/1.1.0-to-1.1.1.md](migrations/1.1.0-to-1.1.1.md) (no
+consumer transforms — the refreshed doc-comments are the whole upgrade).
+
+### Fixed
+- `runner.ts` header referenced a non-existent `cancel_pending_confirmation` action — corrected to
+  the actual reserved action `abort_pending_input`.
+- `ConfirmationOpts.ttlMs` is now documented as **INERT** (accepted for forward-compat, never read;
+  the runner times nothing out) in `types.ts`, and the `CONFIRMATION_DEFAULTS.ttlMs` value is marked
+  unused in `runner.ts` — aligning the type doc-comment with the runner and the `agent-step-api.md`
+  reference, which already flagged it inert.
+
+### Changed (documentation)
+- `ExecutorResult.ok` is now documented as a **batch-continuation control flag, not a
+  success/verdict signal** — `ok: true` for a "negative" outcome (verdict in `resultBody`) is valid
+  when later steps should still run. Reconciled the apparent Pattern 1 vs Pattern 2 conflict in
+  `executor-patterns.md`.
+- `startsFlow` doc now states that a flow persists across turns and is cleared only by
+  `endsFlow`/`abortFlow` — there is no implicit reset on a goal-switch; the host must drive it.
+
 ## [1.1.0] — 2026-06-08
 
 Additive: native read-pagination. Opt a list read into uniform pagination with `pageable` on its

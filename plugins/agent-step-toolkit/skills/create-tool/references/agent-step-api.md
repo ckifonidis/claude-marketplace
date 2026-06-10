@@ -320,6 +320,8 @@ When the LLM calls the tool with `[step1, step2, step3]`:
 
 The runner switches the mutation action into a four-mode state machine. Detected by reading `awaitingInput.kind === "confirmation"`:
 
+**Ordering with prereqs (non-obvious, but guaranteed).** A step's library prereqs (`requiresFlow`) and user verifiers run BEFORE its confirmation mode is acted on (`<state_threading>` step 5a/5b, ahead of the propose in 5e). So a confirm-gated mutation whose `requiresFlow`/prereqs are unmet is **refused, not proposed** — `awaitingInput` is never set into a doomed state. Compose `requiresConfirmation` with `requiresFlow` freely; the gate order is correct.
+
 ### First call (no pending, or pending action ≠ this action) → **propose mode**
 - Validate params, set `awaitingInput = { kind: "confirmation", for_action, params, attempts_left: maxAttempts, max_attempts }`.
 - Return `{ ok: true, summary, needs_confirmation: true, proposed_params, attempts_left }`.

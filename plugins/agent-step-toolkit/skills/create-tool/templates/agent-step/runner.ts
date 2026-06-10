@@ -28,7 +28,7 @@
  *
  * Mutations opt into a confirmation gate via `actions[name].controller.requiresConfirmation`.
  * The library handles the propose → execute handshake and a library-managed
- * `cancel_pending_confirmation` action; pre/post verification (e.g. read-back
+ * `abort_pending_input` action; pre/post verification (e.g. read-back
  * after a write) is the executor's own concern — no auto-wrapping.
  */
 import { tool } from "@langchain/core/tools";
@@ -130,7 +130,7 @@ const ABORT_ACTION = "abort_pending_input";
  *  as the fill-in for any field omitted from an explicit opts object. */
 const CONFIRMATION_DEFAULTS: Required<ConfirmationOpts> = {
   maxAttempts: 3,
-  ttlMs: 300_000,
+  ttlMs: 300_000,   // unused — the runner never reads this; see ConfirmationOpts.ttlMs (inert)
   lockdown: true,
 };
 

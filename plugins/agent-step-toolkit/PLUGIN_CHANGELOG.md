@@ -11,6 +11,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.6.1] — 2026-06-09
+
+Ships agent-step runner library **1.1.1** (doc-comment corrections only — no behavior change).
+Downstream projects can adopt via `/pull-library`; no consumer transforms.
+
+### Fixed
+- **Library contract doc-comments**, surfaced by a contract audit against live runtime behavior:
+  `runner.ts` header `cancel_pending_confirmation` → `abort_pending_input`; `ConfirmationOpts.ttlMs`
+  documented INERT (and the unused `CONFIRMATION_DEFAULTS.ttlMs` annotated); `ExecutorResult.ok`
+  documented as a batch-continuation control flag (not a verdict); `startsFlow` documents
+  flow-persistence-across-turns / no implicit goal-switch reset. CHANGELOG [1.1.1] +
+  migration `1.1.0-to-1.1.1.md`.
+
+### Changed
+- **`executor-patterns.md`:** reconciled the Pattern 1 vs Pattern 2 `ok` guidance (it's
+  batch-continuation control, not success), and added **Pattern 10 — Router / classifier executor**
+  (single action, always-`ok:true` with the verdict in `resultBody`, `currentFlow.data` as a
+  cross-turn accumulator) so the references no longer read as data-tool-only.
+- **`agent-step-api.md`:** added an explicit note that `requiresFlow`/prereqs are evaluated before a
+  confirm-gated mutation proposes, so an unmet flow refuses rather than proposing into a doomed state.
+
 ## [0.6.0] — 2026-06-09
 
 ### Added

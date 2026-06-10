@@ -4,8 +4,13 @@ import type { PageableSpec } from "./paginate.js";
 /** Result a single executor returns to the runner. `resultBody` is the
  *  JSON-serializable object the LLM sees as that step's payload. `stateUpdate`
  *  is a partial patch the runner threads to subsequent steps in the batch AND
- *  accumulates into the final tool Command. `ok` determines whether the runner
- *  continues to the next step.
+ *  accumulates into the final tool Command. `ok` is a batch-continuation
+ *  control flag, NOT a success/verdict signal: `ok: true` proceeds to the next
+ *  step; `ok: false` short-circuits the batch and sets `failed_at`. An executor
+ *  may return `ok: true` for a "negative" domain outcome (carry the verdict in
+ *  `resultBody`) when later steps should still run, or `ok: false` to stop the
+ *  batch — decide on whether the batch should continue, not on whether the
+ *  outcome was "good".
  *
  *  `flowData` is shallow-merged into `currentFlow.data` post-execution — used
  *  by flow-bound executors to update their own scratch state. Writing
@@ -121,11 +126,15 @@ export interface ActionDef<PrereqName extends string> {
 
 /** Per-mutation opt-in for state-driven confirmation gating. Truthy form
  *  switches the action into a two-mode runner (propose / execute) with a
- *  lockdown that refuses unrelated steps while pending, bounded re-proposes,
- *  and a TTL. Library injects a generic `abort_pending_input` action into the
+ *  lockdown that refuses unrelated steps while pending and bounded re-proposes.
+ *  Library injects a generic `abort_pending_input` action into the
  *  tool schema whenever any mutation opts in to a library-managed gate. */
 export interface ConfirmationOpts {
   maxAttempts?: number;
+  /** INERT — accepted for forward-compat but never read; the runner times
+   *  nothing out. Stale gates clear via `abort_pending_input` or via backend
+   *  signals the executor surfaces as `lifecycle.clearAwaitingInput` /
+   *  `lifecycle.abortFlow`. Setting it has no effect today. */
   ttlMs?: number;
   lockdown?: boolean;
 }
@@ -175,7 +184,14 @@ export interface ControllerHooks {
   /** This action opens (or re-enters) a multi-turn flow. On `ok`, the
    *  runner creates `currentFlow` with the given `name` (or merges
    *  `flowData` into the existing flow if `currentFlow.name` matches).
-   *  Refused if a different flow is currently active. */
+   *  Refused if a different flow is currently active.
+   *
+   *  A flow persists across turns once opened and is cleared ONLY by `endsFlow`
+   *  or `lifecycle.abortFlow` — never implicitly. There is no "a new goal resets
+   *  the flow" affordance: if a turn pursues an unrelated goal mid-flow, the
+   *  prior flow (and its now-stale `flowData`) stays open until the host drives
+   *  a reset — end the old flow (`endsFlow` / `abortFlow`) before `startsFlow`
+   *  of the new one. */
   startsFlow?: { name: string };
   /** This action terminates the active flow successfully. On `ok`, the
    *  runner clears `currentFlow` AND `awaitingInput`. */

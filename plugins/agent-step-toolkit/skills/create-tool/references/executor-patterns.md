@@ -12,6 +12,7 @@ Executors do the actual work: parse the LLM-supplied params, call the backend, i
 7. **Self-sufficient read executor** — a read that loads its own dependencies on demand instead of gating on a prior step via a prereq.
 8. **Reference resolver** — turns a user's human-terms reference into a concrete entity (or a candidate set) by matching over more than primary keys.
 9. **Compute / analysis executor** — runs a computation over data already in state; the agent supplies the computation, the host runs it.
+10. **Router / classifier executor** — no backend; returns a decision (with the verdict in `resultBody`) and uses `currentFlow.data` as a cross-turn accumulator. Always `ok: true`. See Pattern 10.
 
 All share the same TypeScript signature; the differences are in what they read/write.
 </overview>
@@ -152,7 +153,7 @@ export async function verifyCustomer(
 Rules:
 - Verdict-style result body: `{ summary, verdict, ...entity }` with `verdict ∈ { ok, not_found, mismatch, forbidden, ... }`.
 - `stateUpdate` only on `verdict: "ok"` — populates the slot that downstream prereqs check.
-- `ok` mirrors `verdict === "ok"`. Non-ok verdicts short-circuit the batch (saves the LLM from hammering follow-up actions that would just fail prereqs).
+- `ok` mirrors `verdict === "ok"` *here by choice*: a failed verification should stop the batch because downstream steps gate on the slot this would populate. `ok` is the runner's batch-continuation control, not a success signal (contrast Pattern 1, where a "negative" read returns `ok: true` so later steps still run) — set it `false` only when the batch should not continue.
 - Speaker-change / cross-entity guards live INSIDE the verification executor, not in the runner.
 - Pin everything later actions might need (mobile for SCA, taxNumber for re-identification on mutations) in the state slot. Re-prompting later costs a turn.
 </pattern_2_verification_executor>
@@ -497,6 +498,20 @@ Security caveat: an in-process evaluator is **not** a security boundary — it c
 
 **Build recipe + templates:** `references/data-analysis-pattern.md` is the end-to-end how — the five pieces, the four-stage data flow, the single-source-of-truth datasets module, the state-dependent prompt upgrade, and the security posture. Templates: `executor-analysis.ts.template`, `analysis-vm.ts.template` (the `node:vm` runner), `datasets.ts.template`, `verifier-data-loaded.ts.template`.
 </pattern_9_compute_analysis>
+
+<pattern_10_router_classifier>
+## Pattern 10: Router / classifier executor
+
+Not every agent-step tool fetches data. A router/classifier (e.g. an IVR intent router) uses the runner as a deterministic step engine with no backend at all. The shape inverts several assumptions the data-tool patterns above make, and that is fine:
+
+- **One action, called repeatedly.** A single action (e.g. `narrow`) advances one level of a decision tree per step. The LLM batches several picks in one tool call; the runner threads them in order.
+- **Always `ok: true`; the verdict lives in `resultBody`.** Every outcome — a match, an ambiguous set, an invalid pick, a terminal route — returns `ok: true`, carrying the decision under `resultBody` (e.g. `{ kind: "Candidates" | "Route" | "Fallback" | "InvalidPick" }`). This is the deliberate use of the `ExecutorResult.ok` contract: `ok` controls **batch continuation**, not success (see the type doc-comment). The router *wants* the whole batch to run so the walk threads end-to-end, so it never returns `ok: false` for a "logically negative" pick. (Contrast Pattern 2's verification executor, which returns `ok: false` precisely to stop the batch.)
+- **`currentFlow.data` as a cross-turn accumulator.** Open the walk with `startsFlow`, accumulate the path in `flowData` (shallow-merged into `currentFlow.data`), and reset on a terminal step via `lifecycle.abortFlow` (or `endsFlow`). The flow rehydrates next turn, so a multi-turn clarification continues from where it left off.
+- **No prereqs, no pagination, no mutation gates.** Routing gates nothing on journey-state, returns one decision (not lists), and performs no side effects — so verifiers, `pageable`, and the confirmation/OTP/match machinery are all simply unused.
+- **Mind the goal-switch.** Because a non-terminal turn leaves the flow open (no `abortFlow`), an unrelated new goal next turn must be handled by the host — drive a `restart`/`abortFlow`, since the library never resets a flow implicitly (see `startsFlow` doc).
+
+The library *core* (config → schema → selector→executor dispatch → `flowData` threading → Command commit) generalises cleanly to this shape; only the data-tool surface goes unused.
+</pattern_10_router_classifier>
 
 <state_update_shape>
 ## stateUpdate semantics
