@@ -23,6 +23,8 @@ The embedded runner. Replaced byte-for-byte from the new source; never hand-merg
 - `skills/create-tool/templates/agent-step/state.ts`
 - `skills/create-tool/templates/agent-step/runner.ts`
 - `skills/create-tool/templates/agent-step/runner.test.ts`
+- `skills/create-tool/templates/agent-step/paginate.ts`
+- `skills/create-tool/templates/agent-step/paginate.test.ts`
 - `skills/create-tool/templates/agent-step/define-config.ts`
 - `skills/create-tool/templates/agent-step/index.ts`
 - `skills/create-tool/templates/agent-step/VERSION` — rewrite to the new version string.
@@ -41,9 +43,13 @@ signatures and the wire-up, so any change to the executor signature, the registr
 
 - `skills/create-tool/templates/config.ts.template`
 - `skills/create-tool/templates/tool-index.ts.template`  — the `buildAgentStepTool({...})` call + registries
+- `skills/create-tool/templates/state-selector.ts.template` — the per-action `getSlice` + `Slice` shape
 - `skills/create-tool/templates/executor-read.ts.template`
+- `skills/create-tool/templates/executor-read-paginated.ts.template` — encodes the `pageable` contract (runner-injected page params, `items` envelope)
 - `skills/create-tool/templates/executor-mutation.ts.template`
+- `skills/create-tool/templates/executor-analysis.ts.template`, `analysis-vm.ts.template`, `datasets.ts.template`, `verifier-data-loaded.ts.template` — the data-analysis scaffold; mirror the `ExecutorResult` / `Verifier` / selector shapes
 - `skills/create-tool/templates/verifier.ts.template`
+- `skills/create-tool/templates/tool-test-setup.ts.template` — wires `toolOpts` (config + registries) mirroring `index.ts`
 - `skills/create-tool/templates/backend-env.ts.template`, `skills/create-tool/templates/backend-client.ts.template` (rarely — only if transport contract changes)
 
 **Touched by:** executor signature changes, registry shape/typing changes, new/removed
@@ -67,6 +73,7 @@ new template + a new import line in `tool-index.ts.template`).
 - `skills/create-tool/references/tool-directory-layout.md` — canonical `src/tools/<name>/` layout, per-file responsibility, naming rules, file-creation order, imports convention. Update when files are added/removed per action or the signatures in the per-file notes change.
 - `skills/create-tool/references/executor-patterns.md` — read vs mutation executor shapes; update when the executor signature or state-update shape changes.
 - `skills/create-tool/references/state-and-prompt-integration.md` — how `src/state.ts` / `src/prompt.ts` / `src/tools/index.ts` are patched; update if state wiring changes.
+- `skills/create-tool/references/data-analysis-pattern.md` — the analyze-action recipe; embeds the executor/selector/verifier shapes and the `DatasetSource` wiring.
 - (Other references — `identity-patterns.md`, `read-tool-patterns.md`, `input-formats.md`, `project-bootstrap-structure.md` — update only if their examples encode a changed signature.)
 
 **Touched by:** any change to the public API, the tool layout, or executor patterns.

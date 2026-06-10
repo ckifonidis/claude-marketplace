@@ -28,9 +28,12 @@ about the new contract.
 **2. Library version ≠ plugin version.** Bump only the library `VERSION` marker
 (`skills/create-tool/templates/agent-step/VERSION`). Never touch `.claude-plugin/plugin.json`.
 
-**3. Verbatim copy, hand-merged contract.** Tier-1 library files are replaced byte-for-byte from the
-source — never hand-edited. Every OTHER tracked asset is hand-updated to match the new contract.
-The two are different operations; don't blur them.
+**3. Verbatim copy, hand-merged contract.** When absorbing an external source, Tier-1 library files
+are replaced byte-for-byte — never hand-merged with local edits. Every OTHER tracked asset is
+hand-updated to match the new contract. The two are different operations; don't blur them.
+(The embedded copy is itself the canonical source; a release may instead be authored directly in it
+— e.g. doc-comment corrections — with no external source to copy from. The same version bookkeeping
+applies either way: bump `VERSION`, write the CHANGELOG entry and the migration file.)
 
 **4. Evaluate before you touch anything.** Classify the diff (additive / breaking / internal),
 pick the semver bump from the PUBLIC surface (`index.ts` exports + `types.ts` signatures +
