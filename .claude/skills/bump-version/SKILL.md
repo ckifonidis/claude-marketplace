@@ -59,7 +59,8 @@ runner tests. The source library is known-good; this catches drift in the hand-e
 **Resolve the library source from the user's reference.** Accept any of:
 
 1. **Local filesystem path** — to a project root (auto-find `src/agent-step/` under it) or directly
-   to an `agent-step/` directory. The primary case (e.g. `../../../agents/personalized-info-agents-ts`).
+   to an `agent-step/` directory. The primary case: a local checkout of a downstream agent project
+   whose vendored runner was improved in place and should now be absorbed back into the toolkit.
 2. **Git repo URL + ref** — `<url>` plus an optional branch/tag/commit. Shallow-clone to a temp dir,
    then locate `src/agent-step/`.
 3. **Git ref in a local repo** — a tag/commit/branch of an already-local repo. Materialise that ref
