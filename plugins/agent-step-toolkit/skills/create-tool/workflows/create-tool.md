@@ -13,6 +13,7 @@ Also read when applicable:
 - `references/read-tool-patterns.md` — if the tool is search / browse / history / analytics-heavy.
 - `references/data-analysis-pattern.md` — if the tool must answer open-ended aggregate questions (totals / group-by / top-N) over fetched data via an LLM-authored snippet (executor Pattern 9).
 - `references/sandbox-contract.md` — if the root `sandbox/` doesn't yet model every backend service this tool calls (you'll be extending it before the sandbox tests can run).
+- `references/streaming-and-channel-contract.md` — if the tool includes a CHANNEL-HANDOFF action (transferring the caller to another service/agent/human), or if the agent will be deployed behind a channel middleware / orchestrator and you need the streaming/wire contract (the reference doubles as the middleware developers' adherence checklist).
 </required_reading>
 
 <process>
@@ -108,7 +109,7 @@ Use the `templates/` files as starting points. Fill in concrete values from the 
 3. `src/tools/<name>/shared/` — any shared helpers (e.g. resolve-entity); create only if multiple actions need them. (Pagination needs no shared helper — it's a library opt; see step 6.)
 4. `src/tools/<name>/verifiers/<prereq>.ts` — one file per unique prereq (see `templates/verifier.ts.template`)
 5. `src/tools/<name>/actions/<action>/stateSelector.ts` — one per action; exports `getSlice` + `Slice` (see `templates/state-selector.ts.template`). Narrow to the slots the action reads.
-6. `src/tools/<name>/actions/<action>/executor.ts` — one per action; imports its `Slice` from `./stateSelector.js`. Pick by shape: `templates/executor-read.ts.template` (fixed-size read), `templates/executor-read-paginated.ts.template` (large/list read — declare `pageable` on the action with a `z.object` params schema; the runner injects `page`/`pageSize`, slices, and caches in the library `pagedRead` slot — no per-tool state slot or cache helper needed), `templates/executor-mutation.ts.template` (mutation), or `templates/executor-analysis.ts.template` (LLM-authored compute over fetched data — see step 6b).
+6. `src/tools/<name>/actions/<action>/executor.ts` — one per action; imports its `Slice` from `./stateSelector.js`. Pick by shape: `templates/executor-read.ts.template` (fixed-size read), `templates/executor-read-paginated.ts.template` (large/list read — declare `pageable` on the action with a `z.object` params schema; the runner injects `page`/`pageSize`, slices, and caches in the library `pagedRead` slot — no per-tool state slot or cache helper needed), `templates/executor-mutation.ts.template` (mutation), `templates/executor-handoff.ts.template` (channel handoff — see step 6c), or `templates/executor-analysis.ts.template` (LLM-authored compute over fetched data — see step 6b).
 
 6b. **Analyze action (only if the tool answers open-ended aggregate questions over fetched data).** Follow `references/data-analysis-pattern.md` and add, alongside the read/mutation actions:
    - `src/tools/<name>/shared/datasets.ts` ← `templates/datasets.ts.template` — the single source of truth (`DATASETS` schema + `buildDatasets` + `buildDataSummary`). Its dataset keys are the variable names the snippet sees and the prompt documents.
@@ -117,6 +118,13 @@ Use the `templates/` files as starting points. Fill in concrete values from the 
    - The analyze action's `stateSelector.ts` returns the `DatasetSource` slice (the cache slots only — no session/identity context).
    - In `src/state.ts`, export a `DatasetSource = Pick<State, ...>` over the analyzable slots (the slice both the selector and `buildDatasets` consume).
    - **Prompt upgrade (required):** make `src/prompt.ts` state-dependent — inject a static `# DATA SCHEMA` (from `DATASETS`) and a live `# AVAILABLE DATA` block (from `buildDataSummary(state)`). The bootstrap prompt is static; see the `<prompt_wiring>` section of the reference for the exact edit.
+6c. **Channel-handoff action (only if the tool transfers the caller to other services/agents).** Follow `references/streaming-and-channel-contract.md` and add, alongside the other actions:
+   - `src/tools/<name>/shared/handoff-services.ts` — the service catalog: `{ name, serviceType, confidenceThreshold, successMessage, … }` per target, with voice/chat-safe success messages, plus call-time env enablement (`handoffEnabled()` / `isServiceEnabled()` reading `HANDOFF_ENABLED` / `HANDOFF_TOOLS` at call time so the disabled path is testable). `serviceType` values are a shared vocabulary with the fronting middleware (its agent registry / client-side handoff types configuration) — agree them with the middleware developers.
+   - The handoff action's executor ← `templates/executor-handoff.ts.template`. Its `resultBody` MUST carry `isHandoff: true` on the ok verdict (the bootstrap `agent.ts` hook keys off it) and `successMessage`; its `stateUpdate` writes the bootstrap `pendingHandoff` slot (already in `state.ts` — do not redeclare). Identity fields are coerced `?? null`.
+   - Config: `controller: { soleStep: true }`; params `{ service: z.enum([...catalog names]), reason: z.string() }`.
+   - Guardrails (e.g. business-hours gating for a human-escalation target) are executor pre-checks returning a structured refusal verdict — the prompt teaches the recovery.
+   - Prompt: a HANDOFF section — strictness tiers per service (high threshold ⇒ explicit request only; when in doubt answer from the knowledge surface first), speak the returned `successMessage` then STOP (no closing question), and recoveries for `service_disabled` / guardrail verdicts.
+   - Do NOT touch `agent.ts` — the post-model annotator hook is already there from bootstrap and activates automatically once `pendingHandoff` is written.
 7. `src/tools/<name>/config.ts` — pure data; `export type ActionName` (see `templates/config.ts.template`)
 8. `src/tools/<name>/index.ts` — wire-up: `selectors` (`satisfies SelectorRegistry<State, ActionName>`) + `executors` (`ExecutorRegistry<State, typeof selectors>`), both keyed by action name (see `templates/tool-index.ts.template`)
 

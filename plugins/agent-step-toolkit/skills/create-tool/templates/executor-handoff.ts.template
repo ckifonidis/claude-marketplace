@@ -1,0 +1,81 @@
+// FILE: src/tools/{{TOOL_NAME}}/actions/{{HANDOFF_ACTION}}/executor.ts
+//
+// CHANNEL-HANDOFF executor: signals the host channel to transfer the caller
+// to another service/agent. No backend call — it validates the target,
+// applies any guardrails, writes the `pendingHandoff` state slot (bootstrap
+// state ships it), and returns the service's success message for the agent to
+// speak. The post-model hook in src/agent.ts then copies the signal onto the
+// final reply as the middleware's `additional_kwargs` handoff contract.
+// See references/streaming-and-channel-contract.md for the full contract.
+//
+// Config requirements for this action (in config.ts):
+//   controller: { soleStep: true }   // a handoff never shares a batch
+//
+// resultBody contract the agent.ts hook depends on: `isHandoff: true` must be
+// present on the OK verdict (the hook greps the tool message for it to know a
+// handoff was accepted THIS turn).
+
+import {
+  HANDOFF_SERVICES,
+  handoffEnabled,
+  isServiceEnabled,
+  type HandoffServiceName,
+} from "../../shared/handoff-services.js";
+import type { State, PendingHandoff } from "../../../../state.js";
+import type { ExecutorResult } from "../../../../agent-step/index.js";
+import type { Slice } from "./stateSelector.js";
+
+interface RequestHandoffParams {
+  service: HandoffServiceName;
+  reason: string;
+}
+
+export async function {{HANDOFF_EXECUTOR_FN}}(
+  rawParams: unknown,
+  state: Slice, // selector should provide: user_id, customer_code, pendingHandoff
+): Promise<ExecutorResult<State>> {
+  const p = rawParams as RequestHandoffParams;
+  const service = HANDOFF_SERVICES[p.service];
+
+  if (!handoffEnabled() || !isServiceEnabled(p.service)) {
+    return {
+      resultBody: {
+        summary: `Handoff to "${p.service}" is not available on this channel. Tell the caller this service is currently unavailable and keep helping them yourself.`,
+        verdict: "service_disabled",
+        error: "service_disabled",
+        service: p.service,
+      },
+      ok: false,
+    };
+  }
+
+  // {{OPTIONAL_GUARDRAILS}} — e.g. a business-hours pre-check for a
+  // human-escalation target: return verdict "outside_business_hours"
+  // (ok:false) and let the prompt teach the recovery.
+
+  const pendingHandoff: PendingHandoff = {
+    service: service.name,
+    serviceType: service.serviceType,
+    reason: p.reason,
+    successMessage: service.successMessage,
+    // `?? null`: when the caller's invoke input omits identity (anonymous
+    // session), these slots are `undefined` — and undefined fails the
+    // state-update schema validation where null passes.
+    userId: state.user_id ?? null,
+    customerCode: state.customer_code ?? null,
+    requestedAt: new Date().toISOString(),
+  };
+
+  return {
+    resultBody: {
+      summary: `Handoff to ${service.name} accepted. Speak the successMessage to the caller, then stop — do not offer further assistance; the channel will transfer them now.`,
+      verdict: "ok",
+      isHandoff: true, // REQUIRED — agent.ts hook keys off this
+      service: service.name,
+      serviceType: service.serviceType,
+      successMessage: service.successMessage,
+    },
+    stateUpdate: { pendingHandoff } as Partial<State>,
+    ok: true,
+  };
+}

@@ -11,6 +11,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.9.0] — 2026-06-11
+
+The channel-contract release (library unchanged at **1.2.0**; `/pull-library` not needed). Every
+bootstrapped project now ships the channel middleware wire contract — snake_case identity slots,
+the `pendingHandoff` slot, and the post-model hook that stamps handoff replies — and
+`/create-tool` can add channel-handoff actions on top of it.
+
+### Added
+- **`create-tool/references/streaming-and-channel-contract.md`** — the wire contract a generated
+  agent emits plus the middleware adherence checklist: invoke shape (snake_case `user_id` /
+  `customer_code` / `role`, `assistant_id: "agent"`), the handoff `additional_kwargs` contract on
+  the final reply, the verified LangGraph JS streaming event order (tokens vs `updates`, where
+  `is_handoff` appears, the correct trigger point), and testing guidance per layer.
+- **`create-tool/templates/executor-handoff.ts.template`** — channel-handoff executor: env-gated
+  service catalog (`HANDOFF_ENABLED` / `HANDOFF_TOOLS`), guardrail pre-checks returning structured
+  refusal verdicts, writes `pendingHandoff`, returns `isHandoff: true`; declared
+  `controller: { soleStep: true }`.
+- **Bootstrap scaffold wire contract**: `project/state.ts.template` gains the identity slots
+  (`user_id` / `customer_code` / `role` with preserve-initial reducers, `?? null` coercion
+  caveat) and the `pendingHandoff` slot + `PendingHandoff` schema; `project/agent.ts.template`
+  gains the `postModelHook` annotator that stamps the final reply with the `is_handoff`
+  `additional_kwargs` contract (a no-op until a handoff tool exists).
+- **SKILL essential principle #12** (the channel wire contract is bootstrap-level, not per-tool)
+  and **create-tool workflow step 6c** (the handoff-action recipe: service catalog, executor,
+  config, guardrails, prompt section).
+
+### Changed
+- `references/project-bootstrap-structure.md` — `state.ts` / `agent.ts` descriptions cover the
+  new slots and the post-model hook.
+- `templates/backend-env.ts.template` / `templates/project/env.example.template` — `BANK` no
+  longer carries a baked-in default; set it per backend in `.env`.
+- `workflows/bootstrap-project.md` — agent display name and one-line description are always asked
+  of the user, never invented.
+- Reference wording polish (voice-rule closers, transcript-language guidance); bump-version
+  `tracked-assets.md` inventories the new template (Tier 2) and reference (Tier 4).
+
 ## [0.8.0] — 2026-06-11
 
 The sandbox-contract release, shipping agent-step library **1.2.0**. Every project the toolkit

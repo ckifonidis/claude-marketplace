@@ -21,6 +21,43 @@ export const AgentState = Annotation.Root({
   // last-writer-wins reducers the runner expects.
   ...agentStepStateSpec,
 
+  // ─── Channel wire contract (fronting middleware / orchestrator) ─────── //
+  // The middleware invokes every agent with `{ messages, user_id,
+  // customer_code, role, ... }` (snake_case — do NOT rename) and reads the
+  // handoff signal back from the final message + the `pendingHandoff` slot.
+  // See `references/streaming-and-channel-contract.md`. Identity uses
+  // preserve-initial reducers: first non-null value wins across turns.
+  // CAUTION: when the caller omits a field it arrives as `undefined`, not
+  // `null` — executors must `?? null` before writing it anywhere validated.
+
+  /** Channel user id, set by the caller at invoke (absent for anonymous). */
+  user_id: Annotation<string | null>({
+    reducer: (prev, next) => prev ?? next,
+    default: () => null,
+  }),
+
+  /** Bank customer code, set by the caller at invoke (absent for anonymous). */
+  customer_code: Annotation<string | null>({
+    reducer: (prev, next) => prev ?? next,
+    default: () => null,
+  }),
+
+  /** Caller roles (e.g. ["retail"], ["corporate"]); immutable once set. */
+  role: Annotation<string[]>({
+    reducer: (prev, next) => (prev && prev.length > 0 ? prev : (next ?? [])),
+    default: () => [],
+  }),
+
+  /** Channel-handoff signal: written by a tool's handoff executor when the
+   *  caller must be transferred to another service/agent; the post-model hook
+   *  in agent.ts copies it onto the final reply as the `additional_kwargs`
+   *  handoff contract the middleware reads. `null` until a handoff is
+   *  accepted; harmless if the project never adds a handoff action. */
+  pendingHandoff: Annotation<PendingHandoff | null>({
+    reducer: (_, n) => n ?? null,
+    default: () => null,
+  }),
+
   // ─── Per-tool slots — added by /create-tool as tools are introduced ─── //
   // Example (uncomment + adapt when adding the first tool):
   //
@@ -30,14 +67,43 @@ export const AgentState = Annotation.Root({
   // }),
 });
 
+/** The channel-handoff signal payload. Maps onto the wire-contract kwargs:
+ *  `serviceType` → `handoff_type` / `handoff_metadata.service_type`,
+ *  `reason` → `handoff_reason`. */
+export interface PendingHandoff {
+  service: string;
+  serviceType: string;
+  reason: string;
+  /** Voice/chat-safe message the agent speaks before the transfer; also
+   *  delivered to the channel via `handoff_metadata.success_message`. */
+  successMessage: string;
+  userId: string | null;
+  customerCode: string | null;
+  requestedAt: string;
+}
+
 /** The graph's full state type. Tools import this to type their state selectors
  *  (each `stateSelector.ts` projects `State` down to one action's slice) and the
  *  `ExecutorResult<State>` their executors return. */
 export type State = typeof AgentState.State;
 
+const PendingHandoffSchema = z.object({
+  service: z.string(),
+  serviceType: z.string(),
+  reason: z.string(),
+  successMessage: z.string(),
+  userId: z.string().nullable(),
+  customerCode: z.string().nullable(),
+  requestedAt: z.string(),
+});
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const AgentStateSchema: z.ZodObject<any> = MessagesZodState.extend({
   // Library-managed slots, mirroring agentStepStateSpec above.
   ...agentStepZodShape,
+  user_id: z.string().nullable().optional().default(null),
+  customer_code: z.string().nullable().optional().default(null),
+  role: z.array(z.string()).optional().default([]),
+  pendingHandoff: PendingHandoffSchema.nullable().optional().default(null),
   // Mirror per-tool slots here as they get added.
 });

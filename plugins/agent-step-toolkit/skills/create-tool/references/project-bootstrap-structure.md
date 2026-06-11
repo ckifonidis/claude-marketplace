@@ -80,7 +80,7 @@ src/tools/<name>/tests/
 Verbatim copy of the runner library. The skill treats these as templates-by-copy (no substitution). Files:
 
 - **types.ts** — `AgentStepConfig` (`{ tool, actions }`), `ActionDef` (with inline `controller: ControllerHooks` + `invalidatesOnChange`), `ControllerHooks` (batch-shape opts + confirmation / OTP / match / flow lifecycle opts), `ConfirmationOpts`, `Verifier`, `ExecutorResult` (with `flowData` / `lifecycle`).
-- **state.ts** — the library-managed state slots: `AwaitingInputSchema` (discriminated union over confirmation / otp / match) → `AwaitingInput`, `CurrentFlowSchema` → `CurrentFlow`, plus the `agentStepStateSpec` / `agentStepZodShape` fragments hosts spread into their state.
+- **state.ts** — the library-managed state slots: `AwaitingInputSchema` (discriminated union over confirmation / otp / match) → `AwaitingInput`, `CurrentFlowSchema` → `CurrentFlow`, plus the `agentStepStateSpec` / `agentStepZodShape` fragments hosts spread into their state. Also declares the CHANNEL WIRE CONTRACT slots (snake_case `user_id` / `customer_code` / `role` with preserve-initial reducers — the middleware's invoke-input field names; never rename) and the `pendingHandoff` slot + `PendingHandoff` type the handoff machinery uses (see `streaming-and-channel-contract.md`).
 - **runner.ts** — `buildAgentStepTool`, `runSteps`, the construction-time validator, the propose/execute lifecycle, OTP gate, double-entry match gate, flow mutex, lockdown enforcement, `invalidatesOnChange` cascade, library-injected `abort_pending_input` action.
 - **runner.test.ts** — unit tests covering every runner branch. Run via `npm test`.
 - **define-config.ts** — identity helper for typed `defineConfig({...})` calls.
@@ -96,7 +96,7 @@ Verbatim copy of the runner library. The skill treats these as templates-by-copy
 
 **state.ts** — `Annotation.Root({...})` with `MessagesAnnotation.spec` spread in + three library-managed slots (`awaitingInput`, `currentFlow`, `pagedRead`). Per-tool slots are added in this file as tools are introduced. Also exports a Zod `AgentStateSchema` for input validation, including a discriminated-union schema for `awaitingInput` (confirmation / otp / match), a `{ name, data }` schema for `currentFlow`, and a `{ key, signature, rows, extras }` schema for `pagedRead` (the `pageable` reslice-cache).
 
-**agent.ts** — Builds the `createReactAgent` with `AzureChatOpenAI` LLM + `MemorySaver` checkpointer + the tools registered in `src/tools/index.ts` + the prompt builder.
+**agent.ts** — Builds the `createReactAgent` with `AzureChatOpenAI` LLM + `MemorySaver` checkpointer + the tools registered in `src/tools/index.ts` + the prompt builder. Includes the `postModelHook` handoff annotator: when a tool's handoff executor wrote `pendingHandoff` this turn, the final reply is stamped with the middleware's `is_handoff` `additional_kwargs` contract. A no-op until a handoff tool exists — keep it in place.
 
 **graph.ts** — Single export `graph` — what `langgraph.json` references. Logs env presence at load (useful for diagnosing missing env in deployed containers).
 

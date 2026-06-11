@@ -19,7 +19,7 @@ Ask via AskUserQuestion (group into 2–3 questions; skip what's obvious from co
 
 - **Project directory** (absolute path). Either an existing empty directory or a path to create.
 - **Project name** (npm package name; kebab-case; e.g. `accounts-agent-ts`). Becomes `name` in package.json + the Docker image name + the LangSmith project name default.
-- **Agent display name** (one short phrase shown in CLI header + prompt; e.g. "NBG Accounts Agent").
+- **Agent display name** (one short phrase shown in CLI header + prompt; always ask the user — never invent it).
 - **One-line description** (lands in package.json description + prompt lead sentence).
 - **Voice or chat?** Determines whether to keep CHANNEL CONSTRAINTS and VOICE RULES in the prompt template.
 - **ACR registry + image name** (for `build_and_push.sh`). Default: ask whether they have ACR creds in env.
@@ -100,11 +100,11 @@ For each project-root file, copy from the corresponding template under `template
 | placeholder | source | example |
 |-------------|--------|---------|
 | `{{PROJECT_NAME}}` | step 1 input | `accounts-agent-ts` |
-| `{{AGENT_DISPLAY_NAME}}` | step 1 input | `NBG Accounts Agent` |
-| `{{ONE_LINE_DESCRIPTION}}` | step 1 input | `Voice agent for NBG account inquiries` |
+| `{{AGENT_DISPLAY_NAME}}` | step 1 input | (ask the user — never invent) |
+| `{{ONE_LINE_DESCRIPTION}}` | step 1 input | (ask the user — never invent) |
 | `{{AGENT_DESCRIPTION_ONE_LINER}}` | step 1 input | `the bank's voice agent for account inquiries` |
 | `{{TOOL_NAME}}` | first tool name (or leave as `{{TOOL_NAME}}` if unknown — user replaces during /create-tool) | `accounts` |
-| `{{ACR_REGISTRY}}` | step 1 input | `idpdirectacr.azurecr.io` |
+| `{{ACR_REGISTRY}}` | step 1 input | `myregistry.azurecr.io` |
 | `{{ACR_USERNAME_DEFAULT}}` | optional; leave the placeholder if user wants to set via env | `<uuid>` |
 | `{{ACR_PASSWORD_DEFAULT}}` | optional; leave the placeholder if user wants to set via env | `<secret>` |
 | `{{IMAGE_NAME}}` | step 1 input | `accounts-agent-ts` |

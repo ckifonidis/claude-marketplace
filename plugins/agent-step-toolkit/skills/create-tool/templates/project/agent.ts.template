@@ -2,14 +2,76 @@
 //
 // Build the LangGraph ReAct agent with Azure OpenAI + MemorySaver checkpointer.
 // Tools registered via src/tools/index.ts.
+//
+// The post-model hook below implements the CHANNEL HANDOFF wire contract for
+// the channel middleware / orchestrator fronting the agent (see
+// references/streaming-and-channel-contract.md). It is a no-op until a tool
+// writes the `pendingHandoff` state slot, so it ships with every project.
 
 import { MemorySaver } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { AzureChatOpenAI } from "@langchain/openai";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import { llmEnv } from "./llm-env.js";
-import { AgentStateSchema } from "./state.js";
+import { AgentStateSchema, type State } from "./state.js";
 import { buildPrompt } from "./prompt.js";
 import { tools } from "./tools/index.js";
+
+/** True when a handoff executor succeeded in THIS turn — i.e. after the last
+ *  human message there is a tool result carrying `"isHandoff":true` (the
+ *  handoff executor's resultBody contract). Keeps a pendingHandoff persisted
+ *  from a previous turn from re-annotating later replies. */
+function handoffAcceptedThisTurn(msgs: BaseMessage[]): boolean {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    const type = m.getType();
+    if (type === "human") return false;
+    if (type === "tool" && typeof m.content === "string" && m.content.includes('"isHandoff":true')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Post-model hook: when a handoff was accepted this turn, rewrite the final
+ *  spoken reply IN PLACE (same message id) so it carries the handoff metadata
+ *  the middleware reads — the exact `additional_kwargs` handoff contract:
+ *  `{ handoff_type, handoff_reason, handoff_metadata: { service_type,
+ *  success_message }, is_handoff: true }`.
+ *
+ *  Sync (`/runs/wait`): the middleware reads these kwargs off the final
+ *  message — works as-is.
+ *  Streaming: LangGraph JS only surfaces this annotated message in `updates`
+ *  stream events (never in `messages`) — the middleware must subscribe with
+ *  stream_mode ["messages-tuple","updates"]. See the reference. */
+function annotateHandoffReply(state: State): Partial<State> {
+  const msgs = (state.messages ?? []) as BaseMessage[];
+  const last = msgs[msgs.length - 1];
+  const handoff = state.pendingHandoff;
+  if (!handoff || !last || last.getType() !== "ai") return {};
+  const ai = last as AIMessage;
+  if ((ai.tool_calls ?? []).length > 0) return {}; // not the final reply yet
+  if (ai.additional_kwargs?.is_handoff) return {}; // already annotated
+  if (!handoffAcceptedThisTurn(msgs)) return {};
+
+  const annotated = new AIMessage({
+    id: ai.id,
+    content: ai.content,
+    additional_kwargs: {
+      ...ai.additional_kwargs,
+      handoff_type: handoff.serviceType,
+      handoff_reason: handoff.reason,
+      handoff_metadata: {
+        service_type: handoff.serviceType,
+        success_message: handoff.successMessage,
+      },
+      is_handoff: true,
+    },
+    response_metadata: ai.response_metadata,
+  });
+  // Same id → the messages reducer replaces the original reply in place.
+  return { messages: [annotated] } as Partial<State>;
+}
 
 export function createAgent(): ReturnType<typeof createReactAgent> {
   console.log(
@@ -40,6 +102,8 @@ export function createAgent(): ReturnType<typeof createReactAgent> {
     stateSchema: AgentStateSchema,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     prompt: buildPrompt as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    postModelHook: annotateHandoffReply as any,
     checkpointSaver: new MemorySaver(),
   });
 }

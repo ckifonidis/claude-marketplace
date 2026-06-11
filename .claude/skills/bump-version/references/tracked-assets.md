@@ -47,6 +47,7 @@ signatures and the wire-up, so any change to the executor signature, the registr
 - `skills/create-tool/templates/executor-read.ts.template`
 - `skills/create-tool/templates/executor-read-paginated.ts.template` — encodes the `pageable` contract (runner-injected page params, `items` envelope)
 - `skills/create-tool/templates/executor-mutation.ts.template`
+- `skills/create-tool/templates/executor-handoff.ts.template` — channel-handoff executor; mirrors `ExecutorResult` and the `soleStep` controller opt, writes the bootstrap `pendingHandoff` slot
 - `skills/create-tool/templates/executor-analysis.ts.template`, `analysis-vm.ts.template`, `datasets.ts.template`, `verifier-data-loaded.ts.template` — the data-analysis scaffold; mirror the `ExecutorResult` / `Verifier` / selector shapes
 - `skills/create-tool/templates/verifier.ts.template`
 - `skills/create-tool/templates/tool-test-setup.ts.template` — wires `toolOpts` (config + registries) mirroring `index.ts`
@@ -74,7 +75,7 @@ new template + a new import line in `tool-index.ts.template`).
 - `skills/create-tool/references/executor-patterns.md` — read vs mutation executor shapes; update when the executor signature or state-update shape changes.
 - `skills/create-tool/references/state-and-prompt-integration.md` — how `src/state.ts` / `src/prompt.ts` / `src/tools/index.ts` are patched; update if state wiring changes.
 - `skills/create-tool/references/data-analysis-pattern.md` — the analyze-action recipe; embeds the executor/selector/verifier shapes and the `DatasetSource` wiring.
-- (Other references — `identity-patterns.md`, `read-tool-patterns.md`, `input-formats.md`, `project-bootstrap-structure.md`, `sandbox-contract.md` — update only if their examples encode a changed signature; `sandbox-contract.md` describes the local sandbox service, not the library, so a library bump rarely touches it.)
+- (Other references — `identity-patterns.md`, `read-tool-patterns.md`, `input-formats.md`, `project-bootstrap-structure.md`, `sandbox-contract.md`, `streaming-and-channel-contract.md` — update only if their examples encode a changed signature; `sandbox-contract.md` and `streaming-and-channel-contract.md` describe the local sandbox service and the channel middleware wire contract respectively, not the library, so a library bump rarely touches them.)
 
 **Touched by:** any change to the public API, the tool layout, or executor patterns.
 </tier>

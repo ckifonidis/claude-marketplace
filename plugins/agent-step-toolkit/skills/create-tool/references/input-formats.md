@@ -51,7 +51,7 @@ Sample turn-by-turn exchanges showing the customer talking to the agent.
 - **First customer utterance** → infer the OPERATING LOOP entry: what intent does the agent need to recognize? (E.g. "Καλημέρα, θέλω να ελέγξω…" → intent: account/card status query.)
 - **Each subsequent customer turn → tool call(s) in the next agent turn.** Look at what the agent must answer; that's a tool result the LLM needs.
 - **Agent turns that recap-and-ask-for-confirmation** → that mutation has `requiresConfirmation`.
-- **Agent turns that refuse with "I can't… please call 181818"** → OOS refusal, not an action (already in prompt SCOPE).
+- **Agent turns that refuse with "I can't… please call our service line"** → OOS refusal, not an action (already in prompt SCOPE).
 
 Walkthrough strategy:
 1. Read the full transcript.
@@ -59,7 +59,7 @@ Walkthrough strategy:
 3. List the actions in encounter order; de-dupe.
 4. Note any state the agent appears to "remember" mid-conversation (e.g. "the card ending 5050 you just mentioned") → state slot.
 
-If transcripts come in multiple languages (cards is Greek), don't translate the dialogue but DO use English snake_case for action names.
+If transcripts aren't in English, don't translate the dialogue but DO use English snake_case for action names.
 </format_2_transcripts>
 
 <format_3_structured_action_list>
