@@ -63,7 +63,7 @@ File: `src/tools/<tool>/tests/tool/<name>.test.ts`. It imports everything from t
 
 **Coverage bar per action:** one happy-path verdict; each terminal verdict the executor can return; one short-circuit case (a downstream step's prereq fails because an upstream step returned non-ok — assert `failed_at` is the upstream index and the downstream step did not run); and, for any flow-controller mode the action declares, at least one test exercising it.
 
-**Sandbox enrichment.** If the action reaches a backend the local sandbox doesn't model yet, extend the sandbox with the canonical envelope/response shape, then write the executor and test against it. Do not stub the backend in-process — in-process mocks diverge from production envelope/exception behaviour and hide real bugs.
+**Sandbox enrichment.** If the action reaches a backend the local sandbox doesn't model yet, extend the sandbox with the canonical envelope/response shape, then write the executor and test against it. Do not stub the backend in-process — in-process mocks diverge from production envelope/exception behaviour and hide real bugs. The sandbox itself is the project's root `sandbox/` service; its required shape (lifecycle CRUD at `/sandbox`, `Sandbox-Id` header isolation, JSON seeding via PUT — what `resetToSeed` builds on) is defined in the create-tool skill's `references/sandbox-contract.md`.
 </phase>
 
 <phase name="3_prompt_input_test">
@@ -123,6 +123,7 @@ Order matters: write the sandbox test against the executor **before** touching t
 - `src/test-harness/sandbox.ts` — shared sandbox helpers: `runSteps` re-export, `foldCommitted` (state threading), `requireReachable`, `resetViaHttp`. Consumed via each tool's `_setup.ts`.
 - `src/tools/<tool>/tests/tool/_setup.ts` — per-tool sandbox wiring: `toolOpts`, `seedState`, `resetToSeed`, fixtures (built on `src/test-harness/sandbox.ts`).
 - `src/tools/<tool>/tests/tool/seed.json` — the canonical sandbox seed; reset to it before every suite.
+- `sandbox/` (project root) — the local sandbox service the sandbox layer runs against. Contract (lifecycle CRUD, `Sandbox-Id` header isolation, mandatory JSON seeding): `../create-tool/references/sandbox-contract.md`.
 - `src/tools/<tool>/tests/{tool,prompt-input}/FINDINGS.md` — where a failing-but-real test is documented (see Phase 4).
 - `package.json` scripts — `npm test` (runner unit), `npm run test:sandbox` (sandbox up locally), `npm run test:prompt` (live model; the script sets `PROMPT_INPUT_LIVE=1`).
 </reference_files>

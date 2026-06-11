@@ -14,13 +14,21 @@ The shape produced by the `bootstrap-project` workflow. This is a complete LangG
 ├── .gitignore
 ├── Dockerfile                    # langgraph/langgraphjs-api:20 base image
 ├── build_and_push.sh             # ACR push helper
+├── sandbox/                      # REQUIRED local sandbox service — see sandbox-contract.md
+│   ├── package.json              # self-contained; lifecycle CRUD (/sandbox) + domain controllers
+│   ├── src/
+│   └── seeds/                    # optional boot seeds; tests seed explicitly via PUT
 └── src/
     ├── agent-step/               # LIBRARY — do not modify. Verbatim copy.
     │   ├── types.ts
+    │   ├── state.ts              # library-managed slots (awaitingInput/currentFlow/pagedRead)
     │   ├── runner.ts
     │   ├── runner.test.ts        # unit tests; should pass out of the box
+    │   ├── paginate.ts
+    │   ├── paginate.test.ts
     │   ├── define-config.ts
-    │   └── index.ts
+    │   ├── index.ts
+    │   └── VERSION               # library version marker — never edit by hand; read by /pull-library
     ├── llm-env.ts                # AZURE_OPENAI_* env loader
     ├── cli-env-init.ts           # side-effect-only: suppresses backend trace logs in CLI
     ├── state.ts                  # graph state — messages + awaitingInput + currentFlow + pagedRead
@@ -97,6 +105,10 @@ Verbatim copy of the runner library. The skill treats these as templates-by-copy
 **cli.ts** — In-process streaming REPL. Raw-mode terminal, multi-line input, history, ESC to abort, slash commands (`/state`, `/history`, `/new`, `/last`, `/copy`, `/quit`, `/help`). Per-step tool envelope display: each batch step printed as a dim bullet with ok/fail and surfaced fields. Imports `cli-env-init.ts` first to silence backend logs.
 
 **tools/index.ts** — Empty barrel. The first `create-tool` invocation adds an import + array entry. Subsequent tools append.
+
+## Local sandbox: sandbox/
+
+A required, self-contained service at the project root that mimics the **backend APIs** the tools call (never AI resources — LLM endpoints and search indexes stay real). Lifecycle CRUD at `POST/GET /sandbox` + `GET/PUT/DELETE /sandbox/:sandboxId`, domain-endpoint isolation via the case-insensitive `Sandbox-Id` header, and mandatory JSON seeding via `PUT /sandbox/:id` — the cycle the per-tool sandbox tests reset with. Acquired best-effort at bootstrap (reference project → adapt → Postman collection → specs) or, if nothing exists to build from yet, deferred explicitly to the first `/create-tool`. Full contract + compliance checklist: `sandbox-contract.md`.
 
 ## Shared test harness: src/test-harness/
 

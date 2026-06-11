@@ -12,6 +12,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [1.2.0] — 2026-06-11
+
+Additive: `PagedCacheSchema` is now re-exported from `index.ts`, completing the library-managed
+slot-schema trio (`AwaitingInputSchema` / `CurrentFlowSchema` were already exported; the paged-read
+schema was exported from `state.ts` but missing from the barrel). Hosts that spread
+`agentStepStateSpec` / `agentStepZodShape` are unaffected; hosts that hand-rolled a `PagedCache`
+Zod schema can now import the real one. Migration:
+[migrations/1.1.1-to-1.2.0.md](migrations/1.1.1-to-1.2.0.md).
+
+### Added
+- `PagedCacheSchema` re-exported from `index.ts` (no new symbol — `state.ts` already exported it;
+  the barrel omission made it unreachable for consumers importing from `./agent-step/index.js`).
+
 ## [1.1.1] — 2026-06-09
 
 Internal: doc-comment corrections only — no behavior, signature, or export change. Surfaced by a

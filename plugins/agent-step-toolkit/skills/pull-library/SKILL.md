@@ -24,8 +24,8 @@ guides come from the installed plugin's own files — never invented here. This 
 of the plugin directory and writes into the current project's `src/agent-step/` and `src/tools/`.
 
 **2. Version-gated.** Read the toolkit `VERSION` and the project `VERSION`. If equal, the project is
-current — report and stop. If the project has no `VERSION`, treat it as the baseline and apply the
-full chain. Apply migration files in version order for multi-step jumps.
+current — report and stop. If the project has no `VERSION`, treat it as the baseline version — the
+earliest entry in the plugin's `CHANGELOG.md` (currently `0.1.0`) — and apply the full chain. Apply migration files in version order for multi-step jumps.
 
 **3. The migration `<transforms>` are the instructions.** Don't free-style the tool edits. Each
 applicable `migrations/<from>-to-<to>.md` carries an ordered, checked `<transforms>` section; apply

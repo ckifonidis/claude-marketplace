@@ -466,7 +466,7 @@ Rules:
 - Keep the identity/session prereq as the only prereq; let the executor own everything downstream of identity.
 - Reserve prereq verifiers for genuine gates, not sequencing hints. (See also the "unloaded vs. empty" prompt rule in `state-and-prompt-integration.md`.)
 
-The flip side of this negative rule is the positive one (principle #10): the prereqs you *do* keep are how the tool encodes **where the user is in their journey** — identity acquired, entity selected, flow open. That's their job; sequencing isn't.
+The flip side of this negative rule is the positive one (principle #11): the prereqs you *do* keep are how the tool encodes **where the user is in their journey** — identity acquired, entity selected, flow open. That's their job; sequencing isn't.
 </pattern_7_self_sufficient_read>
 
 <pattern_8_reference_resolver>

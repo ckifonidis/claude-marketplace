@@ -23,6 +23,7 @@ export type { BuildAgentStepToolOptions, RunResult } from "./runner.js";
 export {
   AwaitingInputSchema,
   CurrentFlowSchema,
+  PagedCacheSchema,
   agentStepStateSpec,
   agentStepZodShape,
 } from "./state.js";

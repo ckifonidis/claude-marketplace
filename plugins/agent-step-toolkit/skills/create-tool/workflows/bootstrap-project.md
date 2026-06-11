@@ -5,10 +5,11 @@ Read these reference files NOW, in order:
 1. `references/agent-step-api.md` — the runner library contract (you'll be copying it as-is)
 2. `references/tool-directory-layout.md` — the tool shape the project will host
 3. `references/project-bootstrap-structure.md` — the project-level layout this workflow produces
+4. `references/sandbox-contract.md` — the root `sandbox/` service every project requires, and how to acquire one
 </required_reading>
 
 <overview>
-This workflow scaffolds a brand-new agent-step-based project from scratch: TypeScript config, langgraph dev server config, the agent-step library (copied verbatim from `templates/agent-step/`), graph + state + prompt + agent skeleton, the streaming CLI, the **shared test harness** (`src/test-harness/` — generic sandbox + prompt-input scaffolding the per-tool tests build on), Dockerfile, and ACR build script. Total ~23 files. After bootstrap, the project is **agent-shaped but tool-empty** — the user runs the `create-tool` workflow next to add the first tool (which scaffolds that tool's tests against the harness shipped here).
+This workflow scaffolds a brand-new agent-step-based project from scratch: TypeScript config, langgraph dev server config, the agent-step library (copied verbatim from `templates/agent-step/`), graph + state + prompt + agent skeleton, the streaming CLI, the **shared test harness** (`src/test-harness/` — generic sandbox + prompt-input scaffolding the per-tool tests build on), Dockerfile, and ACR build script. Total ~23 scaffold files, plus **establishing the root `sandbox/` service** (Step 6c — acquired via the `sandbox-contract.md` ladder, or explicitly deferred). After bootstrap, the project is **agent-shaped but tool-empty** — the user runs the `create-tool` workflow next to add the first tool (which scaffolds that tool's tests against the harness shipped here).
 </overview>
 
 <process>
@@ -22,6 +23,7 @@ Ask via AskUserQuestion (group into 2–3 questions; skip what's obvious from co
 - **One-line description** (lands in package.json description + prompt lead sentence).
 - **Voice or chat?** Determines whether to keep CHANNEL CONSTRAINTS and VOICE RULES in the prompt template.
 - **ACR registry + image name** (for `build_and_push.sh`). Default: ask whether they have ACR creds in env.
+- **Sandbox source** — every project needs a root `sandbox/` service (see `references/sandbox-contract.md`). Ask what exists to build it from: a reference project that already ships a sandbox, a Postman collection for the backends, API specs/docs, or nothing yet (defer to the first `/create-tool`, when the backend surface is known).
 
 If any answer is unclear, ask one round-trip; don't write files until the inputs are complete.
 
@@ -70,6 +72,9 @@ Target: /absolute/path/to/<project_name>/
 - src/test-harness/sandbox.ts        (runSteps re-export, foldCommitted, requireReachable, resetViaHttp)
 - src/test-harness/prompt-input.ts   (live-model drivers + expect* helpers + PROMPT_INPUT_LIVE gating)
 - src/test-harness/index.ts          (barrel)
+
+### Local sandbox (per references/sandbox-contract.md)
+- sandbox/                           (source: <reference project | Postman collection | specs | deferred to first /create-tool>)
 
 ## Next actions after bootstrap
 - npm install
@@ -169,6 +174,24 @@ cp templates/project/test-harness-index.ts.template        "$PROJECT/src/test-ha
 
 These compile against an EMPTY tools array (the prompt-input harness lazy-imports the model + tools, so it needs no credentials at typecheck time). The `package.json.template` already declares the `test:sandbox` / `test:prompt` / `test:all` scripts that drive them.
 
+## Step 6c: Establish the sandbox
+
+Every project requires a root `sandbox/` directory — a standalone local service mimicking the
+backend APIs the tools will call (never AI resources). Work down the acquisition ladder in
+`references/sandbox-contract.md`, using the sandbox source gathered in Step 1:
+
+1. **Reference project ships a compliant sandbox** → copy its `sandbox/` directory into
+   `$PROJECT/sandbox/`, run its install + start command, and verify the compliance checklist
+   (lifecycle CRUD at `/sandbox`, `Sandbox-Id` header isolation, JSON seeding via PUT).
+2. **A sandbox exists but deviates** (e.g. `/sandboxes` paths, no header isolation) → copy it and
+   adapt it to the contract; keep its domain controllers.
+3. **Postman collection** → build the sandbox from the collection's requests/examples.
+4. **Specs/docs only** → best-effort build covering the services the planned tools require.
+
+If nothing exists to build from yet, **defer with an explicit note** in the Step 9 report: the
+sandbox must be established no later than the first `/create-tool`, because that workflow's
+sandbox tests cannot run without it. Never silently skip it.
+
 ## Step 7: npm install
 
 ```bash
@@ -207,6 +230,7 @@ Tell the user:
 - ✅ Bootstrap complete at `<PROJECT>`.
 - The project has graph, agent, state, prompt, CLI, and the **shared test harness** scaffolding, but **no tools yet**.
 - Test scripts are wired: `npm test` (runner unit, fast), `npm run test:sandbox` (per-tool sandbox tests, needs the local sandbox up), `npm run test:prompt` (prompt-input, live model). The sandbox/prompt scripts are no-ops until the first tool ships its tests.
+- Sandbox status: either `sandbox/` is established (how it was acquired, how to start it) or it was explicitly deferred — in which case say plainly that it must exist before the first tool's sandbox tests can run.
 - Next: `cd <PROJECT> && /create-tool` to add the first tool — it scaffolds that tool's tests against the harness shipped here.
 - Reminder: `.env` doesn't exist yet — they need to copy `.env.example` to `.env` and fill in Azure OpenAI keys before `npm run dev` or `npm run cli` will work.
 
@@ -229,5 +253,6 @@ Workflow complete when:
 - [ ] `npx tsc --noEmit` passes with zero errors (library + scaffold + shared test harness against zero tools)
 - [ ] All runner unit tests pass (zero failures)
 - [ ] `npm run dev` starts cleanly (server reaches "Welcome" / equivalent)
+- [ ] `sandbox/` established per `references/sandbox-contract.md` (compliance checklist passes), OR its deferral was explicitly reported with the reason and the obligation to establish it before the first tool's sandbox tests
 - [ ] User informed of `.env` setup requirement, the `test` / `test:sandbox` / `test:prompt` scripts, and the next step (`/create-tool`)
 </success_criteria>

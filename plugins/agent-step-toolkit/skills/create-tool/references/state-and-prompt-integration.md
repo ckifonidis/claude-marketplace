@@ -51,23 +51,19 @@ And remember: a default — even one reading an env var — does **not** fill st
 
 ## Library-managed slots (awaitingInput + currentFlow + pagedRead)
 
-`awaitingInput` / `currentFlow` are required whenever the new tool declares any lifecycle opt on a mutation (`requiresConfirmation`, `requiresOtp`, `issuesOtp`, `requiresMatch`, `startsMatchFor`, `startsFlow`, `endsFlow`, `requiresFlow`); `pagedRead` is required whenever an action declares `pageable`. All three are scaffolded into the bootstrap template — most projects already have them:
+`awaitingInput` / `currentFlow` are required whenever the new tool declares any lifecycle opt on a mutation (`requiresConfirmation`, `requiresOtp`, `issuesOtp`, `requiresMatch`, `startsMatchFor`, `startsFlow`, `endsFlow`, `requiresFlow`); `pagedRead` is required whenever an action declares `pageable`. All three arrive by **spreading the library's exported fragments** — never hand-declare them (the library's `state.ts` doc-comment forbids it; hand-rolled copies drift):
 
 ```ts
-import type { AwaitingInput, CurrentFlow } from "./agent-step/index.js";
+import { agentStepStateSpec } from "./agent-step/index.js";
 
-awaitingInput: Annotation<AwaitingInput | null>({
-  reducer: (_, n) => n,
-  default: () => null,
-}),
-
-currentFlow: Annotation<CurrentFlow | null>({
-  reducer: (_, n) => n,
-  default: () => null,
-}),
+export const AgentState = Annotation.Root({
+  ...MessagesAnnotation.spec,
+  ...agentStepStateSpec,   // awaitingInput + currentFlow + pagedRead, correct reducers
+  // … per-tool slots …
+});
 ```
 
-Shared across all tools — only one of each in the whole graph. Subsequent tools reuse them.
+The bootstrap template already does this. Shared across all tools — only one of each in the whole graph; subsequent tools reuse them.
 
 ## Zod schema (if state.ts declares one)
 
@@ -85,7 +81,7 @@ verifiedAccounts: z.record(z.string(), VerifiedAccountSchema).optional().default
 activeAccountNumber: z.string().nullable().optional().default(null),
 ```
 
-The `awaitingInput` / `currentFlow` / `pagedRead` Zod schemas are already in the bootstrap template — discriminated union over `confirmation` | `otp` | `match` for awaiting; `{ name, data }` for flow; `{ key, signature, rows, extras }` for the paged-read cache.
+The `awaitingInput` / `currentFlow` / `pagedRead` Zod fields come from spreading the library's `agentStepZodShape` into `AgentStateSchema` (the bootstrap template already does this) — never re-declare them by hand. The individual schemas (`AwaitingInputSchema`, `CurrentFlowSchema`, `PagedCacheSchema`) are also exported from `index.ts` if a host needs one directly.
 </state_ts>
 
 <tools_index_ts>

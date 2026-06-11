@@ -12,6 +12,7 @@ Also read when applicable:
 - `references/identity-patterns.md` — if the tool is pre-authenticated / doesn't collect identity.
 - `references/read-tool-patterns.md` — if the tool is search / browse / history / analytics-heavy.
 - `references/data-analysis-pattern.md` — if the tool must answer open-ended aggregate questions (totals / group-by / top-N) over fetched data via an LLM-authored snippet (executor Pattern 9).
+- `references/sandbox-contract.md` — if the root `sandbox/` doesn't yet model every backend service this tool calls (you'll be extending it before the sandbox tests can run).
 </required_reading>
 
 <process>
@@ -38,7 +39,10 @@ For each action, capture:
 - **mutation?** — if yes: pick `soleStep` (strict alone) or `soleOnExecute` (propose may ride; execute alone); plus `requiresConfirmation` opts (`maxAttempts` default 3; `lockdown` default true — `ttlMs` exists but is currently inert, don't set it) if confirm-required
 - **lifecycle opts?** — if the action is part of a multi-turn flow: `startsFlow` / `endsFlow` / `requiresFlow`; OTP: `issuesOtp` / `requiresOtp`; double-entry: `startsMatchFor` / `requiresMatch`
 - **invalidatesOnChange?** — if the action writes an upstream slot that downstream journey state depends on (e.g. re-identifying a customer should drop the previously-selected card), declare which downstream slots to clear when that slot's value changes. The runner clears them automatically — don't re-clear in an executor. See `agent-step-api.md` `<invalidates_on_change>`.
-- **backend endpoints touched** — for the executor's implementation
+- **backend endpoints touched** — for the executor's implementation. Check each against the root
+  `sandbox/`: any endpoint the sandbox doesn't model yet goes on a "sandbox extensions" list in the
+  plan — it must be added (per `references/sandbox-contract.md`) before the tool's sandbox tests can
+  run. Never stub the backend in-process instead.
 
 Then derive:
 - **prereq verifiers** needed (one per unique prereq name; e.g. `customerVerified`, `accountVerified`)
@@ -81,6 +85,9 @@ Produce a single short markdown plan with these sections (concrete values, not p
 - TRANSFER_API_BASE_URL
 - ... + envelope/auth fields shared with cards
 
+## Sandbox extensions (only if any — endpoints the root sandbox/ doesn't model yet)
+- POST /accounts/fetchList — new accounts controller, envelope per backend spec
+
 ## Prompt edits
 - src/prompt.ts ACTIONS section: append accounts actions
 - MUTATION SAFETY: add transfer_funds if applicable
@@ -118,6 +125,15 @@ Then graph-level wiring:
 9. `src/state.ts` — add the per-tool state slots with explicit reducers (`awaitingInput` and `currentFlow` are already declared by the bootstrap; reuse them). Ensure `export type State = typeof AgentState.State;` is present — selectors and executors import it.
 10. `src/tools/index.ts` — register the new tool in the `tools` array
 11. `src/prompt.ts` — add ACTIONS block(s) and (if mutations exist) extend MUTATION SAFETY
+
+## Step 4a: Extend the sandbox (if the plan flagged sandbox extensions)
+
+If Step 2 found backend endpoints the root `sandbox/` doesn't model, add them now, per
+`references/sandbox-contract.md`: a controller per service mirroring the real backend's
+paths/payloads/envelopes/errors, reading the active sandbox from the `Sandbox-Id` header, backed by
+the sandbox's entity store so `PUT /sandbox/:id` JSON seeding reaches it. If there is no `sandbox/`
+at all (deferred at bootstrap), establish it first via the acquisition ladder — the sandbox tests in
+Step 4b cannot run without it.
 
 ## Step 4b: Scaffold the tool's tests
 
@@ -186,6 +202,7 @@ Ask the user if they want a commit. If yes, propose a single bundled commit cove
 Workflow complete when:
 - [ ] Plan was written and explicitly confirmed by the user
 - [ ] All files in Step 4 exist and typecheck clean
+- [ ] The sandbox models every backend endpoint the tool calls (Step 4a extensions applied if the plan flagged any)
 - [ ] The tool's tests exist (Step 4b): `tests/tool/_setup.ts` + seed, a sandbox test per action, a prompt-input test per routing decision, and both `FINDINGS.md` files
 - [ ] Runner unit tests still pass (zero failures)
 - [ ] `npm run test:sandbox` passes for the new tool (each test green, or any failure triaged as a `FINDING:` in `tests/tool/FINDINGS.md`)

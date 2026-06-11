@@ -231,7 +231,7 @@ interface PagedCache<Row> {
 }
 ```
 
-Host the slot as `pagedRead: PagedCache<unknown> | null` (it's in the bootstrap state template, alongside `awaitingInput` / `currentFlow`).
+The host gets the `pagedRead: PagedCache<unknown> | null` slot (alongside `awaitingInput` / `currentFlow`) by spreading `agentStepStateSpec` into its annotation and `agentStepZodShape` into its Zod schema — the bootstrap state template does this. The per-slot schemas (`AwaitingInputSchema`, `CurrentFlowSchema`, `PagedCacheSchema`) are individually exported from `index.ts` too.
 
 </types>
 

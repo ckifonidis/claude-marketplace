@@ -74,7 +74,7 @@ new template + a new import line in `tool-index.ts.template`).
 - `skills/create-tool/references/executor-patterns.md` — read vs mutation executor shapes; update when the executor signature or state-update shape changes.
 - `skills/create-tool/references/state-and-prompt-integration.md` — how `src/state.ts` / `src/prompt.ts` / `src/tools/index.ts` are patched; update if state wiring changes.
 - `skills/create-tool/references/data-analysis-pattern.md` — the analyze-action recipe; embeds the executor/selector/verifier shapes and the `DatasetSource` wiring.
-- (Other references — `identity-patterns.md`, `read-tool-patterns.md`, `input-formats.md`, `project-bootstrap-structure.md` — update only if their examples encode a changed signature.)
+- (Other references — `identity-patterns.md`, `read-tool-patterns.md`, `input-formats.md`, `project-bootstrap-structure.md`, `sandbox-contract.md` — update only if their examples encode a changed signature; `sandbox-contract.md` describes the local sandbox service, not the library, so a library bump rarely touches it.)
 
 **Touched by:** any change to the public API, the tool layout, or executor patterns.
 </tier>

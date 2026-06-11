@@ -1,6 +1,6 @@
 ---
 name: create-tool
-description: Bootstraps a new agent-step LangGraph project OR adds a tool to an existing one. For bootstrap, scaffolds the full project (package.json, tsconfig, graph.ts, state.ts, prompt.ts, CLI, Dockerfile, build_and_push.sh, and the agent-step library). For tools, builds src/tools/<name>/ from backend specs + a functionality description, wires state slots + prompt sections + tools/index. Use when starting a new agent project from scratch OR adding a domain tool to an existing project.
+description: Bootstraps a new agent-step LangGraph project OR adds a tool to an existing one. For bootstrap, scaffolds the full project (package.json, tsconfig, graph.ts, state.ts, prompt.ts, CLI, Dockerfile, build_and_push.sh, the agent-step library) and establishes the required root sandbox/ service (reused from a reference project, built from a Postman collection, or best-effort from specs). For tools, builds src/tools/<name>/ from backend specs + a functionality description, wires state slots + prompt sections + tools/index, and extends the sandbox for any backend the tool calls. Use when starting a new agent project from scratch, adding a domain tool to an existing project, or setting up/extending the project's local sandbox.
 ---
 
 <essential_principles>
@@ -28,7 +28,9 @@ This skill builds a new domain tool that plugs into the **existing** `src/agent-
 
 **9. Paradigm, not blueprint.** The bundled `templates/` (plus `templates/agent-step/`) and this skill's references are the ONLY structural source of truth. When you are handed an existing or reference project — especially in port mode — treat it strictly as a *domain spec* (what capabilities the tool must offer, which backend endpoints, which business rules, which identity model). Never inherit its file structure, abstractions, control flow, layering, or naming idioms verbatim. Re-derive the action surface, state slots, and wiring from the agent-step paradigm every time. A referenced project tells you *what*, never *how*.
 
-**10. Prereqs express journey progress; `invalidatesOnChange` keeps it coherent.** A prereq is a snapshot of *where the user is* in their journey — identity acquired, entity selected, flow open — not a record of which step ran first (that distinction is principle #8). You model journey state by adding a state slot plus the verifier predicate that gates on it. When an upstream slot changes mid-journey (the user re-identifies, or picks a different entity), declare `ActionDef.invalidatesOnChange` so stale downstream journey slots are cleared automatically — this is a library-provided option at your disposal, not something an executor hand-rolls. See the `<invalidates_on_change>` section of `agent-step-api.md`.
+**10. The sandbox is part of the deliverable.** Every project carries a `sandbox/` directory at its root: a standalone local API service mimicking the backend APIs the tools call (never AI resources — LLM endpoints and search indexes stay real). It exposes lifecycle CRUD at `POST/GET /sandbox` + `GET/PUT/DELETE /sandbox/:sandboxId` (POST accepts an optional `{ "sandboxId" }` body), isolates all domain endpoints by a required case-insensitive `Sandbox-Id` header, and supports seeding a sandbox's data model from JSON (`PUT /sandbox/:id`) — the seed-reset cycle the sandbox tests depend on. When bootstrapping or porting, acquire it best-effort: reuse a compliant one from the reference project, else adapt a near-miss, else build it from a Postman collection, else from specs. See `sandbox-contract.md`.
+
+**11. Prereqs express journey progress; `invalidatesOnChange` keeps it coherent.** A prereq is a snapshot of *where the user is* in their journey — identity acquired, entity selected, flow open — not a record of which step ran first (that distinction is principle #8). You model journey state by adding a state slot plus the verifier predicate that gates on it. When an upstream slot changes mid-journey (the user re-identifies, or picks a different entity), declare `ActionDef.invalidatesOnChange` so stale downstream journey slots are cleared automatically — this is a library-provided option at your disposal, not something an executor hand-rolls. See the `<invalidates_on_change>` section of `agent-step-api.md`.
 </essential_principles>
 
 <intake>
@@ -92,6 +94,15 @@ src/tools/<name>/tests/{tool,prompt-input}/FINDINGS.md
 ```
 The `test-agent-step` skill is the authority on HOW to use these (three layers, assertion boundaries, coverage bars, findings-not-flakes).
 
+**Local sandbox (required; see `sandbox-contract.md`):**
+```
+sandbox/                     # root-level standalone service mimicking the tools' backend APIs
+├── package.json             # self-contained; starts with one command
+├── src/                     # lifecycle CRUD (/sandbox) + domain controllers (Sandbox-Id header)
+└── seeds/                   # optional checked-in boot seeds; tests seed explicitly via PUT
+```
+The sandbox tests can't run without it. If a new tool calls a backend the sandbox doesn't model, extend the sandbox — never stub in-process.
+
 **Keeping journey state coherent:** when an action writes an upstream slot that downstream journey state depends on, declare `invalidatesOnChange` on that action (in `config.ts`) so the runner clears the stale downstream slots when the upstream value actually changes — don't re-clear them by hand in an executor. See the `<invalidates_on_change>` section of `agent-step-api.md`.
 
 **Reserved names — do NOT use as action names:** `abort_pending_input`.
@@ -111,6 +122,7 @@ All domain knowledge in `references/`:
 - **read-tool-patterns.md** — Read ergonomics: bounding result size, pagination, windowing/last-N, multi-source merge, reslice cache, and the retrieve-vs-analyze boundary. Read for search / browse / history / analytics tools.
 - **data-analysis-pattern.md** — The LLM-authored-compute pattern (executor Pattern 9): an analyze action takes a JS snippet param, the host runs it in a `node:vm` over the in-state datasets; single-source-of-truth datasets module feeding VM + prompt schema + live data block; the state-dependent prompt upgrade; security posture. Read when the tool answers open-ended aggregate questions (totals / group-by / top-N) over fetched data.
 - **project-bootstrap-structure.md** — Top-level project layout produced by the bootstrap workflow; what each scaffold file is for.
+- **sandbox-contract.md** — The required root `sandbox/` service: lifecycle CRUD (`/sandbox` routes), `Sandbox-Id` header isolation, mandatory JSON seeding for tests, the acquisition ladder (reference project → adapt → Postman → specs), APIs-only scope, compliance checklist.
 </reference_index>
 
 <workflows_index>

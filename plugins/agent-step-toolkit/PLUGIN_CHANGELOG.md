@@ -11,6 +11,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.8.0] — 2026-06-11
+
+The sandbox-contract release, shipping agent-step library **1.2.0**. Every project the toolkit
+produces now formally requires a root `sandbox/` service — a standalone local API mimicking the
+tools' backends (never AI resources) — and the skills now say what it is, how to acquire it, and
+when to extend it. Downstream projects adopt the library via `/pull-library` (additive; no
+transforms — with an optional cleanup to replace hand-rolled state slots with the library
+fragments).
+
+### Added
+- **`create-tool/references/sandbox-contract.md`** — the required sandbox: lifecycle CRUD at
+  `POST/GET /sandbox` + `GET/PUT/DELETE /sandbox/:sandboxId` (POST accepts an optional
+  `{"sandboxId"}` body), case-insensitive `Sandbox-Id` header isolation on every domain endpoint,
+  **mandatory JSON seeding** via PUT (what the test reset cycle depends on; boot-time default seeds
+  are an optional convenience), APIs-only scope, the best-effort acquisition ladder (reference
+  project → adapt a near-miss → Postman collection → specs), and a compliance checklist.
+- **Sandbox establishment/extension steps in all three create-tool workflows**: bootstrap intake
+  question + Step 6c (establish, or defer explicitly — never silently); port Step 1 sandbox
+  inventory + Step 2b (reusing the source's sandbox verbatim is the one sanctioned exception to
+  paradigm-not-blueprint); create-tool Step 2 endpoint check + plan "sandbox extensions" section +
+  Step 4a (extend the sandbox; never stub the backend in-process).
+- **`create-tool/SKILL.md` essential principle #10** — "the sandbox is part of the deliverable"
+  (previous #10 renumbered to #11; cross-references updated) — plus a quick-reference sandbox block;
+  the skill description now advertises sandbox setup/extension.
+
+### Changed
+- **Library 1.2.0** (CHANGELOG `[1.2.0]`, migration `1.1.1-to-1.2.0.md`): `PagedCacheSchema`
+  re-exported from `index.ts`, completing the library-managed slot-schema trio.
+- **`templates/project/state.ts.template`** now spreads `agentStepStateSpec` / `agentStepZodShape`
+  instead of hand-declaring the library-managed slots — what the library's own doc-comment mandates.
+  Verified against the template's pinned deps: typecheck clean, all 65 library unit tests pass.
+- **`state-and-prompt-integration.md`** and **`agent-step-api.md`** now teach the spread instead of
+  hand-declaration; **`test-agent-step/SKILL.md`** points its sandbox-enrichment rule and reference
+  list at the sandbox contract.
+
+### Fixed
+- **`pull-library` workflow:** the library-replacement `cp` omitted `paginate.ts` +
+  `paginate.test.ts` (silent file loss on any 0.1.0/1.0.0 → 1.1.x upgrade — the byte-for-byte
+  success criterion could never pass); the impossible `1.0.0-to-2.0.0.md` chain example replaced
+  with the real adjacent chain; the no-`VERSION` baseline explicitly named (`0.1.0`); the
+  post-migration test claim now accounts for the 1.1.0+ test-glob broadening.
+- **`project-bootstrap-structure.md`:** the `src/agent-step/` listing was missing `state.ts`, the
+  paginate files, and `VERSION`; now complete, with `sandbox/` added to the project layout.
+
 ## [0.7.0] — 2026-06-10
 
 Removed-skill release, inert for consumers: the maintainer-side `bump-version` skill moved out of

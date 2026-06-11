@@ -33,8 +33,12 @@ Ships three skills:
   existing project** onto agent-step (reading the source as a domain spec only).
   Covers read-tool patterns (native paginated reads via `pageable`) and the
   data-analysis pattern (an analyze action running LLM-authored snippets over
-  fetched data). The runner library and the config/scaffold templates travel with
-  the skill under `skills/create-tool/templates/`.
+  fetched data). Every project carries a root `sandbox/` service — a local mock of
+  the tools' backend APIs (lifecycle CRUD at `/sandbox`, `Sandbox-Id` header
+  isolation, JSON seeding for tests) acquired best-effort from a reference project,
+  a Postman collection, or specs (`references/sandbox-contract.md`). The runner
+  library and the config/scaffold templates travel with the skill under
+  `skills/create-tool/templates/`.
 - **`test-agent-step`** — the three-layer testing methodology for an agent-step
   action: runner unit tests (flow-controller mechanics, no backend/LLM), sandbox/tool
   tests (runner + executors against a local sandbox, no LLM), and prompt-input tests
