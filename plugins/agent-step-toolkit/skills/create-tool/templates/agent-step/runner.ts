@@ -47,7 +47,7 @@ import type {
   StepResult,
   RunnerResultBody,
 } from "./types.js";
-import type { AwaitingInput, CurrentFlow, LibraryManagedSlots } from "./state.js";
+import type { AwaitingInput, CurrentFlow, HandoffRequest, LibraryManagedSlots } from "./state.js";
 import {
   resolvePageable,
   applyPagination,
@@ -55,6 +55,12 @@ import {
   type ResolvedPageable,
   type PagedCache,
 } from "./paginate.js";
+import {
+  HANDOFF_ACTION,
+  HANDOFF_ACTION_DESCRIPTION,
+  handoffParamsSchema,
+  type HandoffSpec,
+} from "./handoff.js";
 
 /** Internal adapter shape for confirmation gating. The runner reads/writes the
  *  canonical `awaitingInput.kind === "confirmation"` slot; this struct is just
@@ -286,6 +292,12 @@ export interface BuildAgentStepToolOptions<
    *  selector produces fails to compile here, at the construction boundary. */
   executors: ExecutorRegistry<T, Selectors>;
   verifiers: VerifierRegistry<T>;
+  /** Opt into the library-managed handoff: auto-injects the built-in
+   *  `request_handoff` action (sole-step, no prereqs) whose only effect is
+   *  writing the `handoff` state slot. The slot is RESOLVED by the host
+   *  graph's handoff node (`createHandoffNode(spec)` from handoff.ts) — the
+   *  runner never performs the terminate/delegate I/O itself. */
+  handoff?: HandoffSpec<T>;
 }
 
 interface PlannedStep {
@@ -303,13 +315,21 @@ function validateConfig(opts: {
   selectors: Record<string, unknown>;
   executors: Record<string, unknown>;
   verifiers: Record<string, unknown>;
+  handoff?: unknown;
 }): void {
   const { config, selectors, executors, verifiers } = opts;
   const actionNames = Object.keys(config.actions);
-  if (actionNames.includes(ABORT_ACTION)) {
-    throw new Error(
-      `agent-step: "${ABORT_ACTION}" is a reserved action name auto-injected by the library; remove it from config.actions.`,
-    );
+  // `abort_pending_input` is always reserved. `request_handoff` is reserved
+  // ONLY when the library handoff is opted into — a tool that does NOT pass
+  // `handoff` may define its own action under that name (the scaffold
+  // tool-action mechanism predates the built-in and uses it).
+  const reservedNames = opts.handoff ? [ABORT_ACTION, HANDOFF_ACTION] : [ABORT_ACTION];
+  for (const reserved of reservedNames) {
+    if (actionNames.includes(reserved)) {
+      throw new Error(
+        `agent-step: "${reserved}" is a reserved action name auto-injected by the library; remove it from config.actions.`,
+      );
+    }
   }
   for (const a of actionNames) {
     const action = config.actions[a];
@@ -385,7 +405,7 @@ function effectiveParamsSchema(action: ActionDef<string>): z.ZodTypeAny {
   return (schema as z.ZodObject<z.ZodRawShape>).extend(PAGE_PARAMS);
 }
 
-function buildStepSchema(config: AnyConfig) {
+function buildStepSchema(config: AnyConfig, handoffEnabled: boolean) {
   const actionNames = Object.keys(config.actions);
   const stepVariants = actionNames.map((name) => {
     const action = config.actions[name];
@@ -400,6 +420,13 @@ function buildStepSchema(config: AnyConfig) {
         .describe(
           "Abort whatever the customer is currently being asked for (confirmation, OTP) and drop any active multi-turn flow. Idempotent — no-op when nothing is pending. Use when the customer pivots away from a pending confirmation/OTP or explicitly cancels the in-progress flow.",
         ) as (typeof stepVariants)[number],
+    );
+  }
+  if (handoffEnabled) {
+    stepVariants.push(
+      z
+        .object({ action: z.literal(HANDOFF_ACTION), params: handoffParamsSchema })
+        .describe(HANDOFF_ACTION_DESCRIPTION) as (typeof stepVariants)[number],
     );
   }
   const StepSchema =
@@ -423,7 +450,7 @@ function buildStepSchema(config: AnyConfig) {
 /** Compose the LangChain tool's `description` field from the config's lead
  *  paragraph plus a bulleted list of per-action summaries. The Zod schema
  *  carries the same per-action descriptions via `.describe()`. */
-function composeToolDescription(config: AnyConfig): string {
+function composeToolDescription(config: AnyConfig, handoffEnabled: boolean): string {
   const lead = config.tool.description.trim();
   const lines = [lead, "", "Actions:"];
   // Index of actions only. The full per-action mechanics (`description`) reach
@@ -439,6 +466,11 @@ function composeToolDescription(config: AnyConfig): string {
   if (hasAnyLifecycleOpt(config)) {
     lines.push(
       `- \`${ABORT_ACTION}\`: abort any pending confirmation/OTP and drop the active flow (idempotent).`,
+    );
+  }
+  if (handoffEnabled) {
+    lines.push(
+      `- \`${HANDOFF_ACTION}\`: hand the conversation off instead of answering (sole step, no prereqs).`,
     );
   }
   return lines.join("\n");
@@ -484,6 +516,7 @@ export async function runSteps<
   const config: AnyConfig = opts.config;
   const selectors: Record<string, AnySelector> = opts.selectors;
   const executors: Record<string, AnyExecutor> = opts.executors;
+  const handoffEnabled = opts.handoff != null;
   const mergeState = buildMergerFromAnnotation<T>(stateAnnotation);
 
   // `view` is the in-batch threaded snapshot: each step's `stateUpdate` folds
@@ -503,6 +536,7 @@ export async function runSteps<
   for (let i = 0; i < userSteps.length; i++) {
     const name = userSteps[i].action;
     if (name === ABORT_ACTION) continue;
+    if (name === HANDOFF_ACTION && handoffEnabled) continue;
     if (config.actions[name]) continue;
     const summary = `Unknown action "${name}".`;
     const body: RunnerResultBody = {
@@ -562,6 +596,9 @@ export async function runSteps<
         !!first &&
         (first.action === awaiting.for_action ||
           first.action === ABORT_ACTION ||
+          // A handoff abandons the conversation path entirely — it must work
+          // even while a confirmation/OTP/match is pending.
+          (handoffEnabled && first.action === HANDOFF_ACTION) ||
           (capturer !== null && first.action === capturer));
       if (!allowed) {
         const errorCode =
@@ -612,6 +649,29 @@ export async function runSteps<
             summary,
             error: "flow_already_active",
             active_flow: currentFlow.name,
+          },
+        ],
+        failed_at: 0,
+      };
+      return { body, committed };
+    }
+  }
+
+  // ─── Handoff exclusivity: `request_handoff` abandons the turn, so a batch
+  //     mixing it with anything else is incoherent (`[list_x, request_handoff]`
+  //     would half-execute work whose result nobody will see). Refuse.
+  if (handoffEnabled && userSteps.length > 1) {
+    const handoffIdx = userSteps.findIndex((s) => s.action === HANDOFF_ACTION);
+    if (handoffIdx >= 0) {
+      const summary = `"${HANDOFF_ACTION}" must be the only step in the batch.`;
+      const body: RunnerResultBody = {
+        summary,
+        results: [
+          {
+            action: HANDOFF_ACTION,
+            ok: false,
+            summary,
+            error: "handoff_must_be_sole_step",
           },
         ],
         failed_at: 0,
@@ -704,8 +764,8 @@ export async function runSteps<
   //     wrapping — read-back verification (if any) is the executor's concern.
   const planned: ConfirmAwarePlannedStep[] = [];
   for (const s of userSteps) {
-    if (s.action === ABORT_ACTION) {
-      planned.push({ action: ABORT_ACTION, params: s.params });
+    if (s.action === ABORT_ACTION || (handoffEnabled && s.action === HANDOFF_ACTION)) {
+      planned.push({ action: s.action, params: s.params });
       continue;
     }
     const m = config.actions[s.action]?.controller;
@@ -780,6 +840,50 @@ export async function runSteps<
       }
       results.push(entry);
       lastSummary = entry.summary as string;
+      continue;
+    }
+
+    // ─── Handoff action (library-handled, no user executor). Pure slot write:
+    //     validate params, patch the library-managed `handoff` slot, return ok.
+    //     No prereqs by design — "transfer me" must work before any data is
+    //     loaded. The host graph's handoff node resolves the slot after the
+    //     batch commits (event emission + terminate/delegate I/O live there;
+    //     the runner stays side-effect-free).
+    if (handoffEnabled && step.action === HANDOFF_ACTION) {
+      let params: HandoffRequest;
+      try {
+        params = handoffParamsSchema.parse(step.params);
+      } catch (err) {
+        const message =
+          err instanceof z.ZodError
+            ? err.issues.map((iss) => iss.message).join("; ")
+            : String(err);
+        const entry: StepResult = {
+          action: HANDOFF_ACTION,
+          ok: false,
+          summary: `Invalid params for "${HANDOFF_ACTION}": ${message}`,
+          error: "invalid_params",
+        };
+        results.push(entry);
+        lastSummary = entry.summary as string;
+        failedAt = results.length - 1;
+        break;
+      }
+      const patch = {
+        handoff: { reason: params.reason, context: params.context },
+      } as Partial<T>;
+      view = mergeState(view, patch);
+      committed = mergeState(committed, patch);
+      const summary = `Handoff requested (${params.reason}). The turn ends here — produce no further answer.`;
+      const entry: StepResult = {
+        action: HANDOFF_ACTION,
+        ok: true,
+        summary,
+        handoff_requested: true,
+        reason: params.reason,
+      };
+      results.push(entry);
+      lastSummary = summary;
       continue;
     }
 
@@ -1315,7 +1419,7 @@ export function buildAgentStepTool<
   Selectors extends Record<ActionName, Selector<T>>,
 >(opts: BuildAgentStepToolOptions<T, ActionName, PrereqName, Selectors>) {
   validateConfig(opts);
-  const InputSchema = buildStepSchema(opts.config);
+  const InputSchema = buildStepSchema(opts.config, opts.handoff != null);
 
   return tool(
     async (
@@ -1346,7 +1450,7 @@ export function buildAgentStepTool<
     },
     {
       name: opts.config.tool.name,
-      description: composeToolDescription(opts.config),
+      description: composeToolDescription(opts.config, opts.handoff != null),
       schema: InputSchema,
     },
   );

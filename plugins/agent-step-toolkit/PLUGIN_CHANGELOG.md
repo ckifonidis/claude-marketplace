@@ -11,6 +11,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.11.0] — 2026-06-12
+
+The library-handoff release, shipping agent-step library **1.3.0** (downstream projects adopt via
+`/pull-library` — additive; one transform for hand-rolled state literals). The specialized agent's
+off-topic plays become library infrastructure: opt into `buildAgentStepTool({ handoff })` and the
+runner auto-injects the reserved `request_handoff` action (sole-step, no prereqs,
+lockdown-bypassing) writing the new library-managed `handoff` slot; the host graph resolves it
+with `createHandoffNode(spec)` — **terminate** mode emits the OFF_TOPIC handback kwargs with the
+envelope as `success_message`, **delegate** mode routes the turn to another LangGraph deployment
+with live token pass-through and KEEPS the conversation (its final message is not a handoff).
+`request_handoff` is reserved only while the opt is provided — an orchestrator's scaffold tool
+action may keep that name (verified against the reference orchestrator implementation).
+
+### Added
+- **agent-step library 1.3.0** (`templates/agent-step/`): `handoff.ts` + `handoff.test.ts`
+  (`HandoffSpec`, `createHandoffNode`, `handoffRequested`, `HANDOFF_ACTION` / `HANDOFF_NODE` /
+  `HANDBACK_SIGNALS`, the Platform-API delegate client with `replyNode` token filtering), the
+  optional `BuildAgentStepToolOptions.handoff`, the library-managed `handoff` slot, control-plane
+  custom events (`handoff`, `delegated_token`, `handoff_complete`, `delegated_restart`). Suite
+  grows 65 → 76. See `CHANGELOG.md` 1.3.0 + `migrations/1.2.0-to-1.3.0.md`.
+- **`agent-step-api.md` `<handoff>` section** — the opt-in spec, reserved-name rules, exclusivity
+  (`handoff_must_be_sole_step`), graph wiring, kwargs contract, custom events.
+- `streaming-and-channel-contract.md` — **two mechanisms, one kwargs contract** (scaffold tool
+  action vs library built-in), the delegate play in the specialized agent's off-topic policy, and
+  middleware checklist item 8 (`"custom"` stream mode; never route on `delegated_to`-only
+  messages).
+
+### Changed
+- create-tool workflow step 6c picks the handoff mechanism by role: orchestrator → scaffold
+  catalog action; specialized → the library built-in (scaffold handback action remains the
+  `createReactAgent` fallback).
+- SKILL principle #12, reserved-names convention, slot lists, bootstrap copy list (+2 library
+  files), and the library test-count claim (65 → 76) updated.
+
+### Fixed
+- `project-bootstrap-structure.md`: the library file list was missing the 1.1.0 paginate files,
+  and the channel wire-contract slots were described under the library `state.ts` instead of the
+  project scaffold's.
+
 ## [0.10.0] — 2026-06-12
 
 The agent-roles release (library unchanged at **1.2.0**; `/pull-library` not needed). Agents are

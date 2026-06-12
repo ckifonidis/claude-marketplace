@@ -76,6 +76,26 @@ export type AwaitingInput = z.infer<typeof AwaitingInputSchema>;
  *  {@link CurrentFlowSchema}. */
 export type CurrentFlow = z.infer<typeof CurrentFlowSchema>;
 
+/** Schema for the library-managed `handoff` slot — set by the built-in
+ *  `request_handoff` action (enabled via `BuildAgentStepToolOptions.handoff`)
+ *  and consumed by the graph-level handoff node (`createHandoffNode`), which
+ *  resolves it (terminate envelope or delegate run), appends the final
+ *  AIMessage, and clears the slot. Non-null means "this turn must end in a
+ *  handoff instead of a model answer" — the host graph's conditional edge
+ *  after the tool node checks it (see `handoffRequested`). */
+export const HandoffRequestSchema = z.object({
+  /** Why the conversation is being handed off. Only `off_topic` for now —
+   *  the enum is the extension point for future reasons. */
+  reason: z.enum(["off_topic"]),
+  /** The customer's request — verbatim or tightly summarized, in the
+   *  customer's language. This is what the receiving agent sees. */
+  context: z.string(),
+});
+
+/** A pending handoff request, or `null`. Inferred from
+ *  {@link HandoffRequestSchema}. */
+export type HandoffRequest = z.infer<typeof HandoffRequestSchema>;
+
 /** Schema for the library-managed `pagedRead` slot — the reslice cache for
  *  `pageable: true` reads. The runner writes it (full set + query signature +
  *  the executor's non-`items` fields) on a cache miss and re-pages from it on a
@@ -94,6 +114,7 @@ export interface LibraryManagedSlots {
   awaitingInput?: AwaitingInput | null;
   currentFlow?: CurrentFlow | null;
   pagedRead?: PagedCache<unknown> | null;
+  handoff?: HandoffRequest | null;
 }
 
 const replaceNull = <T>() => ({
@@ -117,6 +138,7 @@ export const agentStepStateSpec = {
   awaitingInput: Annotation<AwaitingInput | null>(replaceNull<AwaitingInput>()),
   currentFlow: Annotation<CurrentFlow | null>(replaceNull<CurrentFlow>()),
   pagedRead: Annotation<PagedCache<unknown> | null>(replaceNull<PagedCache<unknown>>()),
+  handoff: Annotation<HandoffRequest | null>(replaceNull<HandoffRequest>()),
 };
 
 /** Zod shape fragment for the library-managed slots. Spread into the
@@ -134,4 +156,5 @@ export const agentStepZodShape = {
   awaitingInput: AwaitingInputSchema.nullable().optional().default(null),
   currentFlow: CurrentFlowSchema.nullable().optional().default(null),
   pagedRead: PagedCacheSchema.nullable().optional().default(null),
+  handoff: HandoffRequestSchema.nullable().optional().default(null),
 };

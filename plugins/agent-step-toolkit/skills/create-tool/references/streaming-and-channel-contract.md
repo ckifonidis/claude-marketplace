@@ -116,16 +116,35 @@ service catalog and the prompt policy differ.
 | `ABANDON` | the user gave up or declined to continue | the user bails out of the flow |
 | `OFF_TOPIC` | the utterance is outside this agent's specialty | a substantive topic change the agent won't absorb |
 
-- **Off-topic policy** (two plays, in order of preference): (1) **absorb the aside** — answer
-  briefly from general knowledge, steer back to the task, keep the conversation; (2) **signal
-  `OFF_TOPIC`** — hand the conversation back for re-routing when the user has genuinely
-  changed topic. (A deeper delegation mechanism — routing a single turn to a general agent
-  while keeping ownership — is NOT part of this contract yet.)
+- **Off-topic policy** (plays in order of preference): (1) **absorb the aside** — answer
+  briefly from general knowledge, steer back to the task, keep the conversation; (2)
+  **delegate the turn** — route the off-topic utterance to a general/knowledge agent and pass
+  its answer through while KEEPING the conversation (the library handoff's delegate mode);
+  (3) **signal `OFF_TOPIC`** — hand the conversation back for re-routing when the user has
+  genuinely changed topic.
 
-On the wire a handback is an ordinary handoff: the handback executor writes `pendingHandoff`
-with `serviceType` set to the signal (`COMPLETED` / `ABANDON` / `OFF_TOPIC`) and the
-post-model hook stamps it as `handoff_type` on the final reply. The three signal names are
-part of the shared vocabulary agreed with the middleware developers.
+### Two mechanisms, one kwargs contract
+
+- **Scaffold tool action** (orchestrator outbound routing; Sofia-style): a per-tool handoff
+  executor writes the scaffold `pendingHandoff` slot; the bootstrap `agent.ts` post-model
+  hook stamps the kwargs onto the final LLM reply — the agent SPEAKS the transition
+  (token-streamed success message), then the middleware transfers.
+- **Library built-in** (specialized agents; agent-step ≥ 1.3.0): opt into
+  `buildAgentStepTool({ handoff })` — the runner auto-injects the reserved `request_handoff`
+  action (sole-step, no prereqs, lockdown-bypassing) writing the library `handoff` slot; the
+  host graph's `createHandoffNode(spec)` resolves it ATOMICALLY (node-built final message, no
+  second LLM pass): terminate mode emits the OFF_TOPIC handback kwargs with the envelope as
+  `success_message`; delegate mode calls the delegate deployment directly and keeps the
+  conversation — its final message is NOT a handoff (no `is_handoff`; informational
+  `delegated_to` only). Requires a hand-rolled graph (conditional edge — `createReactAgent`
+  can't express it) and clients/middleware streaming `["messages-tuple", "custom"]` for the
+  control-plane events (`handoff`, `delegated_token`, `handoff_complete`). See
+  `agent-step-api.md` `<handoff>`.
+
+Both mechanisms emit the SAME `additional_kwargs` contract above — signal (or target) in
+`handoff_type`, spoken/envelope text in `handoff_metadata.success_message`. The signal names
+(`HANDBACK_SIGNALS` in the library: `off_topic` → `"OFF_TOPIC"`) are part of the shared
+vocabulary agreed with the middleware developers.
 </agent_roles>
 
 <streaming_facts>
@@ -195,6 +214,13 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
    cutting the stream there truncates the spoken transition mid-sentence. The
    `post_model_hook` update arrives after the full reply has streamed; that is the correct
    trigger.
+8. **Library-handoff agents (agent-step ≥ 1.3.0).** For agents using the library built-in:
+   add `"custom"` to the stream modes — the resolver node's final message never appears in
+   the token stream; `handoff_complete` carries its text, and delegate-mode reply tokens
+   arrive as `delegated_token` events. Detect the handback in the `resolve_handoff` node's
+   `updates` delta. And do NOT route on a `delegated_to`-only final message — no
+   `is_handoff` means the conversation STAYS with the agent (the delegate answered through
+   it).
 </middleware_requirements>
 
 <testing>

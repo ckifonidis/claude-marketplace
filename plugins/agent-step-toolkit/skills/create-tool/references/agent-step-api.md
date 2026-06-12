@@ -14,6 +14,7 @@ export const myTool = buildAgentStepTool({
   selectors,                       // SelectorRegistry<T, ActionName> — one per action
   executors,                       // ExecutorRegistry<T, typeof selectors>
   verifiers,                       // VerifierRegistry<T>
+  handoff: handoffSpec,            // OPTIONAL — opt into the built-in request_handoff (see <handoff>)
 });
 ```
 
@@ -231,7 +232,18 @@ interface PagedCache<Row> {
 }
 ```
 
-The host gets the `pagedRead: PagedCache<unknown> | null` slot (alongside `awaitingInput` / `currentFlow`) by spreading `agentStepStateSpec` into its annotation and `agentStepZodShape` into its Zod schema — the bootstrap state template does this. The per-slot schemas (`AwaitingInputSchema`, `CurrentFlowSchema`, `PagedCacheSchema`) are individually exported from `index.ts` too.
+The host gets the `pagedRead: PagedCache<unknown> | null` slot (alongside `awaitingInput` / `currentFlow`) by spreading `agentStepStateSpec` into its annotation and `agentStepZodShape` into its Zod schema — the bootstrap state template does this. The per-slot schemas (`AwaitingInputSchema`, `CurrentFlowSchema`, `PagedCacheSchema`, `HandoffRequestSchema`) are individually exported from `index.ts` too.
+
+## HandoffRequest (library-managed)
+
+The pending channel-handoff request, written by the built-in `request_handoff` action (only available when the tool opted in via `BuildAgentStepToolOptions.handoff`) and resolved — then cleared — by the host graph's `createHandoffNode(spec)` node. `null` otherwise; rides `agentStepStateSpec` / `agentStepZodShape` like the other slots. See `<handoff>`.
+
+```ts
+interface HandoffRequest {
+  reason: "off_topic";   // the enum is the extension point (completed / abandon are planned)
+  context: string;       // the customer's request — verbatim or tightly summarized, in their language
+}
+```
 
 </types>
 
@@ -267,15 +279,15 @@ A prereq name in `ActionDef.prereqs` (e.g. `"customerVerified"`) is the same key
 agent-step: action "verify_card" lists prereq "customerVerified" but verifiers["customerVerified"] was not provided.
 ```
 
-## 3. Reserved action name
+## 3. Reserved action names
 
-`abort_pending_input` is reserved. The library auto-injects it into the tool schema whenever ANY action declares one of: `requiresConfirmation`, `requiresOtp`, `issuesOtp`, `startsFlow`, `endsFlow`, `requiresFlow`, `requiresMatch`, `startsMatchFor`. Trying to declare it manually throws:
+`abort_pending_input` is ALWAYS reserved — the library auto-injects it into the tool schema whenever ANY action declares one of: `requiresConfirmation`, `requiresOtp`, `issuesOtp`, `startsFlow`, `endsFlow`, `requiresFlow`, `requiresMatch`, `startsMatchFor`. `request_handoff` is reserved ONLY when `BuildAgentStepToolOptions.handoff` is provided (see `<handoff>`) — a tool that does NOT opt in may define its own action under that name (the orchestrator/scaffold handoff mechanism does exactly that). Declaring a reserved name throws:
 
 ```
-agent-step: "abort_pending_input" is a reserved action name auto-injected by the library; remove it from config.actions.
+agent-step: "<name>" is a reserved action name auto-injected by the library; remove it from config.actions.
 ```
 
-The action is idempotent — it clears `awaitingInput` AND `currentFlow` together. No-op when nothing is active.
+`abort_pending_input` is idempotent — it clears `awaitingInput` AND `currentFlow` together. No-op when nothing is active.
 
 ## 4. Per-action description is required
 
@@ -440,6 +452,39 @@ The executor's other `resultBody` fields (e.g. `summary`) are preserved on every
 **Primitives** (exported from `index.ts`, for hand-rolled cases — the runner uses them internally): `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE`, `clampPageSize`, `querySignature`, `pageRows`, `buildPageEnvelope`, and types `PageEnvelope`, `PagedCache`, `PageableSpec`. Prefer the `pageable` opt over hand-rolling.
 </pagination>
 
+<handoff>
+## Library-coordinated channel handoff (`BuildAgentStepToolOptions.handoff`)
+
+Opt-in machinery for a SPECIALIZED agent's off-topic plays (see `streaming-and-channel-contract.md` `<agent_roles>`): delegate the turn to another deployment and keep the conversation, or hand the conversation back. Two cooperating halves — the runner writes a slot; a host graph node resolves it.
+
+### Runner half (opt-in)
+
+Pass `handoff: HandoffSpec<T>` to `buildAgentStepTool`. The runner then:
+
+- Auto-injects the reserved **`request_handoff`** action into the tool schema (with the opt provided, declaring it in `config.actions` throws; WITHOUT the opt the name is free — the orchestrator/scaffold mechanism uses it for its own action). Params = `HandoffRequestSchema`: `{ reason: "off_topic", context }`.
+- Handles the action internally in `runSteps` as a **pure slot write** — validates params, patches the `handoff` slot into view + committed state, returns an ok result telling the model the turn ends here. No I/O in the runner.
+- Enforces **exclusivity**: batched with anything else ⇒ the whole batch is refused with `error: "handoff_must_be_sole_step"`, nothing executes.
+- **No prereqs**, and allowed as the first step under input lockdown (pending confirmation / OTP / match) — "transfer me" must work before any data is loaded and cannot be blocked by a pending gate.
+
+### Graph half (`createHandoffNode`)
+
+```ts
+interface HandoffSpec<T> {
+  offTopic: { mode: "terminate" }
+          | { mode: "delegate"; url: string; assistantId: string;
+              replyNode?: string; timeoutMs?: number; headers?: Record<string, string> };
+  terminateMessage: string;          // spoken envelope; also the delegate-failure fallback
+  delegateInput?: (state: T, request: HandoffRequest) => Record<string, unknown>;
+}
+```
+
+Exports: `HANDOFF_ACTION` (`"request_handoff"`), `HANDOFF_NODE` (`"resolve_handoff"` — a node can't be named `handoff`, the state channel claims it), `HANDBACK_SIGNALS` (reason → `handoff_type` signal: `off_topic` → `"OFF_TOPIC"`), `handoffParamsSchema`, `handoffRequested(state)` (edge predicate), `createHandoffNode(spec)`.
+
+Wire a conditional edge after the tool node — `createReactAgent` cannot express it, so the graph is hand-rolled: `addConditionalEdges("tools", s => handoffRequested(s) ? HANDOFF_NODE : "agent")`, `addNode(HANDOFF_NODE, createHandoffNode(spec))`, `addEdge(HANDOFF_NODE, END)`. The node emits a `handoff` custom event FIRST (streaming clients abort TTS / reroute before any content), resolves the response (terminate envelope, or a delegate run over the Platform API with live `delegated_token` pass-through and a behavioral fallback to the envelope on failure), emits `handoff_complete`, and returns `{ handoff: null, messages: [AIMessage] }` — the model never paraphrases the result.
+
+**Final-message kwargs** (the channel contract): terminate / fallback → the OFF_TOPIC handback (`is_handoff: true`, `handoff_type: "OFF_TOPIC"`, `handoff_reason` = the customer's request, `handoff_metadata: { service_type, success_message }`); delegate success → NOT a handoff (conversation kept) — informational `{ delegated_to }` only. Streaming clients must request `stream_mode: ["messages-tuple", "custom"]` — the node-built final message never appears in the token stream; `handoff_complete` carries its text. Full wire details + the middleware checklist: `streaming-and-channel-contract.md`.
+</handoff>
+
 <result_envelope>
 ## What the LLM sees per tool call
 
@@ -470,7 +515,7 @@ The runner validates the config + registries at construction. These all throw at
 
 | Error message contains | Cause |
 |------------------------|-------|
-| `is a reserved action name` | You declared `abort_pending_input` in config.actions |
+| `is a reserved action name` | You declared `abort_pending_input` in config.actions (or `request_handoff` while the `handoff` opt is provided) |
 | `expects a state selector at selectors["xxx"]` | `selectors` registry missing the action-name key for an action |
 | `expects an executor at executors["xxx"]` | `executors` registry missing the action-name key for an action |
 | `is missing a non-empty description` | An action lacks `description` |
@@ -487,7 +532,7 @@ Runtime errors raised by the runner (not construction-time, but loud):
 | `reported lifecycle.issuesOtp but config lacks issuesOtp opt` | Executor returned the lifecycle signal but mutation config didn't declare `issuesOtp` |
 | `declares startsMatchFor "X" but that consumer doesn't declare requiresMatch` | Capturer / consumer mismatch |
 
-The runner does NOT validate at runtime that you declared `awaitingInput` / `currentFlow` / `pagedRead` in state when using the lifecycle / pagination opts. If you forget, the runner will write a patch to a non-existent slot and the library-managed gates will silently misbehave. Always add all three slots — they're already in the bootstrap state template.
+The runner does NOT validate at runtime that you declared `awaitingInput` / `currentFlow` / `pagedRead` / `handoff` in state when using the lifecycle / pagination / handoff opts. If you forget, the runner will write a patch to a non-existent slot and the library-managed gates will silently misbehave. Always add all four slots — spreading `agentStepStateSpec` / `agentStepZodShape` (as the bootstrap state template does) brings them in together.
 </construction_time_checks>
 
 <key_files_to_inspect>
@@ -496,6 +541,7 @@ For ground truth, read these files in the project (don't paraphrase — they ARE
 - `src/agent-step/types.ts` — every type listed above
 - `src/agent-step/runner.ts` — the runtime; especially `validateConfig`, `runSteps`, the selector→executor dispatch (`selectors[action](view)` → `executors[action]`), `buildMergerFromAnnotation`, lockdown handling, lifecycle ordering
 - `src/agent-step/paginate.ts` — the read-pagination primitives + the `pageable` orchestration the runner uses (self / delegate, the cache, the envelope)
+- `src/agent-step/handoff.ts` — the handoff spec/types, `createHandoffNode` (terminate / delegate resolution, custom events, the kwargs contract), `handoffRequested`, `HANDBACK_SIGNALS`
 - `src/agent-step/index.ts` — what's exported (only what's here is part of the API)
-- `src/agent-step/runner.test.ts` + `src/agent-step/paginate.test.ts` — worked examples covering every runner branch + the pagination primitives; all pass on `npm test`
+- `src/agent-step/runner.test.ts` + `src/agent-step/paginate.test.ts` + `src/agent-step/handoff.test.ts` — worked examples covering every runner branch, the pagination primitives, and the handoff machinery; all pass on `npm test`
 </key_files_to_inspect>

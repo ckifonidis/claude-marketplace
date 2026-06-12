@@ -12,6 +12,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [1.3.0] — 2026-06-12
+
+Additive: **library-coordinated channel handoff** for specialized agents. Opt in via
+`buildAgentStepTool({ handoff: spec })` — the runner auto-injects the reserved
+`request_handoff` action (sole-step, no prereqs, lockdown-bypassing; pure write of the new
+library-managed `handoff` slot), and the host graph resolves it with `createHandoffNode(spec)`
+behind a `handoffRequested` conditional edge: **terminate** mode emits the OFF_TOPIC handback
+`additional_kwargs` with the envelope as `success_message`; **delegate** mode calls another
+LangGraph deployment over the Platform API (fetch+SSE, `replyNode` token filtering for voice,
+behavioral fallback to the envelope) and KEEPS the conversation — its final message is not a
+handoff (informational `delegated_to` only). Control-plane custom events (`handoff`,
+`delegated_token`, `handoff_complete`, `delegated_restart`) for streaming clients
+(`stream_mode: ["messages-tuple", "custom"]`). Hosts spreading
+`agentStepStateSpec` / `agentStepZodShape` get the `handoff` slot for free. Test suite grows
+65 → 76. Migration: [migrations/1.2.0-to-1.3.0.md](migrations/1.2.0-to-1.3.0.md).
+
+### Added
+- `handoff.ts` + `handoff.test.ts` — `HandoffSpec` / `HandoffOffTopicSpec` /
+  `HandoffDelegateTarget`, `createHandoffNode`, `handoffRequested`, `HANDOFF_ACTION`,
+  `HANDOFF_NODE`, `HANDOFF_ACTION_DESCRIPTION`, `handoffParamsSchema`, `HANDBACK_SIGNALS`
+  (reason → `handoff_type` signal; `off_topic` → `"OFF_TOPIC"`, the extension point for
+  `completed` / `abandon`).
+- `BuildAgentStepToolOptions.handoff?` (optional) — auto-injects `request_handoff`; the name
+  is reserved ONLY while the opt is provided (a tool without the opt may define its own
+  `request_handoff` action — the orchestrator/scaffold mechanism does). Batches containing
+  the built-in plus anything else are refused whole with
+  `error: "handoff_must_be_sole_step"`.
+- Library-managed `handoff: HandoffRequest | null` slot — `HandoffRequestSchema` exported,
+  included in `agentStepStateSpec` / `agentStepZodShape` / `LibraryManagedSlots`.
+
 ## [1.2.0] — 2026-06-11
 
 Additive: `PagedCacheSchema` is now re-exported from `index.ts`, completing the library-managed

@@ -17,8 +17,8 @@ import { agentStepStateSpec, agentStepZodShape } from "./agent-step/index.js";
 export const AgentState = Annotation.Root({
   ...MessagesAnnotation.spec,
 
-  // Library-managed slots: awaitingInput + currentFlow + pagedRead, with the
-  // last-writer-wins reducers the runner expects.
+  // Library-managed slots: awaitingInput + currentFlow + pagedRead + handoff,
+  // with the last-writer-wins reducers the runner expects.
   ...agentStepStateSpec,
 
   // ─── Channel wire contract (fronting channel middleware) ────────────── //

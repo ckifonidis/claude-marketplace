@@ -24,10 +24,31 @@ export {
   AwaitingInputSchema,
   CurrentFlowSchema,
   PagedCacheSchema,
+  HandoffRequestSchema,
   agentStepStateSpec,
   agentStepZodShape,
 } from "./state.js";
-export type { AwaitingInput, CurrentFlow, LibraryManagedSlots } from "./state.js";
+export type { AwaitingInput, CurrentFlow, HandoffRequest, LibraryManagedSlots } from "./state.js";
+
+// Handoff: the built-in `request_handoff` action is auto-injected by the
+// runner when `BuildAgentStepToolOptions.handoff` is provided (it only writes
+// the `handoff` slot). The host graph resolves the slot with a node built by
+// `createHandoffNode(spec)`, wired after the tool node behind the
+// `handoffRequested` edge predicate, with a direct edge to END.
+export {
+  HANDOFF_ACTION,
+  HANDOFF_NODE,
+  HANDOFF_ACTION_DESCRIPTION,
+  HANDBACK_SIGNALS,
+  handoffParamsSchema,
+  handoffRequested,
+  createHandoffNode,
+} from "./handoff.js";
+export type {
+  HandoffSpec,
+  HandoffOffTopicSpec,
+  HandoffDelegateTarget,
+} from "./handoff.js";
 
 // Read-pagination primitives. Pure, domain-agnostic helpers for tool read
 // executors — the runner does not use them. A tool's list reads use these to

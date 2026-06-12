@@ -25,6 +25,8 @@ The embedded runner. Replaced byte-for-byte from the new source; never hand-merg
 - `skills/create-tool/templates/agent-step/runner.test.ts`
 - `skills/create-tool/templates/agent-step/paginate.ts`
 - `skills/create-tool/templates/agent-step/paginate.test.ts`
+- `skills/create-tool/templates/agent-step/handoff.ts`
+- `skills/create-tool/templates/agent-step/handoff.test.ts`
 - `skills/create-tool/templates/agent-step/define-config.ts`
 - `skills/create-tool/templates/agent-step/index.ts`
 - `skills/create-tool/templates/agent-step/VERSION` — rewrite to the new version string.
