@@ -240,8 +240,10 @@ The pending channel-handoff request, written by the built-in `request_handoff` a
 
 ```ts
 interface HandoffRequest {
-  reason: "off_topic";   // the enum is the extension point (completed / abandon are planned)
-  context: string;       // the customer's request — verbatim or tightly summarized, in their language
+  reason: "off_topic" | "completed" | "abandon";
+  context: string;  // per-reason, never empty, always in the customer's language:
+                    // off_topic → the customer's request (verbatim or tightly summarized);
+                    // completed / abandon → the LLM-composed closing line the node speaks
 }
 ```
 
@@ -461,7 +463,7 @@ Opt-in machinery for a SPECIALIZED agent's off-topic plays (see `streaming-and-c
 
 Pass `handoff: HandoffSpec<T>` to `buildAgentStepTool`. The runner then:
 
-- Auto-injects the reserved **`request_handoff`** action into the tool schema (with the opt provided, declaring it in `config.actions` throws; WITHOUT the opt the name is free — the orchestrator/scaffold mechanism uses it for its own action). Params = `HandoffRequestSchema`: `{ reason: "off_topic", context }`.
+- Auto-injects the reserved **`request_handoff`** action into the tool schema (with the opt provided, declaring it in `config.actions` throws; WITHOUT the opt the name is free — the orchestrator/scaffold mechanism uses it for its own action). Params = `HandoffRequestSchema`: `{ reason: "off_topic" | "completed" | "abandon", context }` — `context` is the customer's request for `off_topic`, the LLM-composed closing line for `completed` / `abandon`.
 - Handles the action internally in `runSteps` as a **pure slot write** — validates params, patches the `handoff` slot into view + committed state, returns an ok result telling the model the turn ends here. No I/O in the runner.
 - Enforces **exclusivity**: batched with anything else ⇒ the whole batch is refused with `error: "handoff_must_be_sole_step"`, nothing executes.
 - **No prereqs**, and allowed as the first step under input lockdown (pending confirmation / OTP / match) — "transfer me" must work before any data is loaded and cannot be blocked by a pending gate.
@@ -478,11 +480,11 @@ interface HandoffSpec<T> {
 }
 ```
 
-Exports: `HANDOFF_ACTION` (`"request_handoff"`), `HANDOFF_NODE` (`"resolve_handoff"` — a node can't be named `handoff`, the state channel claims it), `HANDBACK_SIGNALS` (reason → `handoff_type` signal: `off_topic` → `"off_topic"`), `handoffParamsSchema`, `handoffRequested(state)` (edge predicate), `createHandoffNode(spec)`.
+Exports: `HANDOFF_ACTION` (`"request_handoff"`), `HANDOFF_NODE` (`"resolve_handoff"` — a node can't be named `handoff`, the state channel claims it), `HANDBACK_SIGNALS` (reason → `handoff_type` signal; identity over `off_topic` / `completed` / `abandon`), `handoffParamsSchema`, `handoffRequested(state)` (edge predicate), `createHandoffNode(spec)`.
 
 Wire a conditional edge after the tool node — `createReactAgent` cannot express it, so the graph is hand-rolled: `addConditionalEdges("tools", s => handoffRequested(s) ? HANDOFF_NODE : "agent")`, `addNode(HANDOFF_NODE, createHandoffNode(spec))`, `addEdge(HANDOFF_NODE, END)`. The node emits a `handoff` custom event FIRST (streaming clients abort TTS / reroute before any content), resolves the response (terminate envelope, or a delegate run over the Platform API with live `delegated_token` pass-through and a behavioral fallback to the envelope on failure), emits `handoff_complete`, and returns `{ handoff: null, messages: [AIMessage] }` — the model never paraphrases the result.
 
-**Final-message kwargs** (the channel contract): terminate / fallback → the off_topic handback (`is_handoff: true`, `handoff_type: "off_topic"`, `handoff_reason` = the customer's request, `handoff_metadata: { service_type, success_message }`); delegate success → NOT a handoff (conversation kept) — informational `{ delegated_to }` only. Streaming clients must request `stream_mode: ["messages-tuple", "custom"]` — the node-built final message never appears in the token stream; `handoff_complete` carries its text. Full wire details + the middleware checklist: `streaming-and-channel-contract.md`.
+**Final-message kwargs** (the channel contract): every non-delegate resolution is a handback — `is_handoff: true`, `handoff_type` = the reason's signal (`off_topic` / `completed` / `abandon`), `handoff_reason` = `context`, `handoff_metadata: { service_type, success_message }`. Spoken content: the `off_topic` envelope (`terminateMessage`, also the delegate-failure fallback) or the LLM-composed closing in `context` for `completed` / `abandon` (the middleware delivers it and flips routing for the NEXT request). Delegate success → NOT a handoff (conversation kept) — informational `{ delegated_to }` only. Streaming clients must request `stream_mode: ["messages-tuple", "custom"]` — the node-built final message never appears in the token stream; `handoff_complete` carries its text. Full wire details + the middleware checklist: `streaming-and-channel-contract.md`.
 </handoff>
 
 <result_envelope>

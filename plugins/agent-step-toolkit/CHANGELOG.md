@@ -12,6 +12,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [1.4.0] — 2026-06-12
+
+Additive: the built-in `request_handoff` now covers the **full handback signal set** —
+`HandoffRequest.reason` widens to `off_topic | completed | abandon` (`context` is per-reason:
+the customer's request for `off_topic`; the **LLM-composed closing line** for `completed` /
+`abandon`, which the resolver node delivers verbatim as the final reply — it may reference
+what was done, matching the middleware's passive handback semantics: reply delivered, routing
+flips for the next request). `completed` / `abandon` are terminate-only by nature (never
+delegated); `off_topic` keeps the fixed envelope / delegate run. `HANDBACK_SIGNALS` extends
+(identity, canonical lowercase). `context` now requires `min(1)`. Suite grows 76 → 79.
+Migration: [migrations/1.3.1-to-1.4.0.md](migrations/1.3.1-to-1.4.0.md).
+
+### Added
+- `HandoffRequest.reason`: `"completed"` / `"abandon"` accepted alongside `"off_topic"`;
+  `HANDBACK_SIGNALS` maps all three (identity).
+- Resolver: `completed` / `abandon` speak `request.context` (LLM-composed closing) with their
+  signal in `handoff_type`; the action description teaches all three reasons.
+
 ## [1.3.1] — 2026-06-12
 
 Fix: the handback signal emitted as `handoff_type` by `createHandoffNode` (terminate mode /

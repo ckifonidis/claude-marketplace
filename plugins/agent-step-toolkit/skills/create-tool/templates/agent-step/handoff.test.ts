@@ -251,6 +251,59 @@ test("handoff node (terminate) emits events, clears the slot, appends the envelo
   assert.equal((events[1] as { content: string }).content, "Transferring you now.");
 });
 
+test("handoff node (completed) speaks the LLM-composed closing with the completed signal", async () => {
+  const node = createHandoffNode<S>({
+    offTopic: { mode: "terminate" },
+    terminateMessage: "Transferring you now.",
+  });
+  const events: unknown[] = [];
+  const update = await node(
+    { handoff: { reason: "completed", context: "All done — your card is now active. Goodbye!" } },
+    nodeConfig(events),
+  );
+  assert.equal(update.handoff, null);
+  const [message] = update.messages as AIMessage[];
+  // The closing is the LLM-composed context, NOT the off_topic envelope.
+  assert.equal(message.content, "All done — your card is now active. Goodbye!");
+  assert.deepEqual(message.additional_kwargs, {
+    is_handoff: true,
+    handoff_type: "completed",
+    handoff_reason: "All done — your card is now active. Goodbye!",
+    handoff_metadata: {
+      service_type: "completed",
+      success_message: "All done — your card is now active. Goodbye!",
+    },
+  });
+});
+
+test("handoff node (abandon) speaks the acknowledgement with the abandon signal", async () => {
+  const node = createHandoffNode<S>({
+    offTopic: { mode: "terminate" },
+    terminateMessage: "Transferring you now.",
+  });
+  const update = await node(
+    { handoff: { reason: "abandon", context: "No problem, we can stop here." } },
+    nodeConfig([]),
+  );
+  const [message] = update.messages as AIMessage[];
+  assert.equal(message.content, "No problem, we can stop here.");
+  assert.equal(message.additional_kwargs.handoff_type, "abandon");
+  assert.equal(message.additional_kwargs.is_handoff, true);
+});
+
+test("request_handoff accepts the completed and abandon reasons (sole step)", async () => {
+  const { opts } = makeOpts(true);
+  for (const reason of ["completed", "abandon"] as const) {
+    const { body, committed } = await runSteps(
+      opts,
+      [{ action: HANDOFF_ACTION, params: { reason, context: "closing line" } }],
+      {} as S,
+    );
+    assert.equal(body.results[0].ok, true);
+    assert.deepEqual(committed.handoff, { reason, context: "closing line" });
+  }
+});
+
 test("handoff node is a no-op when no handoff is pending", async () => {
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },

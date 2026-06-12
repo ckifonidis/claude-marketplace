@@ -35,7 +35,7 @@ table in `<handoff_contract>` is lifted from it).
 ```
 
 - Field names are **snake_case** — the bootstrap `state.ts` declares `user_id`,
-  `customer_code`, `role` with preserve-initial reducers. Never rename them.
+  `customer_code`, `role`, and `channel` with preserve-initial reducers. Never rename them.
 - **Absent fields arrive as `undefined`, not `null`.** Any executor that copies identity
   into a schema-validated structure must coerce: `state.user_id ?? null`. (A live run died
   on exactly this before the guard existed.)
@@ -159,8 +159,10 @@ service catalog and the prompt policy differ.
   `buildAgentStepTool({ handoff })` — the runner auto-injects the reserved `request_handoff`
   action (sole-step, no prereqs, lockdown-bypassing) writing the library `handoff` slot; the
   host graph's `createHandoffNode(spec)` resolves it ATOMICALLY (node-built final message, no
-  second LLM pass): terminate mode emits the off_topic handback kwargs with the envelope as
-  `success_message`; delegate mode calls the delegate deployment directly and keeps the
+  second LLM pass): every non-delegate resolution emits the handback kwargs with the reason's
+  signal — `off_topic` speaks the fixed envelope (`terminateMessage`); `completed` / `abandon`
+  (agent-step ≥ 1.4.0) speak the LLM-composed closing carried in the request's `context` —
+  while delegate mode (off_topic only) calls the delegate deployment directly and keeps the
   conversation — its final message is NOT a handoff (no `is_handoff`; informational
   `delegated_to` only). Requires a hand-rolled graph (conditional edge — `createReactAgent`
   can't express it) and clients/middleware streaming `["messages-tuple", "custom"]` for the
@@ -169,7 +171,7 @@ service catalog and the prompt policy differ.
 
 Both mechanisms emit the SAME `additional_kwargs` contract above — signal (or target) in
 `handoff_type`, spoken/envelope text in `handoff_metadata.success_message`. The signal names
-(`HANDBACK_SIGNALS` in the library: `off_topic` → `"off_topic"`) are part of the shared
+(`HANDBACK_SIGNALS` in the library: identity over `off_topic` / `completed` / `abandon`) are part of the shared
 vocabulary agreed with the middleware developers.
 </agent_roles>
 

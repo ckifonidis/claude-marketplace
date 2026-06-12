@@ -84,12 +84,16 @@ export type CurrentFlow = z.infer<typeof CurrentFlowSchema>;
  *  handoff instead of a model answer" — the host graph's conditional edge
  *  after the tool node checks it (see `handoffRequested`). */
 export const HandoffRequestSchema = z.object({
-  /** Why the conversation is being handed off. Only `off_topic` for now —
-   *  the enum is the extension point for future reasons. */
-  reason: z.enum(["off_topic"]),
-  /** The customer's request — verbatim or tightly summarized, in the
-   *  customer's language. This is what the receiving agent sees. */
-  context: z.string(),
+  /** Why the conversation is being handed off: `off_topic` (the utterance is
+   *  outside this agent's specialty), `completed` (the delegated task is
+   *  wrapped up), or `abandon` (the user gave up / declined to continue). */
+  reason: z.enum(["off_topic", "completed", "abandon"]),
+  /** Per-reason payload, always in the customer's language, never empty.
+   *  off_topic → the customer's request, verbatim or tightly summarized
+   *  (what the receiving agent sees). completed / abandon → the closing line
+   *  the agent speaks (LLM-composed — it may reference what was done); the
+   *  resolver node delivers it as the final reply. */
+  context: z.string().min(1),
 });
 
 /** A pending handoff request, or `null`. Inferred from

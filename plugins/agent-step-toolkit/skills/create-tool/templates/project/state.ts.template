@@ -48,6 +48,14 @@ export const AgentState = Annotation.Root({
     default: () => [],
   }),
 
+  /** Client channel identifier, set by the caller at invoke (which surface the
+   *  conversation comes from); immutable once set. Read it for channel-gated
+   *  behavior and forward it in handoff/delegate payloads. */
+  channel: Annotation<string | null>({
+    reducer: (prev, next) => prev ?? next,
+    default: () => null,
+  }),
+
   /** Channel-handoff signal: written by a tool's handoff executor when the
    *  caller must be transferred to another service/agent; the post-model hook
    *  in agent.ts copies it onto the final reply as the `additional_kwargs`
@@ -104,6 +112,7 @@ export const AgentStateSchema: z.ZodObject<any> = MessagesZodState.extend({
   user_id: z.string().nullable().optional().default(null),
   customer_code: z.string().nullable().optional().default(null),
   role: z.array(z.string()).optional().default([]),
+  channel: z.string().nullable().optional().default(null),
   pendingHandoff: PendingHandoffSchema.nullable().optional().default(null),
   // Mirror per-tool slots here as they get added.
 });

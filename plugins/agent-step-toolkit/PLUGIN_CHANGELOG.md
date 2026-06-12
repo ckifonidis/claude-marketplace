@@ -11,6 +11,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.13.0] — 2026-06-12
+
+The full-handback release, shipping agent-step library **1.4.0** (additive; `/pull-library`
+is a plain replacement — prompt follow-ups for already-opted-in agents are listed in the
+migration). Closes the open items from the channel-contract series.
+
+### Added
+- **agent-step library 1.4.0**: the built-in `request_handoff` accepts the full handback
+  signal set — `reason: off_topic | completed | abandon`, with `completed` / `abandon`
+  speaking the **LLM-composed closing** carried in `context` (delivered verbatim by the
+  resolver node; may reference what was done — matching the middleware's passive handback
+  semantics). Suite grows 76 → 79. See `CHANGELOG.md` 1.4.0 +
+  `migrations/1.3.1-to-1.4.0.md`.
+- **`channel` wire-contract slot** in the bootstrap `state.ts` scaffold (preserve-initial,
+  like the identity slots) — the middleware sends it; read it for channel-gated behavior and
+  forward it in handoff/delegate payloads.
+
+### Changed
+- `agent-step-api.md` / `streaming-and-channel-contract.md` document the per-reason `context`
+  semantics and the three-signal resolver behavior.
+- Reference docs no longer point at a specific existing project for prompt-shape examples
+  (generic "the project's existing tool(s)" phrasing).
+
 ## [0.12.0] — 2026-06-12
 
 The intake release (library unchanged at **1.3.1**). Agent creation and tool creation now ask

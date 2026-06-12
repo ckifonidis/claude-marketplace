@@ -63,15 +63,16 @@ export const handoffParamsSchema = HandoffRequestSchema;
 /** Handback signal emitted as `handoff_type` for each handoff reason — the
  *  middleware's canonical (lowercase) vocabulary; its matching is
  *  case-insensitive, but we emit the exact canonical strings. The mapping is
- *  identity today and kept as the explicit contract point: `off_topic` is the
- *  only reason; `completed` / `abandon` are the planned extensions. */
+ *  identity and kept as the explicit contract point. */
 export const HANDBACK_SIGNALS = {
   off_topic: "off_topic",
+  completed: "completed",
+  abandon: "abandon",
 } as const satisfies Record<HandoffRequest["reason"], string>;
 
 /** LLM-facing mechanics attached to the `request_handoff` schema variant. */
 export const HANDOFF_ACTION_DESCRIPTION =
-  "Hand the conversation off instead of answering. Call with reason \"off_topic\" when the customer's request is outside this agent's scope (an operation this agent does not perform, a product it does not serve, or a non-banking question beyond a greeting). `context` carries the customer's request for the receiving agent — verbatim or tightly summarized, in the customer's language. MUST be the only step in the batch; has no prereqs (works even before any data is loaded). After it succeeds, produce NO answer text — the platform delivers the handoff response.";
+  "Hand the conversation back instead of answering. Reasons: \"off_topic\" — the customer's request is outside this agent's scope (an operation this agent does not perform, a product it does not serve, or an unrelated question beyond a greeting); `context` carries the customer's request for the receiving agent, verbatim or tightly summarized, in the customer's language. \"completed\" — the delegated task is wrapped up; `context` carries the closing line to speak (it may reference what was done), in the customer's language. \"abandon\" — the customer gave up or declined to continue; `context` carries the acknowledgement line to speak, in the customer's language. MUST be the only step in the batch; has no prereqs (works even before any data is loaded). After it succeeds, produce NO answer text — the platform delivers the handoff response.";
 
 /** Delegate target: another LangGraph deployment (one graph per deployment)
  *  reachable over the Platform API. */
@@ -104,8 +105,10 @@ export interface HandoffSpec<T> {
   /** How off-topic handoffs resolve: terminate with the fixed envelope, or
    *  delegate to another LangGraph deployment and pass its answer through. */
   offTopic: HandoffOffTopicSpec;
-  /** The fixed envelope content for terminate mode — also the fallback when a
-   *  delegate run fails. This is what the customer sees/hears. */
+  /** The fixed envelope content for off_topic terminate mode — also the
+   *  fallback when a delegate run fails. This is what the customer
+   *  sees/hears. (completed / abandon don't use it: they speak the
+   *  LLM-composed closing carried in the request's `context`.) */
   terminateMessage: string;
   /** Build the delegate run's input from host state + the handoff request.
    *  Default: `{ messages: [{ role: "user", content: request.context }] }`.
@@ -317,7 +320,9 @@ export function createHandoffNode<T extends LibraryManagedSlots>(spec: HandoffSp
       ...(delegate ? { delegated_to: delegate.assistantId } : {}),
     });
 
-    let content = spec.terminateMessage;
+    // off_topic terminates with the fixed envelope (or delegates); completed /
+    // abandon speak the LLM-composed closing line carried in `context`.
+    let content = request.reason === "off_topic" ? spec.terminateMessage : request.context;
     let delegated = false;
     let delegateError: string | null = null;
 
@@ -355,9 +360,10 @@ export function createHandoffNode<T extends LibraryManagedSlots>(spec: HandoffSp
     // - delegate success → the conversation STAYS with this agent (the
     //   delegate answered through us) — NOT a handoff; `delegated_to` is
     //   informational only, so middleware routing is untouched.
-    // - terminate / delegate-failure fallback → the off_topic handback:
-    //   signal in `handoff_type`, the customer's request in `handoff_reason`
-    //   (for re-routing), the spoken envelope in
+    // - everything else → the handback: the reason's signal in
+    //   `handoff_type` (off_topic re-routes the turn to the orchestrator;
+    //   completed / abandon deliver this reply and flip routing for the NEXT
+    //   request), `context` in `handoff_reason`, the spoken text in
     //   `handoff_metadata.success_message`.
     const signal = HANDBACK_SIGNALS[request.reason];
     const kwargs: Record<string, unknown> = delegated

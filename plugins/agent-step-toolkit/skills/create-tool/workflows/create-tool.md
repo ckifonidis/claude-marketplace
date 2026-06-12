@@ -89,7 +89,7 @@ Produce a single short markdown plan with these sections (concrete values, not p
 ## Backend env vars (per-tool, in backend/env.ts)
 - ACCOUNTS_API_BASE_URL
 - TRANSFER_API_BASE_URL
-- ... + envelope/auth fields shared with cards
+- ... + envelope/auth fields shared with the project's existing tool(s)
 
 ## Sandbox extensions (only if any — endpoints the root sandbox/ doesn't model yet)
 - POST /accounts/fetchList — new accounts controller, envelope per backend spec
@@ -178,7 +178,7 @@ Expected: zero errors in the new tool's files. (Unrelated WIP errors in other di
 ```bash
 npx tsc && node --test dist/agent-step/*.test.js
 ```
-Expected: all library unit tests still pass (currently 76: runner + paginate + handoff). The count may grow as the library evolves — what matters is zero failures. The new tool shouldn't affect them.
+Expected: all library unit tests still pass (currently 79: runner + paginate + handoff). The count may grow as the library evolves — what matters is zero failures. The new tool shouldn't affect them.
 
 ```bash
 npm run test:sandbox

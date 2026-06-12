@@ -108,7 +108,7 @@ Three places to extend, in this order:
 If the new tool covers user intents the current prompt refuses, broaden SCOPE so they're not refused. Example: if cards-only refuses account inquiries, and you're adding accounts, drop the refusal clause.
 
 ### 2. ACTIONS section
-Per-action block. Use this exact shape (lift from cards' existing actions in `src/prompt.ts`):
+Per-action block. Use this exact shape (when the project already has a tool, lift the shape from its existing action blocks in `src/prompt.ts`):
 
 ```
 - `<action_name>` — params: `{ <field>, <field?> }`. <Optional flags/enum values>. Prereq: `<prereqName>` (or "none"). <One-paragraph summary of what it does, what verdicts/states it returns, what changes in session state.> Result body: `{ summary, <key>, <key>, ... }`.
@@ -172,7 +172,7 @@ The prompt has voice agent rules (no digits as numerals, no URLs, no off-channel
 - **Never instruct the LLM to read identifiers numerically.** If a new action returns an IBAN, account number, etc., the prompt should say "spell the digits as words" (in the agent's spoken language).
 - **Never recommend the LLM close with an off-channel redirect** ("call our service line", "visit your branch") — those are reserved for OOS refusal, not for successful operations.
 - **Never echo full secrets** (new PINs, OTPs the customer just dictated). For PIN-set, the prompt should quote only the masked last-two; for OTPs, the prompt should never quote the digits back at all.
-- If the new tool has fallback content gated on the customer's segment / branch / channel, leave a `[TBD — knowledge-base content]` placeholder rather than inventing a script. The cards prompt uses this pattern.
+- If the new tool has fallback content gated on the customer's segment / branch / channel, leave a `[TBD — knowledge-base content]` placeholder rather than inventing a script.
 </voice_rules_preservation>
 
 <a_minimal_diff_for_a_new_tool>
