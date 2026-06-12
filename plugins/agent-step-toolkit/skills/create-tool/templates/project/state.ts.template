@@ -21,7 +21,7 @@ export const AgentState = Annotation.Root({
   // last-writer-wins reducers the runner expects.
   ...agentStepStateSpec,
 
-  // ─── Channel wire contract (fronting middleware / orchestrator) ─────── //
+  // ─── Channel wire contract (fronting channel middleware) ────────────── //
   // The middleware invokes every agent with `{ messages, user_id,
   // customer_code, role, ... }` (snake_case — do NOT rename) and reads the
   // handoff signal back from the final message + the `pendingHandoff` slot.

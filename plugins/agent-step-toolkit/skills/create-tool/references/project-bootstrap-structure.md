@@ -100,7 +100,7 @@ Verbatim copy of the runner library. The skill treats these as templates-by-copy
 
 **graph.ts** — Single export `graph` — what `langgraph.json` references. Logs env presence at load (useful for diagnosing missing env in deployed containers).
 
-**prompt.ts** — System prompt builder. Has sections (SCOPE, OPERATING LOOP, IDENTIFICATION, ACTIONS, MUTATION SAFETY, VOICE RULES, EXAMPLES) — most start as `{{TBD — ...}}` placeholders. The `create-tool` workflow fills them in incrementally. MUTATION SAFETY teaches `abort_pending_input` as the universal abort for any pending input or flow.
+**prompt.ts** — System prompt builder. Has sections (SCOPE, OFF-TOPIC POLICY, CHANNEL CONSTRAINTS, OPERATING LOOP, IDENTIFICATION, ACTIONS, MUTATION SAFETY, VOICE RULES, EXAMPLES) — most start as `{{TBD — ...}}` placeholders. The `create-tool` workflow fills them in incrementally. Several placeholders are **role-conditional** (orchestrator / specialized / standalone — resolved from the bootstrap agent-role input): the SCOPE closer, the OFF-TOPIC POLICY keep/delete, the CHANNEL CONSTRAINTS transfer line, and the OPERATING LOOP wrap. MUTATION SAFETY teaches `abort_pending_input` as the universal abort for any pending input or flow.
 
 **cli.ts** — In-process streaming REPL. Raw-mode terminal, multi-line input, history, ESC to abort, slash commands (`/state`, `/history`, `/new`, `/last`, `/copy`, `/quit`, `/help`). Per-step tool envelope display: each batch step printed as a dim bullet with ok/fail and surfaced fields. Imports `cli-env-init.ts` first to silence backend logs.
 

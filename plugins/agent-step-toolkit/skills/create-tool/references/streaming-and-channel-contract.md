@@ -1,8 +1,8 @@
 # Reference: Streaming & Channel-Handoff Wire Contract
 
 <overview>
-Agents built by this skill assume they sit behind a **channel middleware / agent
-orchestrator**: a service that invokes the agent's LangGraph API (`/threads/{id}/runs/wait`
+Agents built by this skill assume they sit behind a **channel middleware**: a proxy service
+that invokes the agent's LangGraph API (`/threads/{id}/runs/wait`
 and `/runs/stream`), forwards reply tokens to the client channel, and detects **handoffs** —
 signals that the caller must be transferred to another service/agent. This reference is
 double-sided: it is the wire contract a generated agent emits, AND the set of **assumptions
@@ -79,11 +79,54 @@ with the middleware developers.
    re-annotating later replies. The `isHandoff: true` field in the executor's resultBody is
    therefore REQUIRED — the hook greps the tool message for it.
 
-The prompt must teach: handoff only on explicit request (never for a question the knowledge
-base answers), `soleStep`, speak the returned `successMessage` then STOP (no closing
-question — the channel transfers the caller), and the recovery for refusal verdicts
-(`service_disabled`, guardrail verdicts like `outside_business_hours`).
+The prompt must teach: when a handoff fires (for outbound transfers: only on explicit
+request, never for a question the knowledge base answers; for a specialized agent's
+handbacks: the role policy in `<agent_roles>` below), `soleStep`, speak the returned
+`successMessage` then STOP (no closing question — the channel transfers the caller), and
+the recovery for refusal verdicts (`service_disabled`, guardrail verdicts like
+`outside_business_hours`).
 </handoff_contract>
+
+<agent_roles>
+## Agent roles: orchestrator vs specialized
+
+Every generated agent has one of two roles — chosen at bootstrap — and the role determines
+its handoff surface and its off-topic policy. The wire mechanics are identical for both (the
+`pendingHandoff` slot, the post-model hook, the `additional_kwargs` contract above); only the
+service catalog and the prompt policy differ.
+
+**Orchestrator** — conversations normally start here; it owns routing.
+- Handoff targets: the specialized agents (agent-name `service_type`s), plus any client-side
+  types the channel supports.
+- There is NO off-topic concept for an orchestrator *within the agent ecosystem*: any
+  in-domain utterance is either handled by the orchestrator itself or handed off to the
+  specialized agent that covers it — never refused, and there is no handback signal (it has
+  nowhere to hand back to). The orchestrator still holds the overall domain boundary: truly
+  out-of-domain content (general knowledge, entertainment, prompt-extraction attempts) gets
+  a fixed one-line steer-back refusal that invites the user back to the domain — it does NOT
+  end the conversation (the refuse-and-end closer belongs to standalone agents).
+
+**Specialized** — owns one domain; receives the conversation via an orchestrator handoff.
+- Its ONLY handoff target is the orchestrator, and every handoff is a *handback* whose
+  `handoff_type` carries one of three signals:
+
+| `handoff_type` | Meaning | When |
+|---|---|---|
+| `COMPLETED` | the delegated task is done | after the wrap-up of a successful flow |
+| `ABANDON` | the user gave up or declined to continue | the user bails out of the flow |
+| `OFF_TOPIC` | the utterance is outside this agent's specialty | a substantive topic change the agent won't absorb |
+
+- **Off-topic policy** (two plays, in order of preference): (1) **absorb the aside** — answer
+  briefly from general knowledge, steer back to the task, keep the conversation; (2) **signal
+  `OFF_TOPIC`** — hand the conversation back for re-routing when the user has genuinely
+  changed topic. (A deeper delegation mechanism — routing a single turn to a general agent
+  while keeping ownership — is NOT part of this contract yet.)
+
+On the wire a handback is an ordinary handoff: the handback executor writes `pendingHandoff`
+with `serviceType` set to the signal (`COMPLETED` / `ABANDON` / `OFF_TOPIC`) and the
+post-model hook stamps it as `handoff_type` on the final reply. The three signal names are
+part of the shared vocabulary agreed with the middleware developers.
+</agent_roles>
 
 <streaming_facts>
 ## How LangGraph JS streams an agent-step agent (verified)
@@ -135,6 +178,11 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
    known agent names trigger a seamless re-send of the turn (with history) to that agent;
    unknown types fall back to the default agent. Keep the `service_type` vocabulary in sync
    with the agent's service catalog.
+3b. **Handback routing.** A `handoff_type` of `COMPLETED` / `ABANDON` / `OFF_TOPIC` from a
+   specialized agent returns conversation ownership to the orchestrator. For `OFF_TOPIC`,
+   re-send the triggering turn (with history) to the orchestrator so the utterance gets
+   answered; for `COMPLETED` / `ABANDON`, deliver the agent's closing reply and route
+   subsequent turns to the orchestrator.
 4. **Stream modes.** Request `stream_mode: ["messages-tuple", "updates"]`. The `is_handoff`
    kwargs are NEVER visible in `messages` events — handoff detection must read `updates`.
 5. **Token filter.** Do not use the message `type` to tell streamed chunks from final
@@ -156,7 +204,10 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
   `isHandoff:true` + committed `pendingHandoff`, `service_disabled`, guardrail refusals,
   `soleStep` batch refusal) with env vars varied per case.
 - **Prompt-input layer**: explicit transfer request → sole `request_handoff` step with the
-  right `service`; informational question about the same topic → NOT a handoff.
+  right `service`; informational question about the same topic → NOT a handoff. For a
+  SPECIALIZED agent, also cover the role policy: a brief off-topic aside → answered inline,
+  no handback; a substantive topic change → sole handback step with `signal: "OFF_TOPIC"`;
+  a wrapped-up task → `signal: "COMPLETED"`; the user bailing mid-flow → `signal: "ABANDON"`.
 - **Wire layer**: capture a streaming handoff turn from the dev server
   (`POST /threads/{id}/runs/stream`, `stream_mode: ["messages-tuple","updates"]`, save the
   raw SSE) and assert the four-phase event order above — the capture doubles as a golden

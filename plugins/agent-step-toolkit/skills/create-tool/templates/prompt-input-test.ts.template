@@ -12,7 +12,10 @@
 // ambiguity case where applicable (model produces candidates or asks to
 // clarify); one recovery case (a prior non-ok verdict → the next turn asks
 // appropriately); and, if this is the first action the user hits, one
-// out-of-scope case (polite refusal, no tool call).
+// off-topic case matched to the agent's role: standalone → polite refusal, no
+// tool call; specialized → brief aside answered inline (no handback) + topic
+// change → sole OFF_TOPIC handback step; orchestrator → in-domain routed,
+// out-of-domain steer-back line with no tool call.
 //
 // GATED: skipped unless PROMPT_INPUT_LIVE=1 (+ Azure OpenAI creds). Live model,
 // costs money. When iterating, target this compiled file directly rather than
@@ -63,7 +66,11 @@ describe(
       expectAction(res.steps, 0, "{{ACTION_1}}");
     });
 
-    test("out of scope: refuses politely, no tool call", async () => {
+    // Role-conditional: this is the STANDALONE shape. For a SPECIALIZED agent
+    // replace with the two-play pair (aside → expectNoToolCall; topic change →
+    // sole handback step with signal "OFF_TOPIC"); for an ORCHESTRATOR assert
+    // routing to the covering agent's handoff instead of a refusal.
+    test("off topic: refuses politely, no tool call", async () => {
       const res = await runUserTurn("{{OUT_OF_SCOPE_UTTERANCE}}");
       expectNoToolCall(res);
     });

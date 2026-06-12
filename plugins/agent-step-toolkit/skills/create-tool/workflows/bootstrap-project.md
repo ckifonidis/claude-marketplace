@@ -22,6 +22,7 @@ Ask via AskUserQuestion (group into 2–3 questions; skip what's obvious from co
 - **Agent display name** (one short phrase shown in CLI header + prompt; always ask the user — never invent it).
 - **One-line description** (lands in package.json description + prompt lead sentence).
 - **Voice or chat?** Determines whether to keep CHANNEL CONSTRAINTS and VOICE RULES in the prompt template.
+- **Agent role: orchestrator, specialized, or standalone?** An **orchestrator** starts conversations and routes to specialized agents (in-domain topics are handled or routed, never refused; truly out-of-domain content gets a fixed steer-back line, not a refuse-and-end); a **specialized** agent owns one domain, received via orchestrator handoff, and hands back ONLY to the orchestrator with `COMPLETED` / `ABANDON` / `OFF_TOPIC` signals (keep the prompt's OFF-TOPIC POLICY section); **standalone** keeps the refuse-politely default. Conditions the SCOPE closer, OFF-TOPIC POLICY, CHANNEL CONSTRAINTS, and OPERATING LOOP wrap in `prompt.ts.template` (the role-conditional placeholders there name the exact replacements). See `references/streaming-and-channel-contract.md` `<agent_roles>`.
 - **ACR registry + image name** (for `build_and_push.sh`). Default: ask whether they have ACR creds in env.
 - **Sandbox source** — every project needs a root `sandbox/` service (see `references/sandbox-contract.md`). Ask what exists to build it from: a reference project that already ships a sandbox, a Postman collection for the backends, API specs/docs, or nothing yet (defer to the first `/create-tool`, when the backend surface is known).
 
@@ -158,7 +159,7 @@ For each, copy from `templates/project/*.template` and substitute placeholders. 
 3. `src/state.ts` ← `templates/project/state.ts.template` (no substitution; per-tool slots commented out — first /create-tool fills them in)
 4. `src/agent.ts` ← `templates/project/agent.ts.template` (no substitution)
 5. `src/graph.ts` ← `templates/project/graph.ts.template` (no substitution)
-6. `src/prompt.ts` ← `templates/project/prompt.ts.template` (substitute `{{AGENT_DISPLAY_NAME}}`, `{{AGENT_DESCRIPTION_ONE_LINER}}`, `{{TOOL_NAME}}`)
+6. `src/prompt.ts` ← `templates/project/prompt.ts.template` (substitute `{{AGENT_DISPLAY_NAME}}`, `{{AGENT_DESCRIPTION_ONE_LINER}}`, `{{TOOL_NAME}}`; resolve the role-conditional placeholders per the step-1 agent role — SCOPE closer, OFF-TOPIC POLICY keep/delete, CHANNEL CONSTRAINTS transfer line, OPERATING LOOP wrap)
 7. `src/cli.ts` ← `templates/project/cli.ts.template` (substitute `{{AGENT_DISPLAY_NAME}}`, `{{PROJECT_NAME}}`)
 8. `src/tools/index.ts` ← `templates/project/tools-index.ts.template` (no substitution; empty barrel)
 

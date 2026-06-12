@@ -11,6 +11,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.10.0] — 2026-06-12
+
+The agent-roles release (library unchanged at **1.2.0**; `/pull-library` not needed). Agents are
+now role-typed at bootstrap — **orchestrator** (starts conversations; in-domain topics are handled
+or routed to specialized agents, never refused; out-of-domain gets a fixed steer-back line),
+**specialized** (owns one domain; hands back ONLY to the orchestrator with `COMPLETED` / `ABANDON`
+/ `OFF_TOPIC` signals), or **standalone** (the previous refuse-politely default) — and the
+off-topic policy is part of the contract. Verified against the reference orchestrator
+implementation.
+
+### Added
+- **`<agent_roles>` section in `streaming-and-channel-contract.md`** — the role model, the three
+  handback signals (riding the existing `handoff_type` kwargs: no new wire mechanics, same slot,
+  same hook), the specialized agent's two-play off-topic policy (absorb brief asides from general
+  knowledge, or signal `OFF_TOPIC`), and middleware checklist item 3b (handback routing:
+  `OFF_TOPIC` re-sends the turn to the orchestrator; `COMPLETED` / `ABANDON` deliver the closing
+  reply and return ownership).
+- **OFF-TOPIC POLICY prompt section** in `project/prompt.ts.template` (specialized agents), plus
+  role-conditional placeholders for the SCOPE closer, the CHANNEL CONSTRAINTS transfer line, and
+  the OPERATING LOOP wrap (`COMPLETED` replaces the open-ended close for specialized agents).
+- **Agent role bootstrap input** (orchestrator / specialized / standalone) in
+  `bootstrap-project.md` step 1; the prompt scaffold step resolves the role conditionals.
+- **Role-aware handoff recipe** in create-tool step 6c: orchestrator catalogs route outbound to
+  the specialized agents (+ client-side types); specialized agents get a single handback action
+  with `{ signal, reason }` params and per-signal success messages.
+
+### Changed
+- SKILL essential principle #12 carries the role model; "orchestrator" now exclusively means the
+  agent role (the fronting proxy is "the channel middleware" throughout).
+- The handoff-when rule distinguishes outbound transfers (explicit request only) from handbacks
+  (role policy).
+- Prompt-input test guidance (`test-agent-step` SKILL + the test template) matches off-topic
+  expectations to the agent's role.
+- `project-bootstrap-structure.md` documents the role-conditional prompt sections.
+
+### Fixed
+- The bootstrap prompt's CHANNEL CONSTRAINTS no longer contradicts a handoff surface: "no
+  live-agent transfer mechanism exists" is explicitly the no-handoff default, replaced by
+  "transfers happen ONLY through the handoff tool" once a handoff action exists.
+
 ## [0.9.0] — 2026-06-11
 
 The channel-contract release (library unchanged at **1.2.0**; `/pull-library` not needed). Every

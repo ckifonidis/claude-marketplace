@@ -4,7 +4,7 @@
 // Tools registered via src/tools/index.ts.
 //
 // The post-model hook below implements the CHANNEL HANDOFF wire contract for
-// the channel middleware / orchestrator fronting the agent (see
+// the channel middleware fronting the agent (see
 // references/streaming-and-channel-contract.md). It is a no-op until a tool
 // writes the `pendingHandoff` state slot, so it ships with every project.
 
