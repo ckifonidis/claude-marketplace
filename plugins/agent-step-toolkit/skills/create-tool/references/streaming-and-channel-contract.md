@@ -11,7 +11,9 @@ must satisfy to integrate one of these agents. Hand the `<middleware_requirement
 to the middleware developers. It includes the verified facts about how a LangGraph JS agent
 streams — several of them break common middleware assumptions, so they are stated as
 mandates, not trivia. Every claim here was verified live against a reference middleware
-integration and captured SSE streams (2026-06-11).
+integration and captured SSE streams (2026-06-11), and cross-checked against the middleware
+source — handoff processor, kwargs model, stream processor — on 2026-06-12 (the routing
+table in `<handoff_contract>` is lifted from it).
 </overview>
 
 <wire_input>
@@ -55,14 +57,35 @@ On a handoff turn the **final AI message** must carry:
 }
 ```
 
-The middleware is expected to route on the handoff type: a **client-side** type (a transfer
-the client channel itself performs — e.g. escalating to a human) is passed through to the
-client; a **known agent name** triggers a *seamless* handoff (the middleware re-sends the
-turn to that agent, with conversation history). Unknown types should fall back to the
-middleware's default agent. Which types exist — and which are client-side vs agent names —
-is project configuration, outside this agent's scope: `service_type` values are a shared
-vocabulary between the agent's service catalog and the middleware's configuration, agreed
-with the middleware developers.
+The middleware routes on the handoff type. A handoff fires ONLY when BOTH `is_handoff: true`
+AND a non-empty `handoff_type` are present. Type matching is **case-insensitive**; this
+contract emits the middleware's canonical lowercase spellings (`completed` / `abandon` /
+`off_topic`). The verified routing table (from the middleware's handoff processor):
+
+| Current agent | `handoff_type` | Response from | Routing after |
+|---|---|---|---|
+| Orchestrator | specialized agent name | target agent (seamless re-send) | that agent |
+| Orchestrator | client-side type (e.g. human escalation) | orchestrator (passed through to client) | orchestrator |
+| Specialized | `completed` / `abandon` | the specialized agent's own closing reply | orchestrator (next request) |
+| Specialized | `off_topic` | the orchestrator (seamless re-send) | orchestrator |
+| Specialized | known agent name | target agent (seamless re-send) | that agent |
+| Specialized | unknown type | the orchestrator (fallback) | orchestrator |
+| any | *(no kwargs)* | the agent itself | unchanged |
+
+Two consumption nuances: the **sync** (`/runs/wait`) path reads only `is_handoff` /
+`handoff_type` / `handoff_reason` — `handoff_metadata.success_message` is consumed on the
+**streaming** path (and by client-side transfers); the spoken text in sync mode is simply
+the message `content` (both mechanisms already set it). The middleware also understands two
+OPTIONAL fields: `handoff_metadata.requires_authentication` (bool) and a top-level
+`routing_url` — relevant mainly to client-side types. And it gates handoffs middleware-side:
+a transfer to an agent that requires an authenticated user is rejected when the session has
+no user id (the middleware answers with its own not-allowed message — not the agent's
+concern).
+
+Which types exist — and which are client-side vs agent names — is project configuration,
+outside this agent's scope: `service_type` values are a shared vocabulary between the
+agent's service catalog and the middleware's configuration, agreed with the middleware
+developers.
 
 ### How a generated agent produces this (three pieces, all scaffolded)
 
@@ -112,15 +135,18 @@ service catalog and the prompt policy differ.
 
 | `handoff_type` | Meaning | When |
 |---|---|---|
-| `COMPLETED` | the delegated task is done | after the wrap-up of a successful flow |
-| `ABANDON` | the user gave up or declined to continue | the user bails out of the flow |
-| `OFF_TOPIC` | the utterance is outside this agent's specialty | a substantive topic change the agent won't absorb |
+| `completed` | the delegated task is done | after the wrap-up of a successful flow |
+| `abandon` | the user gave up or declined to continue | the user bails out of the flow |
+| `off_topic` | the utterance is outside this agent's specialty | a substantive topic change the agent won't absorb |
+
+  (These ARE the middleware's canonical spellings — emit them exactly; its matching is
+  case-insensitive, but exact-match leaves nothing to chance.)
 
 - **Off-topic policy** (plays in order of preference): (1) **absorb the aside** — answer
   briefly from general knowledge, steer back to the task, keep the conversation; (2)
   **delegate the turn** — route the off-topic utterance to a general/knowledge agent and pass
   its answer through while KEEPING the conversation (the library handoff's delegate mode);
-  (3) **signal `OFF_TOPIC`** — hand the conversation back for re-routing when the user has
+  (3) **signal `off_topic`** — hand the conversation back for re-routing when the user has
   genuinely changed topic.
 
 ### Two mechanisms, one kwargs contract
@@ -133,7 +159,7 @@ service catalog and the prompt policy differ.
   `buildAgentStepTool({ handoff })` — the runner auto-injects the reserved `request_handoff`
   action (sole-step, no prereqs, lockdown-bypassing) writing the library `handoff` slot; the
   host graph's `createHandoffNode(spec)` resolves it ATOMICALLY (node-built final message, no
-  second LLM pass): terminate mode emits the OFF_TOPIC handback kwargs with the envelope as
+  second LLM pass): terminate mode emits the off_topic handback kwargs with the envelope as
   `success_message`; delegate mode calls the delegate deployment directly and keeps the
   conversation — its final message is NOT a handoff (no `is_handoff`; informational
   `delegated_to` only). Requires a hand-rolled graph (conditional edge — `createReactAgent`
@@ -143,7 +169,7 @@ service catalog and the prompt policy differ.
 
 Both mechanisms emit the SAME `additional_kwargs` contract above — signal (or target) in
 `handoff_type`, spoken/envelope text in `handoff_metadata.success_message`. The signal names
-(`HANDBACK_SIGNALS` in the library: `off_topic` → `"OFF_TOPIC"`) are part of the shared
+(`HANDBACK_SIGNALS` in the library: `off_topic` → `"off_topic"`) are part of the shared
 vocabulary agreed with the middleware developers.
 </agent_roles>
 
@@ -191,16 +217,17 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
 1. **Invoke shape.** Send `{ messages, user_id, customer_code, role, channel }` (snake_case)
    as the run input, targeting `assistant_id: "agent"`. Identity fields may be omitted for
    anonymous sessions; never rename them.
-2. **Handoff detection (sync).** Read `additional_kwargs.is_handoff` plus `handoff_type` /
-   `handoff_reason` / `handoff_metadata` off the final message of the run.
-3. **Routing.** Client-side handoff types pass through to the client to perform the transfer;
-   known agent names trigger a seamless re-send of the turn (with history) to that agent;
-   unknown types fall back to the default agent. Keep the `service_type` vocabulary in sync
-   with the agent's service catalog.
-3b. **Handback routing.** A `handoff_type` of `COMPLETED` / `ABANDON` / `OFF_TOPIC` from a
-   specialized agent returns conversation ownership to the orchestrator. For `OFF_TOPIC`,
+2. **Handoff detection (sync).** Read `additional_kwargs.is_handoff` / `handoff_type` /
+   `handoff_reason` off the final message of the run; trigger only when `is_handoff: true`
+   AND `handoff_type` is non-empty. Type matching is case-insensitive.
+3. **Routing.** Per the verified table in `<handoff_contract>`: client-side handoff types
+   pass through to the client to perform the transfer; known agent names trigger a seamless
+   re-send of the turn (with history) to that agent; unknown types fall back to the default
+   agent. Keep the `service_type` vocabulary in sync with the agent's service catalog.
+3b. **Handback routing.** A `handoff_type` of `completed` / `abandon` / `off_topic` from a
+   specialized agent returns conversation ownership to the orchestrator. For `off_topic`,
    re-send the triggering turn (with history) to the orchestrator so the utterance gets
-   answered; for `COMPLETED` / `ABANDON`, deliver the agent's closing reply and route
+   answered; for `completed` / `abandon`, deliver the agent's closing reply and route
    subsequent turns to the orchestrator.
 4. **Stream modes.** Request `stream_mode: ["messages-tuple", "updates"]`. The `is_handoff`
    kwargs are NEVER visible in `messages` events — handoff detection must read `updates`.
@@ -232,8 +259,8 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
 - **Prompt-input layer**: explicit transfer request → sole `request_handoff` step with the
   right `service`; informational question about the same topic → NOT a handoff. For a
   SPECIALIZED agent, also cover the role policy: a brief off-topic aside → answered inline,
-  no handback; a substantive topic change → sole handback step with `signal: "OFF_TOPIC"`;
-  a wrapped-up task → `signal: "COMPLETED"`; the user bailing mid-flow → `signal: "ABANDON"`.
+  no handback; a substantive topic change → sole handback step with `signal: "off_topic"`;
+  a wrapped-up task → `signal: "completed"`; the user bailing mid-flow → `signal: "abandon"`.
 - **Wire layer**: capture a streaming handoff turn from the dev server
   (`POST /threads/{id}/runs/stream`, `stream_mode: ["messages-tuple","updates"]`, save the
   raw SSE) and assert the four-phase event order above — the capture doubles as a golden

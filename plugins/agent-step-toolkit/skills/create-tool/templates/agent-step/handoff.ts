@@ -26,8 +26,8 @@
  *        stream, so streaming clients need this to render/speak the reply);
  *      - returns `{ handoff: null, messages: [AIMessage] }` — the final
  *        AIMessage carries the channel-contract `additional_kwargs`:
- *        terminate (and delegate-failure fallback) is the OFF_TOPIC HANDBACK
- *        (`is_handoff: true`, `handoff_type: "OFF_TOPIC"`, `handoff_reason` =
+ *        terminate (and delegate-failure fallback) is the off_topic HANDBACK
+ *        (`is_handoff: true`, `handoff_type: "off_topic"`, `handoff_reason` =
  *        the customer's request, `handoff_metadata: { service_type,
  *        success_message }` — the middleware re-routes the turn to the
  *        orchestrator); delegate success is NOT a handoff (the conversation
@@ -61,11 +61,12 @@ export const HANDOFF_NODE = "resolve_handoff";
 export const handoffParamsSchema = HandoffRequestSchema;
 
 /** Handback signal emitted as `handoff_type` for each handoff reason — the
- *  channel-contract vocabulary (uppercase signals, agreed with the middleware
- *  developers). `off_topic` is the only reason today; `completed` / `abandon`
- *  are the planned extensions of the same mapping. */
+ *  middleware's canonical (lowercase) vocabulary; its matching is
+ *  case-insensitive, but we emit the exact canonical strings. The mapping is
+ *  identity today and kept as the explicit contract point: `off_topic` is the
+ *  only reason; `completed` / `abandon` are the planned extensions. */
 export const HANDBACK_SIGNALS = {
-  off_topic: "OFF_TOPIC",
+  off_topic: "off_topic",
 } as const satisfies Record<HandoffRequest["reason"], string>;
 
 /** LLM-facing mechanics attached to the `request_handoff` schema variant. */
@@ -354,7 +355,7 @@ export function createHandoffNode<T extends LibraryManagedSlots>(spec: HandoffSp
     // - delegate success → the conversation STAYS with this agent (the
     //   delegate answered through us) — NOT a handoff; `delegated_to` is
     //   informational only, so middleware routing is untouched.
-    // - terminate / delegate-failure fallback → the OFF_TOPIC handback:
+    // - terminate / delegate-failure fallback → the off_topic handback:
     //   signal in `handoff_type`, the customer's request in `handoff_reason`
     //   (for re-routing), the spoken envelope in
     //   `handoff_metadata.success_message`.

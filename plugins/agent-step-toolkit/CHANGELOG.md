@@ -12,6 +12,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [1.3.1] — 2026-06-12
+
+Fix: the handback signal emitted as `handoff_type` by `createHandoffNode` (terminate mode /
+delegate-failure fallback) is now the middleware's canonical lowercase vocabulary —
+`HANDBACK_SIGNALS.off_topic` emits `"off_topic"` instead of `"OFF_TOPIC"`. Behaviorally
+compatible either way (the middleware matches handoff types case-insensitively, verified
+against its handoff-processor source), but the library now emits the exact canonical
+strings. No API-surface change. Migration:
+[migrations/1.3.0-to-1.3.1.md](migrations/1.3.0-to-1.3.1.md).
+
+### Fixed
+- `HANDBACK_SIGNALS` values lowercased to the middleware's canonical vocabulary (identity
+  mapping today: `off_topic` → `"off_topic"`); `handoff_metadata.service_type` follows.
+
 ## [1.3.0] — 2026-06-12
 
 Additive: **library-coordinated channel handoff** for specialized agents. Opt in via

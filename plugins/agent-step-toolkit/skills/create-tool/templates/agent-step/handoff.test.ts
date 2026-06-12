@@ -239,10 +239,10 @@ test("handoff node (terminate) emits events, clears the slot, appends the envelo
   assert.equal(message.content, "Transferring you now.");
   assert.deepEqual(message.additional_kwargs, {
     is_handoff: true,
-    handoff_type: "OFF_TOPIC",
+    handoff_type: "off_topic",
     handoff_reason: "wants a transfer",
     handoff_metadata: {
-      service_type: "OFF_TOPIC",
+      service_type: "off_topic",
       success_message: "Transferring you now.",
     },
   });
@@ -278,7 +278,7 @@ test("handoff node (delegate) falls back to terminate when the delegate is unrea
   const [message] = update.messages as AIMessage[];
   assert.equal(message.content, "Transferring you now.");
   assert.equal(message.additional_kwargs.is_handoff, true);
-  assert.equal(message.additional_kwargs.handoff_type, "OFF_TOPIC");
+  assert.equal(message.additional_kwargs.handoff_type, "off_topic");
   assert.equal(typeof message.additional_kwargs.delegate_error, "string");
   const types = (events as { type: string }[]).map((e) => e.type);
   assert.deepEqual(types, ["handoff", "handoff_delegate_failed", "handoff_complete"]);

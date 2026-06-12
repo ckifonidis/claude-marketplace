@@ -11,6 +11,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.11.1] — 2026-06-12
+
+The middleware-source alignment release, shipping agent-step library **1.3.1** (internal fix;
+`/pull-library` is a plain library replacement). The channel contract was cross-checked against
+the middleware's handoff-processor, kwargs-model, and stream-processor source, and the docs now
+carry ground truth instead of expectations.
+
+### Changed
+- **`streaming-and-channel-contract.md`**: the verified routing table (current agent ×
+  `handoff_type` → response source + routing) lifted from the middleware source; a handoff
+  requires BOTH `is_handoff: true` AND a non-empty `handoff_type`; type matching is
+  case-insensitive with canonical lowercase spellings; sync-vs-streaming kwargs consumption
+  nuances (`success_message` is a streaming/client-side concern; sync speech is the message
+  `content`); two optional fields (`handoff_metadata.requires_authentication`, `routing_url`);
+  the middleware-side auth gate on handoff targets.
+- **Signal vocabulary lowercased everywhere current** (`completed` / `abandon` / `off_topic`)
+  to match the middleware's canonical strings — SKILL principle #12, the role-model tables,
+  prompt template, workflows, test guidance, and the scaffold handback `z.enum`.
+- **agent-step library 1.3.1**: `HANDBACK_SIGNALS` emits the canonical lowercase signal
+  (`"off_topic"`); behaviorally identical (case-insensitive matching), no API change. See
+  `CHANGELOG.md` 1.3.1 + `migrations/1.3.0-to-1.3.1.md`.
+
 ## [0.11.0] — 2026-06-12
 
 The library-handoff release, shipping agent-step library **1.3.0** (downstream projects adopt via
