@@ -48,9 +48,9 @@ What do you want to do?
 
 **Skip the intake if the user's request makes the intent obvious** (e.g. "bootstrap a new project at /path/X" → go straight to bootstrap; "create a tool named accounts" → go straight to create-tool; "port this project to agent-step" → go straight to port).
 
-**For bootstrap, also ask:** project directory (absolute path), project name (kebab-case), agent display name, one-line description, voice or chat, ACR registry + image name.
+**For bootstrap, also ask** (full definitions + role follow-ups in `workflows/bootstrap-project.md` Step 1): project directory (absolute path), project name (kebab-case), agent display name, one-line description, voice or chat, **agent language** (never assume), **agent role** (orchestrator / specialized / standalone) **plus its follow-ups** — specialized: off-topic resolution (terminate / delegate) + envelope message + delegate target; orchestrator: does the agreed service catalog exist — **behind the channel middleware?**, ACR registry + image name, sandbox source.
 
-**For tool, also ask:** tool name (snake-case directory name) and one-sentence domain summary.
+**For tool, also ask:** tool name (snake-case directory name) and one-sentence domain summary. **Conditional asks at their trigger points in the workflow:** identity model (pre-authenticated session-context vs collected-and-verified) when the specs leave it ambiguous; whether users will ask open-ended aggregate questions (the analysis action is a product decision, not derivable from specs); handoff mechanism + off-topic mode for handoff actions (if not captured at bootstrap); backend-pages vs self-paginate when the spec is ambiguous.
 
 **Wait for response before proceeding.**
 </intake>

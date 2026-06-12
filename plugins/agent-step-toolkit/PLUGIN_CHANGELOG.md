@@ -11,6 +11,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.12.0] — 2026-06-12
+
+The intake release (library unchanged at **1.3.1**). Agent creation and tool creation now ask
+every question the functionality demands, instead of inferring or assuming:
+
+### Added
+- **Bootstrap intake questions** (`bootstrap-project.md` step 1 + SKILL `<intake>`): **agent
+  language** (never assumed — parameterizes the prompt's VOICE RULES via the new
+  `{{AGENT_LANGUAGE}}` placeholder and every success/envelope message), **behind the channel
+  middleware?** (sets the wire-contract/adherence-checklist expectations), and **role
+  follow-ups** — specialized: off-topic resolution (terminate / delegate) + envelope message +
+  delegate target (URL / assistant id / `replyNode` / `delegateInput` contents); orchestrator:
+  whether the agreed service catalog exists (else recorded as an open dependency).
+- **Conditional tool-time asks** at their trigger points (`create-tool.md`): identity model
+  (pre-authenticated vs collected-and-verified) when specs are ambiguous; whether users will
+  ask open-ended aggregate questions (the analysis action is a product decision); handoff
+  mechanism + off-topic mode if not captured at bootstrap (step 6c now checks `.env.example`'s
+  recorded answers first); backend-pages vs self-paginate for ambiguous list reads.
+- **`.env.example` handoff block** (role-tagged, commented): `HANDOFF_ENABLED` /
+  `HANDOFF_TOOLS` for orchestrators, `HANDOFF_OFF_TOPIC_MODE` / `HANDOFF_TERMINATE_MESSAGE` /
+  `HANDOFF_DELEGATE_*` for specialized agents — bootstrap records the answers, step 6c wires
+  them.
+
+### Changed
+- `prompt.ts.template` VOICE RULES are language-parameterized (`{{AGENT_LANGUAGE}}` + worked
+  number/date examples filled in the agent's language at bootstrap) — no baked-in language.
+
 ## [0.11.1] — 2026-06-12
 
 The middleware-source alignment release, shipping agent-step library **1.3.1** (internal fix;
