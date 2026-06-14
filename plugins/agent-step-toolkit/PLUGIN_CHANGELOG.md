@@ -11,6 +11,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.14.0] — 2026-06-14
+
+New skill — `audit-middleware-contract-compliance`. Library unchanged at **1.4.0** (no
+`/pull-library` needed). Closes the loop on the channel-contract series: the toolkit
+already scaffolds the agent side of the wire and tests it; this audits the *other* side —
+the hand-written channel middleware the toolkit doesn't generate.
+
+### Added
+- **`audit-middleware-contract-compliance` skill** — audits a channel middleware
+  implementation (the proxy that invokes a generated agent's LangGraph API, forwards reply
+  tokens, and routes handoffs) against the wire contract in
+  `create-tool/references/streaming-and-channel-contract.md`. Mechanizes that doc's
+  `<middleware_requirements>` adherence checklist (invoke shape; sync + streaming handoff
+  detection; the routing/handback table; stream modes; token dedupe; trigger point;
+  library-handoff custom events) into a five-phase audit — scope/discovery, checklist walk,
+  a dedicated adversarial pass on the three assumption-breakers, an evidence-backed findings
+  report (status + file:line + contract clause + impact + fix direction per item, **never a
+  patch**), and an optional wire-level verification pass against a captured SSE golden
+  fixture. The contract doc is declared normative; agent-side findings route to
+  `/create-tool` and `/test-agent-step`.
+
+### Changed
+- `bump-version`'s `references/tracked-assets.md` (Tier 6) now lists the new skill's
+  `SKILL.md` as a contract-mirroring asset — its checklist summaries get reconciled when the
+  channel/streaming surface (handoff custom events, `HANDBACK_SIGNALS`, the `resolve_handoff`
+  node, stream modes) shifts in a future library bump.
+- Plugin and marketplace descriptions, the root `README.md` skill listing and layout tree:
+  updated to reflect the fourth skill.
+
 ## [0.13.0] — 2026-06-12
 
 The full-handback release, shipping agent-step library **1.4.0** (additive; `/pull-library`

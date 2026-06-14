@@ -94,6 +94,7 @@ new template + a new import line in `tool-index.ts.template`).
 ## Tier 6 — SKILL prose (hand-edit)
 - `skills/create-tool/SKILL.md` — `<essential_principles>` (states the library invariants), `<quick_reference>` (canonical layout block), `<templates_index>` (template inventory).
 - `skills/test-agent-step/SKILL.md` — only if the test surface (runner unit-test entry points, harness helpers) shifted.
+- `skills/audit-middleware-contract-compliance/SKILL.md` — only if the channel/streaming surface shifted (handoff custom events, `HANDBACK_SIGNALS`, the `resolve_handoff` node, stream modes). Its checklist summaries are navigation aids over `streaming-and-channel-contract.md` — when that doc changes, reconcile this prose too.
 
 **Touched by:** invariant changes (e.g. "executor receives whole state" → "executor receives a
 projected slice"), layout changes, template inventory changes.

@@ -23,7 +23,7 @@ Install:
 /plugin install agent-step-toolkit@ckifonidis-marketplace
 ```
 
-Ships three skills:
+Ships four skills:
 
 - **`create-tool`** — bootstrap a new agent-step project (package.json, tsconfig,
   langgraph config, the agent-step runner **library**, graph/agent/state/prompt
@@ -48,6 +48,16 @@ Ships three skills:
   the migration transforms to the project's own tools. (The maintainer side,
   `bump-version`, lives in this repo at `.claude/skills/` — it edits the plugin's
   source tree, so it isn't shipped.)
+- **`audit-middleware-contract-compliance`** — audit a channel middleware
+  implementation (the proxy that invokes a generated agent's LangGraph API, forwards
+  reply tokens to the channel, and routes handoffs) against the wire contract in
+  `streaming-and-channel-contract.md`. Walks the adherence checklist — invoke shape,
+  sync + streaming handoff detection, routing/handback table, stream modes, token
+  dedupe, trigger point, library-handoff custom events — into an evidence-backed
+  findings report (file:line per item, never fixes), with an optional wire-level pass
+  against a captured SSE stream. The agent side is correct by construction
+  (`create-tool` scaffolds it, `test-agent-step` tests it); this grades the
+  hand-written consumer of the wire.
 
 The embedded runner library (`skills/create-tool/templates/agent-step/`) is the
 **canonical, versioned source** — its `VERSION` marker travels into every
@@ -92,7 +102,8 @@ plugins/
 │   └── skills/
 │       ├── create-tool/             # bootstrap / add-tool / extend / port + workflows + references + templates (incl. the canonical agent-step library)
 │       ├── test-agent-step/         # three-layer testing methodology
-│       └── pull-library/            # upgrade a downstream project's vendored library (consumer side)
+│       ├── pull-library/            # upgrade a downstream project's vendored library (consumer side)
+│       └── audit-middleware-contract-compliance/  # audit a channel middleware against the wire/streaming/handoff contract
 └── langgraph-plugin/
     ├── .claude-plugin/plugin.json   # plugin manifest
     └── skills/

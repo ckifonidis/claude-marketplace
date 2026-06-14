@@ -1,9 +1,9 @@
 {
   "name": "agent-step-toolkit",
-  "version": "0.13.0",
-  "description": "Build agent-step LangGraph projects and tools — bootstrap a new project (runner library + streaming CLI + scaffold + the required local sandbox service), add domain tools (actions / executors / verifiers / controller hooks + invalidatesOnChange) with sandbox extensions per backend, add channel-handoff actions with orchestrator/specialized agent roles, completed/abandon/off_topic handbacks, and library-coordinated off-topic delegation (agent-step 1.4.0; the bootstrap scaffold ships the channel middleware wire/streaming contract), port an existing project onto agent-step, and apply the three-layer test methodology (runner unit / sandbox / prompt-input).",
+  "version": "0.14.0",
+  "description": "Build agent-step LangGraph projects and tools — bootstrap a new project (runner library + streaming CLI + scaffold + the required local sandbox service), add domain tools (actions / executors / verifiers / controller hooks + invalidatesOnChange) with sandbox extensions per backend, add channel-handoff actions with orchestrator/specialized agent roles, completed/abandon/off_topic handbacks, and library-coordinated off-topic delegation (agent-step 1.4.0; the bootstrap scaffold ships the channel middleware wire/streaming contract), port an existing project onto agent-step, apply the three-layer test methodology (runner unit / sandbox / prompt-input), and audit a channel middleware implementation against the wire/streaming/handoff contract.",
   "author": {
     "name": "Charalampos Kyfonidis"
   },
-  "keywords": ["langgraph", "agent-step", "scaffolding", "typescript", "react-agent", "testing"]
+  "keywords": ["langgraph", "agent-step", "scaffolding", "typescript", "react-agent", "testing", "middleware"]
 }
