@@ -35,7 +35,8 @@ import { isKafkaEnabled, readAttachMode, readKafkaSettings } from "./settings.js
 import { KafkaEventProducer } from "./kafka-producer.js";
 import { RunEventEmitter } from "./event-emitter.js";
 import { KafkaRunTracer } from "./run-tracer.js";
-import { setEmitter } from "./registry.js";
+import { readRunFilterFromEnv } from "./run-filter.js";
+import { setEmitter, setRunFilter } from "./registry.js";
 import {
   installConfigureSlot,
   logAttachmentDiagnostics,
@@ -44,6 +45,8 @@ import {
 
 export { KafkaRunTracer } from "./run-tracer.js";
 export type { KafkaRunTracerFields } from "./run-tracer.js";
+export { RunFilter, readRunFilterFromEnv } from "./run-filter.js";
+export type { RunFilterMode } from "./run-filter.js";
 export { RunEventEmitter, runToEventData } from "./event-emitter.js";
 export type { ObservabilityEvent, RunEventData } from "./schemas.js";
 export { getAttachDiagnostics } from "./configure-slot.js";
@@ -61,10 +64,14 @@ export function startup(): void {
     console.log('[observability] Kafka run tracing disabled (KAFKA_ENABLED !== "true") — skipping init');
     return;
   }
+  // Read ALL config before any side effect, so an invalid var fails startup
+  // without leaving a half-built producer behind.
   const settings = readKafkaSettings();
   const attachMode = readAttachMode();
+  const runFilter = readRunFilterFromEnv();
   producer = new KafkaEventProducer(settings);
   setEmitter(new RunEventEmitter(producer, settings.applicationName, settings.topic));
+  setRunFilter(runFilter);
   if (attachMode !== "patch") {
     // Every callback-manager configure() in a context descending from here
     // gets a KafkaRunTracer (deduped by handler name within a run tree;
@@ -85,6 +92,11 @@ export function startup(): void {
       `brokers=${settings.bootstrapServers} retries=${settings.retries} ` +
       `delivery_timeout_ms=${settings.deliveryTimeoutMs}`,
   );
+  if (runFilter) {
+    console.log(
+      `[observability] run filter active: ${runFilter.describe()} (root run always emitted)`,
+    );
+  }
   logAttachmentDiagnostics(attachMode);
 }
 
@@ -104,6 +116,7 @@ export async function shutdown(): Promise<void> {
 export function __resetForTests(): void {
   producer = null;
   setEmitter(null);
+  setRunFilter(null);
   started = false;
   __resetConfigureSlotForTests();
 }

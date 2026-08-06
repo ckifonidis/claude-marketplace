@@ -14,7 +14,8 @@
 import { BaseTracer, type Run } from "@langchain/core/tracers/base";
 import type { BaseCallbackHandlerInput } from "@langchain/core/callbacks/base";
 import type { RunEventEmitter } from "./event-emitter.js";
-import { getEmitter } from "./registry.js";
+import type { RunFilter } from "./run-filter.js";
+import { getEmitter, getRunFilter } from "./registry.js";
 
 const NO_THREAD = "no-thread"; // envelope thread_id is required non-empty; direct/test invokes have no thread
 
@@ -23,12 +24,16 @@ export interface KafkaRunTracerFields extends BaseCallbackHandlerInput {
    *  with no args by the configure hook or the configure-slot wrap) resolve
    *  the shared emitter from registry.ts at emit time. */
   emitter?: RunEventEmitter;
+  /** TEST SEAM: inject a run filter directly. Production instances resolve the
+   *  shared filter (if any) from registry.ts at emit time. */
+  filter?: RunFilter;
 }
 
 export class KafkaRunTracer extends BaseTracer {
   name = "kafka_run_tracer";
 
   private readonly explicitEmitter?: RunEventEmitter;
+  private readonly explicitFilter?: RunFilter;
 
   /** trace_id → thread_id, learned from runs whose metadata carries it.
    *  LangGraph injects `configurable.thread_id` into run metadata, but a child
@@ -40,6 +45,7 @@ export class KafkaRunTracer extends BaseTracer {
   constructor(fields?: KafkaRunTracerFields) {
     super(fields);
     this.explicitEmitter = fields?.emitter;
+    this.explicitFilter = fields?.filter;
   }
 
   /** BaseTracer requires this (called once per completed ROOT run). Events are
@@ -59,6 +65,12 @@ export class KafkaRunTracer extends BaseTracer {
     try {
       const emitter = this.explicitEmitter ?? getEmitter();
       if (!emitter) return; // startup() not run or disabled — silently drop
+      const filter = this.explicitFilter ?? getRunFilter();
+      // Filtered runs skip the emit only — the run itself (and its children,
+      // which are matched independently) is traced as before. The root run
+      // always passes (see run-filter.ts), so the thread map below still
+      // learns every trace's thread_id.
+      if (filter && !filter.shouldEmit(run)) return;
       emitter.emitRun(this.resolveThreadId(run), run, direction);
     } catch (err) {
       console.error(`[observability] failed to emit run ${direction} event:`, err);

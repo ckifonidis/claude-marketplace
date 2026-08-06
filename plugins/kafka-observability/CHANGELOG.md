@@ -6,6 +6,51 @@ carry a copy of this library in `src/observability/`; `/add-kafka-observability`
 their `src/observability/VERSION` against the shipped one and upgrades via the
 version-keyed guides in `migrations/`.
 
+## 1.3.0 (2026-08-06)
+
+Event-volume release: **opt-in run filtering**. By default the tracer emits a
+request/response pair for every traced run (full LangSmith parity — unchanged). Payload
+verification in ib-password-reset-agent-ts showed ~73% of a real turn's events carry zero
+unique content: LangGraph's `__start__` pseudo-node echoes the root inputs, auto-generated
+conditional-edge `RunnableLambda` wrappers carry only the routing decision, and thin
+wrapper nodes (`agent`, `tools`) rewrap their single nested llm/tool run's output
+byte-identically. A survey of the sibling agents (set-pin, ivr-router, rag-handoff base)
+confirmed the wrapper≈child duplication does **not** generalize — several of their nodes
+transform outputs or have no nested run at all — so name-based filtering is strictly a
+per-app, payload-verified opt-in, never a default.
+
+Additive: no event-schema, transport, or wiring change; two new **optional** env vars.
+With filtering off (default) emitted bytes are identical to 1.2.0.
+
+- **`run-filter.ts`** (new) — `RunFilter`: allowlist/denylist over `run_type:name`
+  `*`-glob patterns, where the name side matches the run name OR
+  `metadata.langgraph_node` (the run_type side prevents `chain:agent` from also dropping
+  the nested llm run, which inherits the wrapper's langgraph_node). **The root run always
+  survives, in both modes** — it is the sole carrier of the full invocation input/final
+  state and the only event without `langgraph_node`, the turn-boundary marker for
+  timeline consumers. Filtering drops a run's request+response pair atomically (the
+  predicate reads only fields stable across the run's lifetime) and never re-parents:
+  surviving events' `parent_run_id`/`dotted_order` may reference dropped runs.
+- **`KAFKA_RUN_FILTER_MODE`** / **`KAFKA_RUN_FILTER_PATTERNS`** (new optional env vars) —
+  `off` (default) | `allow` | `deny`, plus comma-separated patterns. Fail-fast at startup
+  on an invalid mode, a mode without patterns, or patterns while the mode is off
+  (no-config-fallback rule). When active, startup logs one greppable line:
+  `[observability] run filter active: mode=… patterns=… (root run always emitted)`.
+- **`run-tracer.ts`** — `safeEmit` consults the filter (registry-resolved, like the
+  emitter; `filter` test seam on `KafkaRunTracerFields`) before `emitter.emitRun`.
+  Filtered runs are still traced — children are matched independently, and the thread map
+  keeps learning `thread_id` from the always-kept root.
+- **`registry.ts`** — holds the once-validated `RunFilter` alongside the emitter (the
+  hook/slot construct fresh tracer instances per configure; the filter must be one per
+  process).
+- **`index.ts`** — reads and validates ALL config (settings, attach mode, filter) before
+  any side effect; exports `RunFilter` / `readRunFilterFromEnv`; `__resetForTests()`
+  clears the filter.
+- **`run-filter.test.ts`** (new) + run-tracer/index test additions — parsing fail-fast
+  combinations, glob anchoring/escaping, run_type-guarded langgraph_node matching, the
+  root guarantee in both modes, pair-atomic dropping through the real BaseTracer
+  entrypoints, and thread inheritance across a filtered parent.
+
 ## 1.2.0 (2026-08-05)
 
 Attachment-robustness release, closing the INC-2026-0045 root cause: in QA App Service

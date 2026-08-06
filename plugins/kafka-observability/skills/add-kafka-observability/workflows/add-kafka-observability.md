@@ -108,6 +108,9 @@ them to the user before overwriting).
    # KAFKA_SASL_PASSWORD=
    # Tracer attachment path: hook | patch | both (default both; see src/observability/README.md "Attachment")
    # KAFKA_ATTACH_MODE=both
+   # Opt-in run filtering: off | allow | deny (default off = every run emitted; see src/observability/README.md "Run filtering")
+   # KAFKA_RUN_FILTER_MODE=off
+   # KAFKA_RUN_FILTER_PATTERNS=
    ```
 
 2. Each approved `configuration/**/settings.<ENV>.json` — add the same keys with that

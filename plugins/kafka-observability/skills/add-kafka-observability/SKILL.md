@@ -96,5 +96,8 @@ vendor → wire → configure → verify → report.
   `KAFKA_SASL_PASSWORD`, `KAFKA_CLIENT_ID`, `KAFKA_PRODUCER_LINGER_MS`,
   `KAFKA_PRODUCER_BATCH_SIZE`, `KAFKA_QUEUE_MAXSIZE`, `KAFKA_PRODUCER_RETRIES`,
   `KAFKA_DELIVERY_TIMEOUT_MS`, `KAFKA_ATTACH_MODE` (`hook`|`patch`|`both`,
-  default `both`).
+  default `both`), `KAFKA_RUN_FILTER_MODE` (`off`|`allow`|`deny`, default `off` —
+  every run emitted; root run always survives filtering) +
+  `KAFKA_RUN_FILTER_PATTERNS` (`run_type:name` globs, name side also matches
+  `metadata.langgraph_node`).
 </quick_reference>

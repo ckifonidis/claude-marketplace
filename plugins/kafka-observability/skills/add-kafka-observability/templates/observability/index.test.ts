@@ -16,6 +16,8 @@ const ENV_KEYS = [
   "KAFKA_BOOTSTRAP_SERVERS",
   "KAFKA_OBSERVABILITY_TOPIC",
   "KAFKA_ATTACH_MODE",
+  "KAFKA_RUN_FILTER_MODE",
+  "KAFKA_RUN_FILTER_PATTERNS",
 ];
 
 function clearKafkaEnv(): void {
@@ -99,14 +101,15 @@ describe("startup() — enabled with complete config", () => {
   });
 });
 
+function setCompleteEnv(): void {
+  clearKafkaEnv();
+  process.env.KAFKA_ENABLED = "true";
+  process.env.APPLICATION_NAME = "test";
+  process.env.KAFKA_BOOTSTRAP_SERVERS = "localhost:19999";
+  process.env.KAFKA_OBSERVABILITY_TOPIC = "observability-events";
+}
+
 describe("startup() — KAFKA_ATTACH_MODE", () => {
-  function setCompleteEnv(): void {
-    clearKafkaEnv();
-    process.env.KAFKA_ENABLED = "true";
-    process.env.APPLICATION_NAME = "test";
-    process.env.KAFKA_BOOTSTRAP_SERVERS = "localhost:19999";
-    process.env.KAFKA_OBSERVABILITY_TOPIC = "observability-events";
-  }
 
   test("invalid value fails fast (no-config-fallback rule)", () => {
     setCompleteEnv();
@@ -122,5 +125,34 @@ describe("startup() — KAFKA_ATTACH_MODE", () => {
       await shutdown();
       __resetForTests();
     }
+  });
+});
+
+describe("startup() — KAFKA_RUN_FILTER_* (opt-in run filtering)", () => {
+  test("invalid mode fails fast (no-config-fallback rule)", () => {
+    setCompleteEnv();
+    process.env.KAFKA_RUN_FILTER_MODE = "denylist";
+    process.env.KAFKA_RUN_FILTER_PATTERNS = "chain:__*";
+    assert.throws(() => startup(), /KAFKA_RUN_FILTER_MODE/);
+  });
+
+  test("patterns without a mode fail fast (edge case — half-configured opt-in)", () => {
+    setCompleteEnv();
+    process.env.KAFKA_RUN_FILTER_PATTERNS = "chain:__*";
+    assert.throws(() => startup(), /KAFKA_RUN_FILTER_PATTERNS/);
+  });
+
+  test("mode without patterns fails fast", () => {
+    setCompleteEnv();
+    process.env.KAFKA_RUN_FILTER_MODE = "deny";
+    assert.throws(() => startup(), /KAFKA_RUN_FILTER_PATTERNS/);
+  });
+
+  test("a valid filter config starts cleanly", async () => {
+    setCompleteEnv();
+    process.env.KAFKA_RUN_FILTER_MODE = "deny";
+    process.env.KAFKA_RUN_FILTER_PATTERNS = "chain:__*";
+    assert.doesNotThrow(() => startup());
+    await shutdown();
   });
 });

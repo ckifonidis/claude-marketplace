@@ -16,6 +16,9 @@ node, LLM call with full rendered messages + outputs + token usage, tool run) pr
 - one `direction: "response"` event at run end (inputs + outputs/error, status, latency,
   streaming-token event timestamps).
 
+Apps that have verified which of their runs carry duplicated content can opt into
+emitting fewer events — see **Run filtering** (default: off, everything emits).
+
 Trace hierarchy (`trace_id`, `parent_run_id`, `dotted_order`) travels in every event, so
 the LangSmith-style run tree is reconstructable downstream. `thread_id` comes from run
 metadata (LangGraph injects `configurable.thread_id`); events outside a thread use
@@ -59,6 +62,8 @@ KafkaEventProducer (kafka-producer.ts)
 | `KAFKA_PRODUCER_RETRIES` | Producer retry count (default: 5) |
 | `KAFKA_DELIVERY_TIMEOUT_MS` | Per-message delivery timeout in ms (default: 30000) |
 | `KAFKA_ATTACH_MODE` | Tracer attachment path: `hook` \| `patch` \| `both` (default: `both` — see **Attachment**). Invalid values throw at startup. |
+| `KAFKA_RUN_FILTER_MODE` | Opt-in run filtering: `off` \| `allow` \| `deny` (default: `off` — every run emitted, full LangSmith parity; see **Run filtering**). Invalid values or inconsistent combinations throw at startup. |
+| `KAFKA_RUN_FILTER_PATTERNS` | Comma-separated `run_type:name` globs (required when the mode is `allow`/`deny`, forbidden when `off`), e.g. `llm:*,tool:*,chain:resolve_handoff`. |
 
 ## Event schema
 
@@ -84,6 +89,56 @@ KafkaEventProducer (kafka-producer.ts)
   }
 }
 ```
+
+## Run filtering (opt-in — default emits every run)
+
+By default the tracer emits a request/response pair for **every** traced run — full
+LangSmith parity, and the contract every downstream consumer was built against. Real
+traces show much of that volume is duplicated content: a LangGraph `agent` node's output
+is often byte-identical to its nested `llm` run's, a `tools` node's to its nested `tool`
+run's, and the `__start__` pseudo-node echoes the root run's inputs (verified
+field-by-field against raw payloads in ib-password-reset-agent-ts — 16 of a turn's 22
+events carried zero unique content there).
+
+An app team that has **verified this against its own payloads** can opt in:
+
+```
+KAFKA_RUN_FILTER_MODE=off | allow | deny        (default off)
+KAFKA_RUN_FILTER_PATTERNS=<run_type>:<name>[,…]
+```
+
+- A pattern is two `*`-globs: the left side matches `run_type` (`chain`, `llm`, `tool`,
+  …); the right side matches the run **name** OR `metadata.langgraph_node`. Both must
+  match. The `run_type` side is what keeps `chain:agent` from also dropping the nested
+  `llm` run, which inherits the wrapping node's `langgraph_node` value.
+- `deny` drops matching runs (both events); `allow` drops everything that does not match.
+- **The root run always survives, in both modes.** It is the sole carrier of the full
+  invocation input/final state and the only event without `metadata.langgraph_node` —
+  the turn-boundary marker for timeline consumers.
+- Config is validated fail-fast at startup: an invalid mode, a mode without patterns, or
+  patterns without a mode all throw (no-config-fallback rule). When active, startup logs
+  `[observability] run filter active: mode=… patterns=…`.
+
+Recipes:
+
+- **Framework pseudo-nodes only** — safe by construction in any LangGraph app
+  (`__start__`-style nodes never transform state):
+  `KAFKA_RUN_FILTER_MODE=deny`, `KAFKA_RUN_FILTER_PATTERNS=chain:__*`
+- **Keep only content-bearing runs** — root + LLM + tool runs + verified terminal nodes:
+  `KAFKA_RUN_FILTER_MODE=allow`, `KAFKA_RUN_FILTER_PATTERNS=llm:*,tool:*,chain:resolve_handoff`
+
+**What filtering is NOT safe for, unverified.** App-named wrapper nodes (`agent`,
+`tools`, …) are droppable only when they delegate to exactly one nested run and return
+its output verbatim — a property of *this app's* node code, not of the names. Survey of
+sibling agents found the opposite in most: nodes that merge parallel tool calls or strip
+content before returning (so the node output ≠ the nested llm run), and nodes with **no
+nested run at all** (KB-driven envelope builders, escalation writers, nodes doing
+untraced I/O in the node body) — for those the node run is the only record of the work.
+Verify per node against real payloads before adding it to a pattern, and re-verify when
+node code changes. Note also that filtering never re-parents events: surviving events'
+`parent_run_id`/`dotted_order` may reference dropped runs, so tree-walking consumers
+(none known today — the timeline UI groups by `thread_id` + `langgraph_node`) would see
+gaps.
 
 ## Attachment (and why there are two paths)
 

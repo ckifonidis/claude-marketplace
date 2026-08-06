@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { HumanMessage } from "@langchain/core/messages";
 import { KafkaRunTracer } from "./run-tracer.js";
 import { RunEventEmitter } from "./event-emitter.js";
+import { RunFilter } from "./run-filter.js";
 import type { EventProducer } from "./event-producer.js";
 import type { ObservabilityEvent } from "./schemas.js";
 
@@ -19,10 +20,10 @@ class FakeProducer implements EventProducer {
   }
 }
 
-function harness(): { tracer: KafkaRunTracer; events: () => ObservabilityEvent[] } {
+function harness(filter?: RunFilter): { tracer: KafkaRunTracer; events: () => ObservabilityEvent[] } {
   const producer = new FakeProducer();
   const emitter = new RunEventEmitter(producer, "test_app", "t");
-  const tracer = new KafkaRunTracer({ emitter });
+  const tracer = new KafkaRunTracer({ emitter, filter });
   return {
     tracer,
     events: () => producer.produced.map((p) => JSON.parse(p.value.toString("utf-8")) as ObservabilityEvent),
@@ -100,6 +101,63 @@ describe("KafkaRunTracer — start/end event pairs", () => {
     assert.ok(response);
     assert.equal(response.data.status, "error");
     assert.ok(response.data.error?.includes("backend down"));
+  });
+});
+
+describe("KafkaRunTracer — opt-in run filtering", () => {
+  const GRANDCHILD_ID = "33333333-3333-4333-8333-333333333333";
+
+  test("no filter → every run still emits its pair (default behavior unchanged)", async () => {
+    const { tracer, events } = harness();
+    await tracer.handleChainStart(SERIALIZED, {}, RUN_ID, undefined, [], { thread_id: "t-1" });
+    await tracer.handleChainStart(SERIALIZED, {}, CHILD_ID, RUN_ID, [], {}, undefined, "__start__");
+    await tracer.handleChainEnd({}, CHILD_ID);
+    await tracer.handleChainEnd({}, RUN_ID);
+    assert.equal(events().length, 4);
+  });
+
+  test("deny mode drops BOTH events of a matching child run, keeps non-matching siblings", async () => {
+    const { tracer, events } = harness(new RunFilter("deny", ["chain:__*", "chain:agent"]));
+    await tracer.handleChainStart(SERIALIZED, { q: "hi" }, RUN_ID, undefined, [], { thread_id: "t-1" });
+    await tracer.handleChainStart(SERIALIZED, {}, CHILD_ID, RUN_ID, [], {}, undefined, "__start__");
+    await tracer.handleChainEnd({}, CHILD_ID);
+    await tracer.handleToolStart(SERIALIZED, "input", GRANDCHILD_ID, RUN_ID, [], {}, "password_reset_agent_step");
+    await tracer.handleToolEnd({ ok: true }, GRANDCHILD_ID);
+    await tracer.handleChainEnd({}, RUN_ID);
+
+    const all = events();
+    assert.equal(all.filter((e) => e.data.run_id === CHILD_ID).length, 0, "__start__ pair dropped");
+    assert.equal(all.filter((e) => e.data.run_id === GRANDCHILD_ID).length, 2, "tool pair kept");
+    assert.equal(all.filter((e) => e.data.run_id === RUN_ID).length, 2, "root pair kept");
+  });
+
+  test("allow mode keeps only matching children — and always the root (root guarantee)", async () => {
+    const { tracer, events } = harness(new RunFilter("allow", ["llm:*", "tool:*"]));
+    await tracer.handleChainStart(SERIALIZED, {}, RUN_ID, undefined, [], { thread_id: "t-1" });
+    await tracer.handleChainStart(SERIALIZED, {}, CHILD_ID, RUN_ID, [], {}, undefined, "agent");
+    await tracer.handleChatModelStart(SERIALIZED, [[new HumanMessage("hi")]], GRANDCHILD_ID, CHILD_ID);
+    await tracer.handleLLMEnd({ generations: [[]] }, GRANDCHILD_ID);
+    await tracer.handleChainEnd({}, CHILD_ID);
+    await tracer.handleChainEnd({}, RUN_ID);
+
+    const all = events();
+    assert.equal(all.filter((e) => e.data.run_id === RUN_ID).length, 2, "root kept despite matching no rule");
+    assert.equal(all.filter((e) => e.data.run_id === CHILD_ID).length, 0, "agent wrapper dropped");
+    assert.equal(all.filter((e) => e.data.run_id === GRANDCHILD_ID).length, 2, "nested llm kept");
+  });
+
+  test("children of a filtered run keep their thread_id (thread map is learned from the always-kept root)", async () => {
+    const { tracer, events } = harness(new RunFilter("deny", ["chain:agent"]));
+    await tracer.handleChainStart(SERIALIZED, {}, RUN_ID, undefined, [], { thread_id: "thread-42" });
+    await tracer.handleChainStart(SERIALIZED, {}, CHILD_ID, RUN_ID, [], {}, undefined, "agent");
+    await tracer.handleToolStart(SERIALIZED, "x", GRANDCHILD_ID, CHILD_ID);
+    await tracer.handleToolEnd({}, GRANDCHILD_ID);
+    await tracer.handleChainEnd({}, CHILD_ID);
+    await tracer.handleChainEnd({}, RUN_ID);
+
+    const toolEvents = events().filter((e) => e.data.run_id === GRANDCHILD_ID);
+    assert.equal(toolEvents.length, 2);
+    for (const event of toolEvents) assert.equal(event.thread_id, "thread-42");
   });
 });
 
