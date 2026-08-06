@@ -50,6 +50,12 @@ With filtering off (default) emitted bytes are identical to 1.2.0.
   combinations, glob anchoring/escaping, run_type-guarded langgraph_node matching, the
   root guarantee in both modes, pair-atomic dropping through the real BaseTracer
   entrypoints, and thread inheritance across a filtered parent.
+- **`configure-slot.ts`** — housekeeping that rode into `main` via the PR #5 merge
+  without a version and ships here: the idempotency/startup `Symbol.for` keys were
+  de-branded (`nbg.kafkaObservability.*` → `kafkaObservability.*`). Runtime-internal,
+  no contract change; only relevant if two library copies of different versions ever
+  share one process (their markers no longer collide — each copy would install its own
+  slot wrap, which the name-dedupe still keeps to one tracer per run).
 
 ## 1.2.0 (2026-08-05)
 

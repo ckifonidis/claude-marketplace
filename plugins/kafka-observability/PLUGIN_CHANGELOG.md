@@ -11,6 +11,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.4.0] — 2026-08-06
+
+Ships observability library **1.3.0**. Downstream projects upgrade via
+`/add-kafka-observability` (applies `migrations/1.2.0-to-1.3.0.md`: one idempotent
+`.env.example` transform, no wiring change; with filtering off — the default — emitted
+bytes are identical to 1.2.0).
+
+### Added
+- **Library 1.3.0 — opt-in run filtering**: `KAFKA_RUN_FILTER_MODE` (`off` default |
+  `allow` | `deny`) + `KAFKA_RUN_FILTER_PATTERNS` (`run_type:name` `*`-globs; the name
+  side also matches `metadata.langgraph_node`, the run_type side keeps `chain:agent`
+  from dropping the nested llm run). The root run always survives filtering, in both
+  modes — it carries the full invocation input/final state and is the only event without
+  `langgraph_node` (the turn-boundary marker for timeline consumers). Motivated by
+  payload verification in ib-password-reset-agent-ts (~73% of a real turn's events were
+  byte-duplicates of root/llm/tool content); a cross-repo survey of sibling agents
+  confirmed the duplication does NOT generalize, so filtering is a per-app,
+  payload-verified opt-in — never a default. Fail-fast validation of every inconsistent
+  env combination; one greppable startup line when active.
+
+### Changed
+- Library 1.3.0 also carries the configure-slot `Symbol.for` de-branding
+  (`nbg.kafkaObservability.*` → `kafkaObservability.*`) that rode into `main` via the
+  PR #5 merge without a version (runtime-internal, no contract change).
+- Skill workflow `.env.example` block gains the commented `KAFKA_RUN_FILTER_*` lines;
+  vendored-file count corrected 22 → 24; plugin/marketplace/root-README descriptions now
+  mention the opt-in filter.
+
+### Fixed
+- `tracked-assets-observability.md` (bump-version reference) Tier 1 inventory: added
+  `run-filter.ts` and `run-filter.test.ts`.
+
 ## [0.3.0] — 2026-08-05
 
 Ships observability library **1.2.0**. Because 0.2.0 shipped 1.0.0, this release also

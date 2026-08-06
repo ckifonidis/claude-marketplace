@@ -112,7 +112,10 @@ Ships one skill:
   bank-standard envelope (`id` as Kafka key, `thread_id` correlation), zod-validated,
   secret-redacted, 512 KB-truncated, over a bounded non-blocking fire-and-forget producer
   (librdkafka, `acks=all`, idempotent, bounded shutdown). Disabled by default
-  (`KAFKA_ENABLED`); runs alongside LangSmith for parallel validation. The skill also
+  (`KAFKA_ENABLED`); runs alongside LangSmith for parallel validation. Apps that have
+  payload-verified which runs duplicate root/LLM/tool content can opt into run filtering
+  (`KAFKA_RUN_FILTER_MODE` allow/deny + `run_type:name` globs; the root run always
+  survives) — default stays emit-everything. The skill also
   wires the dependency, `.env.example`, deployment settings (Key Vault refs for SASL
   secrets), a `test:observability` script, and verifies with typecheck + the library's
   unit suite.

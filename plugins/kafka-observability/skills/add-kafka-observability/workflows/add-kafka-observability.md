@@ -44,7 +44,7 @@ Present:
 # Kafka observability — <install|upgrade to> <version>: <repo name>
 
 ## Vendored (replaced wholesale, safe)
-- src/observability/  (22 files: library + tests + README + VERSION)
+- src/observability/  (24 files: library + tests + README + VERSION)
 
 ## Project edits (need your OK)
 - package.json         + "@confluentinc/kafka-javascript", + "test:observability" script
