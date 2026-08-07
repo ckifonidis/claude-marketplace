@@ -196,9 +196,17 @@ Diagnostics (all one-line, greppable):
   into the run. **Known gap**: no replay — sustained broker unavailability or queue
   saturation loses events (accepted tradeoff for never blocking the caller).
 - **Redaction**: `authorization`/`api_key`/`password`/`token`/`secret`/`credential`/
-  `connection_string` keys and `password=` fragments are masked in every payload. NOTE:
-  redaction masks secrets, not PII — full prompts/transcripts (incl. `telephone_number`)
-  flow to the topic by design, same data-boundary decision as self-hosted LangSmith.
+  `connection_string` keys (case-insensitive substring match) and `password=` fragments
+  are masked in every payload. Two carve-outs keep the substring match from destroying
+  usage analytics: values that cannot carry a secret (numbers, booleans, null) pass
+  verbatim whatever their key, and the known LLM usage containers (`tokenUsage`,
+  `token_usage`, `usage_metadata`, `prompt/completion/input/output/total_tokens?` +
+  `_details` variants) recurse normally instead of being masked whole — their contents
+  still pass through full redaction, so a string secret inside stays masked. A
+  sensitive-keyed string or any OTHER sensitive-keyed object/array is masked whole
+  (`credentials: {…}` never leaks unmatched inner keys). NOTE: redaction masks secrets,
+  not PII — full prompts/transcripts (incl. `telephone_number`) flow to the topic by
+  design, same data-boundary decision as self-hosted LangSmith.
 
 ## LangSmith migration
 

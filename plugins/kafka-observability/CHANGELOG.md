@@ -6,6 +6,45 @@ carry a copy of this library in `src/observability/`; `/add-kafka-observability`
 their `src/observability/VERSION` against the shipped one and upgrades via the
 version-keyed guides in `migrations/`.
 
+## 1.4.0 (2026-08-07)
+
+Redaction-precision release, closing a real information-loss bug found by the downstream
+timeline-UI team during the 1.3.0 QA verification (thread 019fdaef…, 400+ over-redacted
+fields across 20 events): the sensitive-key pattern's `token` substring also matched every
+LLM usage counter LangChain emits — `tokenUsage`, `prompt_tokens`, `completion_tokens`,
+`input/output_tokens`, the `*_token(s)_details` objects — masking them all to
+`***REDACTED***` and making cost/usage analytics impossible from the pipeline.
+
+Two surgical carve-outs in `redaction.ts`; the credential key pattern itself is untouched
+(deliberately NOT tightened — an under-match there would leak a real credential):
+
+- **Scalar type guard** — a number, boolean, or null value is never masked, whatever its
+  key: only strings can BE a credential and only objects/arrays can contain one. This
+  alone un-redacts every numeric counter, including provider-specific ones inside details
+  objects (`cached_tokens`, `reasoning_tokens`, `audio_tokens`, camelCase `promptTokens`)
+  and future counters not yet on any list. Consequence: `password: null` now passes as
+  null (was masked — carried no information either way).
+- **Usage-container exemption** — an anchored allowlist
+  (`(prompt|completion|input|output|total)_tokens?(_details)?`, `(estimated_)?token_?usage`
+  / `tokenUsage`, `usage(_metadata)?`) recurses into these objects instead of masking them
+  whole. Deliberately NOT a generic `_tokens?$` suffix rule, which would also exempt
+  `access_token`-style credentials. Contents still pass through full redaction — a string
+  secret inside a usage object stays masked.
+
+Unchanged, fail-safe: sensitive-keyed strings stay masked; any other sensitive-keyed
+object/array is still masked whole (`credentials: {…}` never leaks unmatched inner keys);
+`password=` fragment masking in string values unchanged. Streaming `new_token`
+`kwargs.token` chunks stay masked (string under key `token`) — redundant rather than
+harmful, the full content survives in `outputs`; dropping those entries outright would be
+a separate, deliberate behavior change this release does not make.
+
+- **`redaction.test.ts`** — pins both directions: OpenAI/LangChain/Anthropic-shaped usage
+  payloads survive verbatim (incl. details objects and camelCase counters) while
+  `api_key`, `Authorization`, `access_token`, `refresh_token`, `client_secret`, `token`
+  (string), `connection_string`, and whole credential objects stay masked; a string
+  secret inside `tokenUsage` is still caught; two pre-1.4.0 pins updated as documented
+  behavior changes (numeric under sensitive-substring key, `password: null`).
+
 ## 1.3.0 (2026-08-06)
 
 Event-volume release: **opt-in run filtering**. By default the tracer emits a
