@@ -11,6 +11,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.5.0] — 2026-08-07
+
+No library change (still ships observability library **1.4.0**). Skill-capability
+release: the install flow can no longer destroy pre-existing Kafka functionality.
+
+### Added
+- **Existing-Kafka intake guard** (`/add-kafka-observability`): before touching
+  anything, the skill detects a foreign module on `src/observability/` (non-empty, no
+  `VERSION` — e.g. ivr-router-ts's design-027 manual `agent`/`tool_call` emitter, which
+  the old flow would have classified as "first install" and vendored over: 14/17
+  same-named files overwritten, every `emit*` call site broken) AND any Kafka producer
+  usage elsewhere in `src/`. It then STOPS and asks the user to **classify** the
+  functionality — never inferring purpose from code shape, since producer code may emit
+  liveness/business/audit events the tracer does not replace. Agent-flow observability →
+  keep-both (coexistence, suggested default) or replace with confirmed downstream
+  sign-off; unrelated functionality → preserved untouched (replace never offered),
+  relocation only; unsure → preserve. Every path surfaces the
+  `KAFKA_*`/`APPLICATION_NAME` env-key overlap and topic sharing in the approval plan;
+  execution is new workflow **Step 4a** (move + call-site import updates, or removal
+  with per-line listing), typecheck-gated before vendoring.
+
+### Changed
+- Principle 7 amended: vendoring `src/observability/` is only "safe" when the directory
+  is absent, empty, or carries this library's `VERSION`.
+- Skill description + plugin/marketplace/root-README prose now state the guard.
+
 ## [0.4.1] — 2026-08-07
 
 Ships observability library **1.4.0**. Downstream projects upgrade via

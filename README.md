@@ -115,7 +115,11 @@ Ships one skill:
   (`KAFKA_ENABLED`); runs alongside LangSmith for parallel validation. Apps that have
   payload-verified which runs duplicate root/LLM/tool content can opt into run filtering
   (`KAFKA_RUN_FILTER_MODE` allow/deny + `run_type:name` globs; the root run always
-  survives) — default stays emit-everything. The skill also
+  survives) — default stays emit-everything. Repos with pre-existing Kafka
+  functionality are safe: the skill detects a foreign `src/observability/` module or
+  producers elsewhere, asks the user to classify them (agent-flow observability →
+  keep-both/replace; unrelated, e.g. liveness or business events → always preserved),
+  and never vendors over a foreign module. The skill also
   wires the dependency, `.env.example`, deployment settings (Key Vault refs for SASL
   secrets), a `test:observability` script, and verifies with typecheck + the library's
   unit suite.
