@@ -9,14 +9,26 @@ it. Follow the steps in order; the approval gate is Step 3.
    library version).
 2. Qualify the repo: `package.json` must depend on `@langchain/core` or
    `@langchain/langgraph`. If neither, stop and tell the user why.
-3. Mode:
+3. **Existing-Kafka guard** (always, before Mode):
+   - `src/observability/` non-empty with NO `VERSION` → foreign module on the canonical
+     path.
+   - Kafka producer usage elsewhere (`grep -rl "@confluentinc/kafka-javascript\|kafkajs\|node-rdkafka" src/ --include='*.ts'`
+     outside `src/observability/`) → existing Kafka functionality, no path collision.
+
+   When either fires: ask the user to CLASSIFY it per the SKILL.md intake (agent-flow
+   observability → keep-both or replace-with-downstream-sign-off; unrelated
+   functionality, e.g. liveness/business events → preserve untouched, relocation only;
+   unsure → preserve). Never infer the module's purpose from its code shape. Also grep
+   which `KAFKA_*`/`APPLICATION_NAME` keys the existing code reads — the overlap goes
+   into the Step 3 plan verbatim. Execution is Step 4a.
+4. Mode:
    - `src/observability/VERSION` absent → **first install**.
    - Present and older than shipped → **upgrade**: collect the applicable
      `<plugin>/migrations/<from>-to-<to>.md` files (in version order). Their
      `<transforms>` cover project-level integration edits only — the library files are
      always replaced wholesale.
    - Present and equal → report "already current: <version>" and STOP.
-4. Locate the integration points:
+5. Locate the integration points:
    - **Graph entry module**: the module `langgraph.json` points at (e.g. `src/graph.ts`),
      falling back to the module that builds/exports the compiled graph.
    - **Env example**: `.env.example` (or equivalent).
@@ -50,6 +62,13 @@ Present:
 - package.json         + "@confluentinc/kafka-javascript", + "test:observability" script
                        (+ fold into "test:all" if the repo has one)
 - <graph entry module> + import + startup() call at module load
+- [existing-Kafka guard only] <classification the user gave>:
+  <keep-both: git mv src/observability → src/observability-legacy + N call-site import
+   updates | replace (downstream sign-off confirmed): delete module + remove M call
+   sites | unrelated: relocate only, functionality untouched>
+  env-key overlap: <which KAFKA_*/APPLICATION_NAME keys the existing code reads;
+  "KAFKA_ENABLED=true activates BOTH stacks" when shared> topic sharing: <same topic?
+  consumers discriminate by data.type>
 - .env.example         + KAFKA_* block (disabled by default)
 - configuration/<app>/settings.<ENV>.json   + KAFKA_* entries (SASL password as
                        @Microsoft.KeyVault(...) reference), KAFKA_ENABLED "<false|true>"
@@ -60,6 +79,35 @@ APPLICATION_NAME=<...>  brokers/topic per env: <...>  security: <...>
 ```
 
 Wait for approval. On rejection, adjust or stop.
+
+## Step 4a: Existing-Kafka handling (only when Step 1's guard fired; after approval)
+
+Per the user's classification and decision (all shown concretely in the Step 3 plan):
+
+**Keep-both (agent-flow observability, coexistence) — or unrelated functionality that
+occupies `src/observability/`:**
+1. `git mv src/observability src/observability-legacy` (history preserved; pick a more
+   descriptive name if the user offers one, e.g. `src/liveness-events/`). Its internal
+   imports are relative and keep working unchanged.
+2. Update every call-site import outside the moved directory
+   (`grep -rn "observability/" src/ --include='*.ts'`) to the new path. If the existing
+   module exports its own `startup`/`shutdown` and a call site will also import the
+   tracer's, alias one (e.g. `startup as startupLegacyObservability`).
+3. `npx tsc --noEmit` must pass BEFORE vendoring — isolates move breakage from
+   install breakage.
+4. Report the runtime consequence: both stacks run their own producer (one extra broker
+   connection) and share whatever env keys the grep found — when `KAFKA_ENABLED` is
+   shared, enabling the tracer enables the legacy emitter too.
+
+**Replace (only ever for user-classified agent-flow observability, with confirmed
+downstream sign-off):**
+1. Delete the module directory.
+2. Remove every emitter import and call site — including observability-only wrapper
+   helpers around node functions/conditional edges — listing each removal file:line.
+3. `npx tsc --noEmit` must pass BEFORE vendoring.
+
+**Unrelated functionality with no path collision:** nothing to execute here — the plan's
+env-overlap note is the deliverable; the module is not touched.
 
 ## Step 4: Vendor the library
 

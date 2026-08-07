@@ -1,6 +1,6 @@
 ---
 name: add-kafka-observability
-description: Install or upgrade LangSmith-parity Kafka observability in a LangGraph.js / LangChain.js agent repo. Vendors the src/observability/ library (a BaseTracer subclass publishing EVERY traced run — graph, nodes, LLM calls with full prompts/outputs/usage, tool runs — as start/end events to a Kafka topic), adds the @confluentinc/kafka-javascript dependency, wires ONE startup() call at the graph entrypoint (dual global attachment: configure hook + configure-slot wrap, robust to platform harnesses that sever async-context ancestry), updates .env.example and deployment settings (Key Vault refs for secrets), adds a test script, and verifies with typecheck + unit tests. Use when a repo must stream its LangSmith telemetry to Kafka, replace/unplug LangSmith, add Kafka observability, or upgrade an already-vendored src/observability/ library.
+description: Install or upgrade LangSmith-parity Kafka observability in a LangGraph.js / LangChain.js agent repo. Vendors the src/observability/ library (a BaseTracer subclass publishing EVERY traced run — graph, nodes, LLM calls with full prompts/outputs/usage, tool runs — as start/end events to a Kafka topic), adds the @confluentinc/kafka-javascript dependency, wires ONE startup() call at the graph entrypoint (dual global attachment: configure hook + configure-slot wrap, robust to platform harnesses that sever async-context ancestry), updates .env.example and deployment settings (Key Vault refs for secrets), adds a test script, and verifies with typecheck + unit tests. Detects pre-existing Kafka functionality first — a foreign module on src/observability/ or producers elsewhere — and asks the user to classify it (agent-flow observability vs unrelated, e.g. liveness/business events) and decide keep-both vs replace before touching anything; never overwrites a foreign module. Use when a repo must stream its LangSmith telemetry to Kafka, replace/unplug LangSmith, add Kafka observability, or upgrade an already-vendored src/observability/ library.
 ---
 
 <objective>
@@ -45,9 +45,14 @@ the developer's local concern; never write real secrets into tracked files.
 transcripts (that is the point — LangSmith parity). Redaction masks secrets, not PII.
 State this in the final report so the data-boundary decision is explicit and on the user.
 
-**7. Gate before editing the project's own files.** Vendoring `src/observability/` is safe.
-Everything else (graph entry wiring, package.json, .env.example, deployment settings)
-is the user's code — present the full plan and get approval before writing.
+**7. Gate before editing the project's own files.** Vendoring `src/observability/` is safe
+— when the directory is absent, empty, or holds this library (its `VERSION` file
+present). A non-empty `src/observability/` WITHOUT a `VERSION` file is a **foreign
+module**: overwriting it destroys working code and possibly a live event contract —
+never vendor over it, and never assume its purpose from its shape (see the
+existing-Kafka guard in intake). Everything else (graph entry wiring, package.json,
+.env.example, deployment settings) is the user's code — present the full plan and get
+approval before writing.
 </essential_principles>
 
 <intake>
@@ -55,9 +60,44 @@ Confirm the target repo qualifies: `package.json` depends on `@langchain/core` (
 via `@langchain/langgraph`). If not, stop — this library hooks LangChain's callback system
 and has nothing to attach to.
 
+**Existing-Kafka guard (before anything else touches the repo).** Two detections, run
+always:
+
+- `src/observability/` exists, non-empty, NO `VERSION` file → a **foreign module** owns
+  the library's canonical path. It is NOT this library and vendoring would overwrite its
+  same-named files and break its call sites.
+- Kafka producer usage anywhere else in the repo (`@confluentinc/kafka-javascript`,
+  `kafkajs`, `node-rdkafka` imports outside `src/observability/`) → no path collision,
+  but the env/topic questions below still apply.
+
+When either fires, STOP and ask the user to **classify the existing functionality —
+never infer purpose from code shape** (producer code that looks like telemetry may be
+emitting liveness heartbeats, business/audit events, or billing triggers consumed by
+alerting and downstream automations the tracer does not replace):
+
+1. **Agent-flow observability** — a predecessor/equivalent of what the tracer emits
+   (e.g. the design-027 manual `agent`/`tool_call` emitter this library descends from,
+   live in ivr-router-ts). Only for this classification, ask the follow-up: **keep the
+   existing events alongside the tracer (coexistence — suggest this default; the events
+   are a live downstream contract), or replace them?** Replace requires the user to
+   explicitly confirm downstream consumers signed off on losing the legacy event
+   families in favor of `"run"` events.
+2. **Unrelated Kafka functionality** (liveness, business events, audit, anything else) —
+   **preserve untouched; replace is never offered.** Only mechanical questions remain:
+   relocation if it occupies `src/observability/` (moved wholesale, call-site imports
+   updated), plus the collision review below.
+3. **Unsure / mixed** — treat as unrelated (preserve) until the user says otherwise.
+
+In every case, grep which `KAFKA_*` / `APPLICATION_NAME` env keys the existing code
+reads and put the overlap in the Step 3 plan explicitly (e.g. "`KAFKA_ENABLED=true`
+activates BOTH the existing producer and the tracer — confirm that is intended"), along
+with topic sharing (consumers must discriminate by `data.type`) and the extra broker
+connection. Execution is `workflows/add-kafka-observability.md` Step 4a, still behind
+the Step 3 approval gate; **abort** is always on the table and leaves the repo untouched.
+
 Detect install vs upgrade: if `src/observability/VERSION` exists, this is an **upgrade**
 (compare against the plugin template's `VERSION`; if equal, report current and stop).
-Otherwise it is a **first install**.
+Otherwise (directory absent or empty, guard resolved) it is a **first install**.
 
 Then gather, asking only for what cannot be derived:
 1. **`APPLICATION_NAME`** — propose the snake_cased `package.json` name.
@@ -75,7 +115,8 @@ Then gather, asking only for what cannot be derived:
 </intake>
 
 <routing>
-Follow `workflows/add-kafka-observability.md` exactly — detect → plan → approve (gate) →
+Follow `workflows/add-kafka-observability.md` exactly — detect (incl. existing-Kafka
+guard) → plan → approve (gate) → existing-Kafka handling (4a, when the guard fired) →
 vendor → wire → configure → verify → report.
 </routing>
 
