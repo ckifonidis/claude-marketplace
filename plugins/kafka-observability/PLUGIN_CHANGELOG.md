@@ -11,6 +11,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.4.1] — 2026-08-07
+
+Ships observability library **1.4.0**. Downstream projects upgrade via
+`/add-kafka-observability` (applies `migrations/1.3.0-to-1.4.0.md`: pure file refresh,
+no wiring/env change).
+
+### Fixed
+- **Library 1.4.0 — LLM usage counters survive redaction**: the sensitive-key pattern's
+  `token` substring masked every usage field (`tokenUsage`,
+  `prompt/completion/input/output/total_tokens`, `*_token(s)_details`) — found by the
+  downstream timeline-UI team during the 1.3.0 QA verification (400+ over-redacted
+  fields in one verified thread), making cost/usage analytics impossible from the
+  pipeline. Fixed with a scalar type guard (numbers/booleans/null pass verbatim — only
+  strings can be credentials, only objects/arrays can contain one) plus an anchored
+  usage-container exemption that recurses instead of masking whole (contents still fully
+  redacted; deliberately NOT a generic `_tokens?$` rule, which would exempt
+  `access_token`-style credentials). Credential masking otherwise unchanged and pinned
+  in both directions by tests. Consumers: usage fields in events produced by ≤1.3.0
+  carry `***REDACTED***` permanently — treat the marker as "predates 1.4.0", not data.
+
 ## [0.4.0] — 2026-08-06
 
 Ships observability library **1.3.0**. Downstream projects upgrade via
