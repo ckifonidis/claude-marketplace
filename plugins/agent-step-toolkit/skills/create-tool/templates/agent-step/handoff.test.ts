@@ -19,6 +19,7 @@ import type {
   BoundedChoice,
   CurrentFlow,
   HandoffRequest,
+  TrailEntry,
 } from "./state.js";
 import type { PagedCache } from "./paginate.js";
 
@@ -38,6 +39,7 @@ const replaceNull = <T>() => ({
 });
 
 const testStateAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>(replaceNull<TrailEntry[]>()),
   thing: Annotation<string | null>(replaceNull<string>()),
   awaitingInput: Annotation<AwaitingInput | null>(replaceNull<AwaitingInput>()),
   currentFlow: Annotation<CurrentFlow | null>(replaceNull<CurrentFlow>()),

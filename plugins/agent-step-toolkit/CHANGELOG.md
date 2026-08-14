@@ -12,6 +12,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [2.6.0] — 2026-08-14
+
+Minor: **the runner starts keeping the audit record it always had in its hands.** The handback
+wire is a routing vocabulary — task-ending signals collapse rich outcomes into
+`completed`/`abandon`, and a voluntary mid-task cancellation leaves no trace of how far the caller
+got (no executor runs on a cancel). The new library-managed, task-scoped **`actionTrail`** slot
+records one `{ action, ok, error?, proposed? }` entry per step result of every admitted batch —
+domain steps, controls, and the synthetic `auto_handoff` — in execution order, cleared by a
+task-ending handback. Written by `run/finalize.ts` as a projection ALLOW-LIST: never params,
+summaries, or result bodies, so the trail is PII-free by construction. Audit-only: consumers read
+it from observability's graph-state capture (the `resolve_handoff` run's INPUT state carries the
+complete per-task record); the runner, the prompt, and the model surface never read it — the
+model-facing schema is byte-identical to 2.5.0. Hosts on the scaffold pattern adopt it with ZERO
+changes (the slot arrives via the spread fragments; the input mask omits it at the invoke
+boundary). Suite 236 → 245. Migration:
+[migrations/2.5.0-to-2.6.0.md](migrations/2.5.0-to-2.6.0.md).
+
+### Added
+- **`actionTrail` slot** (`state.ts`, in both spreadable fragments) + **`TrailEntrySchema` /
+  `TrailEntry`** exports from `index.ts`. Recording lives in `run/finalize.ts` — the single point
+  that sees every result, including the auto-handoff entry that phase itself appends and the
+  match-mismatch patches execution applied to earlier entries.
+- **Refusal-boundary invariants**, all pinned by the new `trail.test.ts` (9 cases): an
+  ADMISSION-refused batch leaves no trail (nothing admitted, nothing committed); execution-phase
+  refusals (gate locks, prereq denials, `invalid_params`) ARE recorded with their error codes;
+  confirmation proposals/re-proposals carry `proposed: true`, the later execute entry does not; an
+  empty batch writes nothing.
+- **Ownership guard**: `actionTrail` joined `LIBRARY_MANAGED_KEYS` — an executor writing it
+  through `stateUpdate` throws loudly, like every runner-coordinated slot.
+- **Task scoping**: `actionTrail` joined `agentStepTaskScopedSlots` (a `completed`/`abandon`
+  handback clears it; an `off_topic` re-route and a successful delegate keep it) and
+  `agentStepInternalSlotMask`, which grows to nine keys — a mask-derived graph input schema keeps
+  rejecting it at the invoke boundary with no host edit.
+
+### Changed
+- **`requiredManagedChannels` gains its first unconditional entry**: the `actionTrail` channel is
+  required at construction regardless of which features the config uses, because the trail is
+  written on every finalized batch. A host that spreads the exported fragments is untouched; a
+  hand-rolled state schema (already unsupported) now fails at startup with the missing-channel
+  message instead of silently losing the write. Library test schemas were extended accordingly,
+  and seven execution-phase-refusal assertions now pin the exact recorded trail.
+
 ## [2.5.0] — 2026-08-11
 
 Minor: **the confirmation gate hardens, and configuration keeps absorbing prompt prose.** A survey of

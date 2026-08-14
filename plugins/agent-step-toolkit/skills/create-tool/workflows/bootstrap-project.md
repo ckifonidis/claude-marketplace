@@ -53,7 +53,7 @@ Target: /absolute/path/to/<project_name>/
 - build_and_push.sh
 
 ### Agent-step library source (verbatim from skill templates)
-The ENTIRE `templates/agent-step/` tree, copied recursively — top-level files (`types.ts`, `state.ts`, `runner.ts`, `messages.ts`, `define-config.ts`, `paginate.ts`, `capture.ts`, `index.ts`, the ten `*.test.ts` files) plus the five phase-module directories (`compile/`, `run/`, `interaction/`, `controls/`, `handoff/`):
+The ENTIRE `templates/agent-step/` tree, copied recursively — top-level files (`types.ts`, `state.ts`, `runner.ts`, `messages.ts`, `define-config.ts`, `paginate.ts`, `capture.ts`, `index.ts`, the eleven `*.test.ts` files) plus the five phase-module directories (`compile/`, `run/`, `interaction/`, `controls/`, `handoff/`):
 - src/agent-step/**  (see `references/project-bootstrap-structure.md` for the per-file inventory)
 - src/agent-step/VERSION  (library version marker; lets `/pull-library` know what the project currently vendors)
 

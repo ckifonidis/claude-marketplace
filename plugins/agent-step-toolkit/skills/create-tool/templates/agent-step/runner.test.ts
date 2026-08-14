@@ -11,7 +11,7 @@ import {
   type BuildAgentStepToolOptions,
 } from "./runner.js";
 import type { ExecutorRegistry, VerifierRegistry } from "./types.js";
-import type { AwaitingInput, CurrentFlow, HandoffRequest } from "./state.js";
+import type { AwaitingInput, CurrentFlow, HandoffRequest, TrailEntry } from "./state.js";
 import { DEFAULT_SYSTEM_MESSAGES } from "./messages.js";
 
 interface S {
@@ -25,6 +25,7 @@ interface S {
  *  every field. The library extracts each channel's `operator` (the reducer)
  *  via runtime cast. */
 const testStateAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   customer: Annotation<S["customer"] | null>({
     reducer: (_, n) => n ?? null,
     default: () => null,
@@ -276,7 +277,11 @@ test("prereq missing → denial, no execution", async () => {
   assert.equal(body.results[0].ok, false);
   assert.equal(body.results[0].error, "card_not_verified");
   assert.equal(calls.fetchCardStatus, 0);
-  assert.deepEqual(committed, {});
+  // No domain writes — the only committed field is the audit trail recording
+  // the denial itself.
+  assert.deepEqual(committed, {
+    actionTrail: [{ action: "fetch_card_status", ok: false, error: "card_not_verified" }],
+  });
 });
 
 test("prereq satisfied by earlier batch step (in-batch threading)", async () => {
@@ -307,7 +312,10 @@ test("mutation alone → single result, executor handles verification itself", a
   assert.equal(body.results[0].ok, true);
   assert.equal(calls.changeStatus, 1);
   assert.equal(calls.fetchCardStatus, 0, "library no longer wraps; executor does its own reads");
-  assert.deepEqual(committed, {});
+  // The executor writes no state; the audit trail is the only committed field.
+  assert.deepEqual(committed, {
+    actionTrail: [{ action: "change_status", ok: true }],
+  });
 });
 
 test("mutation with extra step → refusal, no execution", async () => {
@@ -1342,6 +1350,7 @@ interface SoeS {
 }
 
 const soeAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   customer: Annotation<SoeS["customer"] | null>({
     reducer: (_, n) => n ?? null,
     default: () => null,
@@ -1521,6 +1530,7 @@ interface MatchS {
 }
 
 const matchAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   customer: Annotation<MatchS["customer"] | null>({
     reducer: (_, n) => n ?? null,
     default: () => null,
@@ -1919,6 +1929,7 @@ interface InvalidateS {
 }
 
 const invalidateStateAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   pan: Annotation<string | null>({ reducer: (_, n) => n, default: () => null }),
   amount: Annotation<number | null>({ reducer: (_, n) => n, default: () => null }),
   amountCollected: Annotation<boolean | null>({
@@ -2081,6 +2092,7 @@ test("invalidatesOnChange: executor's own writes to downstream slots win over th
     currentFlow?: CurrentFlow | null;
   }
   const annotation = Annotation.Root({
+    actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
     amount: Annotation<number | null>({ reducer: (_, n) => n, default: () => null }),
     matchedTx: Annotation<string | null>({ reducer: (_, n) => n, default: () => null }),
     awaitingInput: Annotation<AwaitingInput | null>({
@@ -2185,6 +2197,7 @@ interface AHState {
 }
 
 const ahAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   errorCount: Annotation<number | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   handoff: Annotation<HandoffRequest | null>({ reducer: (_, n) => n ?? null, default: () => null }),
 });
@@ -2369,6 +2382,7 @@ interface GatedAHState {
 }
 
 const gatedAhAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   errorCount: Annotation<number | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   handoff: Annotation<HandoffRequest | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   awaitingInput: Annotation<AwaitingInput | null>({
@@ -2532,6 +2546,7 @@ interface NormS {
 }
 
 const normAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   digits: Annotation<string | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   awaitingInput: Annotation<AwaitingInput | null>({
     reducer: (_, n) => n ?? null,
@@ -2694,6 +2709,7 @@ test("invalidatesOnChange: fresh-but-value-equal OBJECT re-write does NOT clear 
     currentFlow?: CurrentFlow | null;
   }
   const annotation = Annotation.Root({
+    actionTrail: Annotation<TrailEntry[] | null>({ reducer: (_, n) => n ?? null, default: () => null }),
     holder: Annotation<{ code: string } | null>({
       reducer: (_, n) => n ?? null,
       default: () => null,

@@ -26,7 +26,7 @@ Top level (`skills/create-tool/templates/agent-step/`):
 - `runner.ts` — the thin public entry points (`buildAgentStepTool`, `runSteps`)
 - `messages.ts` — runner-emitted system `summary` strings (neutral English defaults; host-overridable via `BuildAgentStepToolOptions.messages`)
 - `define-config.ts`, `index.ts` (the public surface), `paginate.ts`, `capture.ts` (caller-digit capture primitives)
-- Tests: `runner.test.ts`, `handoff.test.ts`, `bounded-choice.test.ts`, `hardening.test.ts`, `paginate.test.ts`, `capture.test.ts`, `guard-latch.test.ts`, `deflect-aside.test.ts`, `repeat-confirmation.test.ts`, `zod-state.test.ts` (isolation test: merger derived from a Zod state schema)
+- Tests: `runner.test.ts`, `handoff.test.ts`, `bounded-choice.test.ts`, `hardening.test.ts`, `paginate.test.ts`, `capture.test.ts`, `guard-latch.test.ts`, `deflect-aside.test.ts`, `repeat-confirmation.test.ts`, `zod-state.test.ts` (isolation test: merger derived from a Zod state schema), `trail.test.ts` (the actionTrail audit slot)
 - `VERSION` — rewrite to the new version string.
 
 Phase modules (internal layout; hosts import only from `index.ts`):

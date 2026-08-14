@@ -223,7 +223,16 @@ test("same-turn repeat is refused without touching the gate or executor", async 
   });
   assert.equal(body.results[0].error, "repeat_confirmation_same_turn_locked");
   assert.equal(body.failed_at, 0);
-  assert.deepEqual(committed, {});
+  // Gate untouched, executor unrun — the audit trail records the refusal.
+  assert.deepEqual(committed, {
+    actionTrail: [
+      {
+        action: REPEAT_PENDING_CONFIRMATION_ACTION,
+        ok: false,
+        error: "repeat_confirmation_same_turn_locked",
+      },
+    ],
+  });
   assert.deepEqual(calls, { repeatable: 0, plain: 0, render: 0 });
 });
 
@@ -279,7 +288,15 @@ test("repeat locks same-turn mutation execution and permits it only after a late
     "confirmation_same_turn_locked",
   );
   assert.equal(sameTurn.body.failed_at, 0);
-  assert.deepEqual(sameTurn.committed, {});
+  assert.deepEqual(sameTurn.committed, {
+    actionTrail: [
+      {
+        action: "repeatable_change",
+        ok: false,
+        error: "confirmation_same_turn_locked",
+      },
+    ],
+  });
   assert.equal(calls.repeatable, 0, "same-turn ReAct call must not execute");
 
   const laterTurn = await runSteps(
@@ -335,7 +352,15 @@ test("repeat refuses absent, ineligible, or unrendered pending input", async () 
   for (const state of cases) {
     const { body, committed } = await runSteps(opts, [repeatStep], state);
     assert.equal(body.results[0].error, "repeat_confirmation_not_available");
-    assert.deepEqual(committed, {});
+    assert.deepEqual(committed, {
+      actionTrail: [
+        {
+          action: REPEAT_PENDING_CONFIRMATION_ACTION,
+          ok: false,
+          error: "repeat_confirmation_not_available",
+        },
+      ],
+    });
   }
 });
 
@@ -352,7 +377,15 @@ test("repeat fails closed when a later caller turn cannot be proven", async () =
     body.results[0].error,
     "repeat_confirmation_turn_identity_unavailable",
   );
-  assert.deepEqual(committed, {});
+  assert.deepEqual(committed, {
+    actionTrail: [
+      {
+        action: REPEAT_PENDING_CONFIRMATION_ACTION,
+        ok: false,
+        error: "repeat_confirmation_turn_identity_unavailable",
+      },
+    ],
+  });
 });
 
 test("repeat control is mechanically incompatible with mixed batches", async () => {

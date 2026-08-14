@@ -35,6 +35,7 @@ import type {
   BoundedChoice,
   CurrentFlow,
   HandoffRequest,
+  TrailEntry,
 } from "./state.js";
 import type { PagedCache } from "./paginate.js";
 
@@ -57,6 +58,7 @@ const replaceNull = <T>() => ({
 });
 
 const testStateAnnotation = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>(replaceNull<TrailEntry[]>()),
   thing: Annotation<string | null>(replaceNull<string>()),
   awaitingInput: Annotation<AwaitingInput | null>(replaceNull<AwaitingInput>()),
   currentFlow: Annotation<CurrentFlow | null>(replaceNull<CurrentFlow>()),
@@ -377,6 +379,9 @@ test("deflect_aside: construction rejects a state schema missing the deflectedAs
   // missing, so without the validate.ts guard the write would be silently
   // discarded and the escalation would never fire.
   const incomplete = Annotation.Root({
+    // actionTrail present so the assertion below stays pinned to the ONE slot
+    // this test deliberately omits.
+    actionTrail: Annotation<TrailEntry[] | null>(replaceNull<TrailEntry[]>()),
     thing: Annotation<string | null>(replaceNull<string>()),
     awaitingInput: Annotation<AwaitingInput | null>(replaceNull<AwaitingInput>()),
     handoff: Annotation<HandoffRequest | null>(replaceNull<HandoffRequest>()),

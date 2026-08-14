@@ -154,6 +154,34 @@ export const PagedCacheSchema = z.object({
   extras: z.record(z.string(), z.unknown()),
 });
 
+/** Schema for one entry of the library-managed `actionTrail` slot — the
+ *  runner's per-task audit record of what each admitted batch actually did.
+ *  One entry per step RESULT (domain steps, controls, and the synthetic
+ *  `auto_handoff`), appended in order by run/finalize.ts. Deliberately a
+ *  PROJECTION of the step result, never its payload: `action` + `ok` + the
+ *  result's `error` code + a `proposed` marker for confirmation
+ *  proposals/re-proposals (no executor ran). Params and result bodies are
+ *  intentionally NOT recorded — the trail must stay PII-free by construction.
+ *
+ *  Two deliberate gaps, both consistent with what the runner committed:
+ *  - admission-refused batches leave no trail (refusal commits NOTHING, and
+ *    the trail is state like everything else);
+ *  - forced handoffs (`HandoffSpec.forcedHandoff`) never reach the runner, so
+ *    they never appear — the resolver node handles them without state writes. */
+export const TrailEntrySchema = z.object({
+  action: z.string(),
+  ok: z.boolean(),
+  /** The step result's `error` code, when the step failed or was refused. */
+  error: z.string().optional(),
+  /** True for a confirmation propose/re-propose entry: the step stored a gate
+   *  and returned `needs_confirmation` — no executor ran. Distinguishes the
+   *  proposal from the later execute entry of the same action name. */
+  proposed: z.boolean().optional(),
+});
+
+/** One runner-recorded trail entry. Inferred from {@link TrailEntrySchema}. */
+export type TrailEntry = z.infer<typeof TrailEntrySchema>;
+
 /** The library-managed slots, as a plain shape. Any host state type the runner
  *  operates over must structurally include these (the runner constrains its
  *  generic against this so an omission is a compile error, not a runtime one). */
@@ -188,6 +216,13 @@ export interface LibraryManagedSlots {
    *  auto-triggers a handoff (if a handoff path is configured) so the
    *  customer is not left in an unrecoverable error loop. */
   errorCount?: number | null;
+  /** Per-task audit trail: one {@link TrailEntry} per step result of every
+   *  admitted batch, in execution order, appended by run/finalize.ts. The
+   *  runner is the only writer. Task-scoped — a task-ending handback clears
+   *  it, so each task on a reused thread starts a fresh trail. Consumed by
+   *  observability (it rides the graph state into the audit stream), never by
+   *  the runner itself: no gate, control, or prompt input reads it. */
+  actionTrail?: TrailEntry[] | null;
 }
 
 const replaceNull = <T>() => ({
@@ -216,6 +251,7 @@ export const agentStepStateSpec = {
   deflectedAside: Annotation<boolean | null>(replaceNull<boolean>()),
   handoff: Annotation<HandoffRequest | null>(replaceNull<HandoffRequest>()),
   errorCount: Annotation<number | null>(replaceNull<number>()),
+  actionTrail: Annotation<TrailEntry[] | null>(replaceNull<TrailEntry[]>()),
 };
 
 /** Zod shape fragment for the library-managed slots. Spread into the
@@ -260,6 +296,12 @@ export const agentStepZodShape = {
   errorCount: withLangGraph(z.number().int().nonnegative().nullable(), {
     default: (): number | null => null,
   }),
+  // NOTE: replace-on-write like every other library slot — the runner writes
+  // the FULL accumulated array each batch (run/finalize.ts), so an append-style
+  // reducer here would double entries AND make the slot unclearable by `null`.
+  actionTrail: withLangGraph(z.array(TrailEntrySchema).nullable(), {
+    default: (): TrailEntry[] | null => null,
+  }),
 };
 
 /** The library-managed slot keys as a Zod `.omit()` mask. A host that derives a
@@ -276,6 +318,7 @@ export const agentStepInternalSlotMask = {
   deflectedAside: true,
   handoff: true,
   errorCount: true,
+  actionTrail: true,
 } as const;
 
 /** The library-managed slots that are TASK-SCOPED: every one of them describes
@@ -296,4 +339,5 @@ export const agentStepTaskScopedSlots = [
   "pagedRead",
   "deflectedAside",
   "errorCount",
+  "actionTrail",
 ] as const satisfies readonly (keyof typeof agentStepInternalSlotMask)[];

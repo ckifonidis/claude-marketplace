@@ -31,6 +31,7 @@ import type {
   BoundedChoice,
   CurrentFlow,
   HandoffRequest,
+  TrailEntry,
 } from "./state.js";
 import type { PagedCache } from "./paginate.js";
 import type { VerifierRegistry } from "./types.js";
@@ -54,6 +55,7 @@ const replace = <T>() => ({
 });
 
 const stateSchema = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>(replace<TrailEntry[]>()),
   data: Annotation<string | null>(replace<string>()),
   ready: Annotation<boolean | null>(replace<boolean>()),
   awaitingInput: Annotation<AwaitingInput | null>(replace<AwaitingInput>()),
@@ -478,6 +480,9 @@ test("[abort, soleOnExecute mutation at tail] is admitted as a fresh propose", a
 test("construction rejects a state schema missing a required managed channel", () => {
   const { opts } = makeOpts();
   const incomplete = Annotation.Root({
+    // actionTrail present so the assertion below stays pinned to the ONE slot
+    // this test deliberately omits.
+    actionTrail: Annotation<TrailEntry[] | null>(replace<TrailEntry[]>()),
     data: Annotation<string | null>(replace<string>()),
     // awaitingInput deliberately missing while confirm gates are configured.
     currentFlow: Annotation<CurrentFlow | null>(replace<CurrentFlow>()),

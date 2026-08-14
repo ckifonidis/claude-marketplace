@@ -1,8 +1,20 @@
 // FILE: src/agent-step/run/finalize.ts
 //
-// Batch finalization: assemble the LLM-facing result body, then apply the one
+// Batch finalization: assemble the LLM-facing result body, apply the one
 // CROSS-BATCH policy the runner owns — the consecutive-backend-failure counter
-// and its auto-handoff.
+// and its auto-handoff — and record the batch into the `actionTrail` audit
+// slot.
+//
+// Trail semantics: one entry per step RESULT of this batch (domain steps,
+// controls, the synthetic `auto_handoff`), appended to the trail carried in
+// `initialState` and written as the FULL array (the slot is replace-on-write).
+// Recording happens HERE, after the body is final, for two reasons: (a) it is
+// the single point that sees every result — including the auto-handoff entry
+// this phase itself appends and the match-mismatch patches execution applied
+// to earlier entries; (b) an admission-refused batch never reaches finalize,
+// which keeps the refusal invariant intact: nothing admitted, nothing
+// committed, no trail. The projection records `action`/`ok`/`error`/`proposed`
+// ONLY — never params or result bodies, so no caller data can enter the trail.
 //
 // Error-counter semantics: the counter increments on each batch whose failing
 // step is a backend failure (the runner-raised `executor_error`, or an
@@ -24,8 +36,8 @@
 // must not disturb the threaded view (the batch is over), and every touched
 // slot is replace-on-write — a reducer merge would be an identity operation.
 
-import type { RunnerResultBody } from "../types.js";
-import type { HandoffRequest, LibraryManagedSlots } from "../state.js";
+import type { RunnerResultBody, StepResult } from "../types.js";
+import type { HandoffRequest, LibraryManagedSlots, TrailEntry } from "../state.js";
 import { formatMessage } from "../messages.js";
 import type { CompiledPlan } from "../compile/plan.js";
 import type { BatchState } from "./batch-state.js";
@@ -34,6 +46,17 @@ import type { ExecutionOutcome } from "./execution.js";
 export interface RunResult<T> {
   body: RunnerResultBody;
   committed: Partial<T>;
+}
+
+/** Project one step result down to its trail entry. A deliberate allow-list —
+ *  `action`, `ok`, the `error` code, and the confirmation-proposal marker —
+ *  so no params, summaries, or result-body fields (i.e. nothing caller-derived
+ *  beyond the action's own name) can ever reach the trail. */
+function trailEntryOf(result: StepResult): TrailEntry {
+  const entry: TrailEntry = { action: result.action, ok: result.ok };
+  if (typeof result.error === "string") entry.error = result.error;
+  if (result.needs_confirmation === true) entry.proposed = true;
+  return entry;
 }
 
 export function finalizeRun<T extends LibraryManagedSlots>(
@@ -98,6 +121,24 @@ export function finalizeRun<T extends LibraryManagedSlots>(
     } else if (exec.anExecutorRan && prevErrorCount > 0) {
       committedRec.errorCount = 0;
     }
+  }
+
+  // ── Trail recording. Direct `committed` write like the error counter above
+  //    (the batch is over; the slot is replace-on-write). Base is the trail
+  //    carried in `initialState` — previous batches of the SAME task; a
+  //    task-ending handback clears the slot (agentStepTaskScopedSlots), so a
+  //    reused thread's next task starts from []. An empty batch writes
+  //    nothing: no results, no state churn.
+  if (body.results.length > 0) {
+    const prevTrail =
+      ((initialState as Record<string, unknown>).actionTrail as
+        | TrailEntry[]
+        | null
+        | undefined) ?? [];
+    (st.committed as Record<string, unknown>).actionTrail = [
+      ...prevTrail,
+      ...body.results.map(trailEntryOf),
+    ];
   }
 
   return { body, committed: st.committed };

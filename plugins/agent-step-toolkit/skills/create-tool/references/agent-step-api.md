@@ -194,8 +194,8 @@ interface ExecutorResult<T> {
   stateUpdate?: Partial<T>;        // HOST-OWNED slots only — threaded to subsequent batch
                                    // steps + committed at end. Writing a library-managed slot
                                    // (awaitingInput, currentFlow, boundedChoice, pagedRead,
-                                   // deflectedAside, handoff, errorCount) through it THROWS —
-                                   // library transitions go through `effects` instead.
+                                   // deflectedAside, handoff, errorCount, actionTrail) through it
+                                   // THROWS — library transitions go through `effects` instead.
   effects?: ExecutorEffect[];      // typed library-state transitions (below)
   ok: boolean;                     // false short-circuits the batch
 }
@@ -337,11 +337,11 @@ interface PagedCache<Row> {
 }
 ```
 
-The host gets the `pagedRead: PagedCache<unknown> | null` slot (alongside `awaitingInput` / `currentFlow` / `boundedChoice` / `deflectedAside` / `handoff` / `errorCount` / `guardTurn`) by spreading the library's `agentStepZodShape` into its Zod state schema — the bootstrap state template does this. Each slot in `agentStepZodShape` is wrapped with `withLangGraph` so it carries the runner's expected last-writer-wins reducer/default as channel metadata. The per-slot schemas (`AwaitingInputSchema`, `CurrentFlowSchema`, `BoundedChoiceSchema`, `PagedCacheSchema`, `HandoffRequestSchema`) are individually exported from `index.ts` too. (A host still on a LangGraph `Annotation.Root` spreads the equivalent `agentStepStateSpec` fragment instead — still exported, but the scaffold uses the Zod path.) Since 2.0.0 `buildAgentStepTool` **verifies channel completeness at construction**: a state schema missing a channel for any library slot the configuration writes throws (the message names the missing slots and the spreadable fragments).
+The host gets the `pagedRead: PagedCache<unknown> | null` slot (alongside `awaitingInput` / `currentFlow` / `boundedChoice` / `deflectedAside` / `handoff` / `errorCount` / `guardTurn` / `actionTrail`) by spreading the library's `agentStepZodShape` into its Zod state schema — the bootstrap state template does this. Each slot in `agentStepZodShape` is wrapped with `withLangGraph` so it carries the runner's expected last-writer-wins reducer/default as channel metadata. The per-slot schemas (`AwaitingInputSchema`, `CurrentFlowSchema`, `BoundedChoiceSchema`, `PagedCacheSchema`, `HandoffRequestSchema`, `TrailEntrySchema`) are individually exported from `index.ts` too. (A host still on a LangGraph `Annotation.Root` spreads the equivalent `agentStepStateSpec` fragment instead — still exported, but the scaffold uses the Zod path.) Since 2.0.0 `buildAgentStepTool` **verifies channel completeness at construction**: a state schema missing a channel for any library slot the configuration writes throws (the message names the missing slots and the spreadable fragments).
 
-`index.ts` also exports **`agentStepTaskScopedSlots`** (2.2.0) — the subset of library slots that describe work IN PROGRESS (`awaitingInput`, `currentFlow`, `boundedChoice`, `pagedRead`, `deflectedAside` (2.4.0), `errorCount`), which `createHandoffNode` nulls when a task-ENDING handback resolves. `handoff` is deliberately absent: the node returns it as null either way. (`deflectedAside` being task-scoped means a task-ENDING handback re-arms the free deflection for the next task, while an `off_topic` re-route — not a task ending — deliberately does NOT.) See `<handoff>` for the clearing rules and the host-slot counterpart (`HandoffSpec.clearsOnHandback`).
+`index.ts` also exports **`agentStepTaskScopedSlots`** (2.2.0) — the subset of library slots that describe work IN PROGRESS (`awaitingInput`, `currentFlow`, `boundedChoice`, `pagedRead`, `deflectedAside` (2.4.0), `errorCount`, `actionTrail` (2.6.0)), which `createHandoffNode` nulls when a task-ENDING handback resolves. `handoff` is deliberately absent: the node returns it as null either way. (`deflectedAside` being task-scoped means a task-ENDING handback re-arms the free deflection for the next task, while an `off_topic` re-route — not a task ending — deliberately does NOT.) See `<handoff>` for the clearing rules and the host-slot counterpart (`HandoffSpec.clearsOnHandback`).
 
-`index.ts` also exports **`agentStepInternalSlotMask`** — a Zod `.omit()` mask of the eight library-managed slot keys. A host derives a graph INPUT schema by omitting these (they are runner-written only, never caller input) from its full state schema: `AgentStateSchema.omit({ ...agentStepInternalSlotMask, /* + any host-derived slots */ }).partial().extend({ messages: MessagesZodState.shape.messages })`. Re-attach `messages` after `.partial()` — `.partial()` strips the messages-channel metadata LangGraph Studio keys off to render its chat input box (see `state-and-prompt-integration.md`). Wired as the `input` of a hand-built `new StateGraph({ state, input })`, this rejects/coerces a malformed or internal-slot-injecting invoke at the boundary.
+`index.ts` also exports **`agentStepInternalSlotMask`** — a Zod `.omit()` mask of the nine library-managed slot keys. A host derives a graph INPUT schema by omitting these (they are runner-written only, never caller input) from its full state schema: `AgentStateSchema.omit({ ...agentStepInternalSlotMask, /* + any host-derived slots */ }).partial().extend({ messages: MessagesZodState.shape.messages })`. Re-attach `messages` after `.partial()` — `.partial()` strips the messages-channel metadata LangGraph Studio keys off to render its chat input box (see `state-and-prompt-integration.md`). Wired as the `input` of a hand-built `new StateGraph({ state, input })`, this rejects/coerces a malformed or internal-slot-injecting invoke at the boundary.
 
 ## HandoffRequest (library-managed)
 
@@ -373,6 +373,12 @@ markGuardFired(state, guardId, getCallerTurnId?): Partial<T>  // patch recording
 ## errorCount (library-managed)
 
 The consecutive backend-failure counter for the auto-handoff guard (`<auto_handoff>`). `number | null`; rides `agentStepZodShape` like the other slots. The runner increments it when a batch ends in a backend failure, resets it to 0 when a batch in which an executor **actually ran** ends without one, and clears it to 0 when it auto-triggers a handoff at the threshold. Batches where no executor ran (confirm-gate proposals/re-proposals, prereq or param refusals, aborts, handoff signals) are **neutral** — they neither increment nor reset. Executors must never write it.
+
+## actionTrail (library-managed, 2.6.0)
+
+The runner's per-task audit record: `TrailEntry[] | null`, one `{ action, ok, error?, proposed? }` entry per step RESULT of every admitted batch — domain steps, controls, and the synthetic `auto_handoff` — in execution order, appended by `run/finalize.ts` and carried across batches of the same task. A deliberate projection ALLOW-LIST: never params, summaries, or result bodies, so the trail is PII-free by construction. `proposed: true` marks a confirmation propose/re-propose (no executor ran); `error` carries the step result's error code, so execution-phase refusals (gate locks, prereq denials, `invalid_params`) are visible. An ADMISSION-refused batch leaves no trail — refusal commits nothing, and the trail is state like everything else. Forced handoffs (`HandoffSpec.forcedHandoff`) never reach the runner and never appear.
+
+**Audit-only.** Nothing in the runner, the controls, or the prompt reads it, and the model never sees it — the model-facing surface is independent of the slot. Consumers read it from observability's graph-state capture; the complete per-task record lives in the INPUT state of the `resolve_handoff` run (the node clears task-scoped slots in its output). Task-scoped (`agentStepTaskScopedSlots`): a task-ENDING handback clears it, so each task on a reused thread starts a fresh trail. Executors must never write it (`LIBRARY_MANAGED_KEYS` throws). Its channel is the one UNCONDITIONALLY required entry in the construction check — the trail is written on every finalized batch, whatever the config uses — and it arrives with the spread fragments like every other slot.
 
 </types>
 
@@ -818,7 +824,7 @@ a handoff the model actually requested.
 middleware reuses one thread id for a whole call and never resets it on re-dispatch, so whatever sits
 in state when a handback resolves is what the NEXT task on that thread starts from. On `completed` /
 `abandon` in terminate mode, `createHandoffNode` therefore nulls the library's own
-`agentStepTaskScopedSlots` (`awaitingInput`, `currentFlow`, `boundedChoice`, `pagedRead`, `errorCount`)
+`agentStepTaskScopedSlots` (`awaitingInput`, `currentFlow`, `boundedChoice`, `pagedRead`, `deflectedAside`, `errorCount`, `actionTrail`)
 plus every domain slot the host named in **`clearsOnHandback`**. Two carve-outs, both correctness
 invariants rather than preferences, so neither is configurable: **`off_topic` clears nothing** (a
 mid-task aside must stay resumable — the caller can come straight back), and **a successful delegate

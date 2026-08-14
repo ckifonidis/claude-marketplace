@@ -18,6 +18,7 @@ import type {
   BoundedChoice,
   CurrentFlow,
   HandoffRequest,
+  TrailEntry,
 } from "./state.js";
 import type { PagedCache } from "./paginate.js";
 
@@ -38,6 +39,7 @@ const replace = <T>() => ({
 });
 
 const stateSchema = Annotation.Root({
+  actionTrail: Annotation<TrailEntry[] | null>(replace<TrailEntry[]>()),
   detail: Annotation<string | null>(replace<string>()),
   changed: Annotation<boolean | null>(replace<boolean>()),
   awaitingInput: Annotation<AwaitingInput | null>(replace<AwaitingInput>()),
@@ -296,7 +298,17 @@ test("resolution fails closed when no stable caller-turn identity is available",
   };
   const { body, committed } = await runSteps(opts, [continueChoice], initial);
   assert.equal(body.results[0].error, "bounded_choice_turn_identity_unavailable");
-  assert.deepEqual(committed, {});
+  // Fails closed without consuming the choice — the audit trail records the
+  // refusal.
+  assert.deepEqual(committed, {
+    actionTrail: [
+      {
+        action: RESOLVE_BOUNDED_CHOICE_ACTION,
+        ok: false,
+        error: "bounded_choice_turn_identity_unavailable",
+      },
+    ],
+  });
   assert.equal(calls.change, 0);
 });
 

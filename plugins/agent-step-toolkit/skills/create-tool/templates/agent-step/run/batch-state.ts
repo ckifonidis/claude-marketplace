@@ -206,6 +206,7 @@ const LIBRARY_MANAGED_KEYS = [
   "deflectedAside",
   "handoff",
   "errorCount",
+  "actionTrail",
 ] as const;
 
 /** Throws on a `stateUpdate` that touches a library-managed slot. A loud

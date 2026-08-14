@@ -58,6 +58,7 @@ export {
   BoundedChoiceSchema,
   PagedCacheSchema,
   HandoffRequestSchema,
+  TrailEntrySchema,
   agentStepStateSpec,
   agentStepZodShape,
   agentStepInternalSlotMask,
@@ -68,6 +69,7 @@ export type {
   CurrentFlow,
   BoundedChoice,
   HandoffRequest,
+  TrailEntry,
   LibraryManagedSlots,
 } from "./state.js";
 

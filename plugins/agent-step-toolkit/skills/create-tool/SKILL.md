@@ -153,7 +153,7 @@ All in `templates/`:
 - `project/test-harness-sandbox.ts.template`, `project/test-harness-prompt-input.ts.template`, `project/test-harness-index.ts.template`
 
 **Agent-step library** (verbatim copy by bootstrap — the ENTIRE `agent-step/` tree, recursively; no substitution):
-- Top level: `agent-step/types.ts`, `state.ts`, `runner.ts`, `messages.ts`, `define-config.ts`, `paginate.ts`, `capture.ts`, `index.ts` + the test suites (`runner.test.ts`, `handoff.test.ts`, `bounded-choice.test.ts`, `hardening.test.ts`, `paginate.test.ts`, `capture.test.ts`, `guard-latch.test.ts`, `deflect-aside.test.ts`, `repeat-confirmation.test.ts`, `zod-state.test.ts`)
+- Top level: `agent-step/types.ts`, `state.ts`, `runner.ts`, `messages.ts`, `define-config.ts`, `paginate.ts`, `capture.ts`, `index.ts` + the test suites (`runner.test.ts`, `handoff.test.ts`, `bounded-choice.test.ts`, `hardening.test.ts`, `paginate.test.ts`, `capture.test.ts`, `guard-latch.test.ts`, `deflect-aside.test.ts`, `repeat-confirmation.test.ts`, `zod-state.test.ts`, `trail.test.ts`)
 - Phase modules (internal layout; hosts import only from `index.ts`): `agent-step/compile/`, `agent-step/run/`, `agent-step/interaction/`, `agent-step/controls/`, `agent-step/handoff/` — see `references/project-bootstrap-structure.md` for the per-file inventory
 - `agent-step/VERSION` — the library version marker. Bumped by `/bump-version` when the embedded copy is refreshed; read by `/pull-library` to upgrade a downstream project's vendored copy. Travels into every bootstrapped project at `src/agent-step/VERSION`.
 

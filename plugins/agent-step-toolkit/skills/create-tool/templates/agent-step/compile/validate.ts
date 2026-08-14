@@ -49,6 +49,14 @@ export interface ValidatableOptions {
  *  would report `needs_confirmation` while no gate was ever stored. */
 function requiredManagedChannels(opts: ValidatableOptions): string[] {
   const required = new Set<string>();
+  // The audit trail is written on EVERY finalized batch regardless of which
+  // features the config uses (run/finalize.ts), so — unlike every slot below —
+  // it is unconditionally required. NOTE the failure mode differs from the
+  // merger-dropped slots: finalize writes `committed` directly, so a missing
+  // channel surfaces as a `Command.update` field the host graph has no channel
+  // for — an update the graph either rejects or silently discards. Both are
+  // wrong states; fail at construction instead.
+  required.add("actionTrail");
   for (const action of Object.values(opts.config.actions)) {
     const c = action.controller;
     if (!c) {
