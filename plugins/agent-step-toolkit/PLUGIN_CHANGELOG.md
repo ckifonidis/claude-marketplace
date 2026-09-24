@@ -11,6 +11,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.27.0] — 2026-09-24
+
+New skill **`document-agent-flow`** — documents any agent-step agent as three files generated from
+ONE validated flow spec: a Markdown design document, a self-contained interactive step graph and an
+xlsx step sheet. Starts from a prose description, an existing codebase, or specs and a walkthrough.
+No library change (agent-step stays 3.0.1).
+
+### Added
+- `skills/document-agent-flow/` — `SKILL.md`, three intake workflows (`intake-describe`,
+  `intake-existing`, `intake-docs`) converging on `document-flow.md` (vocabulary → parallel research
+  briefs → spec → build → verify → adversarial review → owner iteration), and five references:
+  `data-model.md`, `engine-notation.md` (3.x primitive catalog, notation, pitfalls), `layout.md`,
+  `design-guide.md`, `research-briefs.md`.
+- `templates/flowdoc/` — the vendorable generator (stdlib + openpyxl): spec validator, automatic ladder
+  layout (spine, branch lanes, gutter-routed back edges, self-loops, containers — no coordinates in the
+  spec), md / html / xlsx renderers, and `verify.py` (determinism, xlsx read-back, headless render in
+  light / dark / 400 px, edge, label and chip placement checks, validator and page break tests,
+  optional `--deny` scan).
+- The engine column is linted against the current library (removed primitives and `readOnly` are
+  refused); every set states the agent-step version it targets, shown top-right on the page.
+- `examples/pizza-order/` — a synthetic worked spec and its three outputs.
+
+### Changed
+- `bump-version`'s `references/tracked-assets.md` (Tier 6) now lists `skills/document-agent-flow/` — its
+  engine-notation catalog, `RETIRED_ENGINE_TERMS` and `engine_version` examples mirror the library, so a
+  library bump reconciles them.
+
+Verified: `verify.py` passes (0 failed, 0 skipped) on the example, two more synthetic flows and five
+existing agent-step projects spanning library 1.0.0–3.0.1.
+
 ## [0.26.1] — 2026-08-29
 
 Ships **agent-step library 3.0.1** — a patch release: OTP/match gate-interplay fixes. The folded

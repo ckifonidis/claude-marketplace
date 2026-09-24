@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pizza order — phone agent step ladder</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700&family=Fira+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Tokens: light on :root, dark twice — once for the OS preference unless the page is pinned light,
+   once for an explicit data-theme="dark". The duplication is deliberate: CSS cannot share one block
+   between a media query and an attribute selector. Keep the two dark blocks identical. */
+:root{
+  color-scheme:light;
+  --ground:#f3f6f7; --surface:#ffffff; --sunk:#e9eef0; --ink:#14212b; --muted:#566874; --line:#cfd9de;
+  --accent:#0b5f73; --accent-ink:#ffffff; --accent-soft:#dcedf1;
+  --trigger:#a35f00; --trigger-soft:#fbefd9; --fail:#b23a48; --fail-soft:#f8e3e6;
+  --alt:#5b4fa8; --alt-soft:#e9e6f7; --ok:#2f7d4f; --ok-soft:#e1f1e7; --tbd:#7a6a00; --tbd-soft:#f5f0c8;
+  --band-a:#eef3f5; --band-b:#f6f9fa;
+  --sans:"Fira Sans",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  --cond:"Fira Sans Condensed","Fira Sans",system-ui,"Segoe UI",Arial,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --ground:#0f171c; --surface:#16222a; --sunk:#1c2a33; --ink:#e3ecf0; --muted:#93a6b2; --line:#2c3d48;
+  --accent:#5fb6c9; --accent-ink:#0b1a20; --accent-soft:#17343d;
+  --trigger:#e8a748; --trigger-soft:#3a2c14; --fail:#ec7d8a; --fail-soft:#3b1d23;
+  --alt:#a79cf0; --alt-soft:#27234a; --ok:#6fcf97; --ok-soft:#173526; --tbd:#e3cf5a; --tbd-soft:#35310f;
+  --band-a:#121d23; --band-b:#15212a;
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0f171c; --surface:#16222a; --sunk:#1c2a33; --ink:#e3ecf0; --muted:#93a6b2; --line:#2c3d48;
+  --accent:#5fb6c9; --accent-ink:#0b1a20; --accent-soft:#17343d;
+  --trigger:#e8a748; --trigger-soft:#3a2c14; --fail:#ec7d8a; --fail-soft:#3b1d23;
+  --alt:#a79cf0; --alt-soft:#27234a; --ok:#6fcf97; --ok-soft:#173526; --tbd:#e3cf5a; --tbd-soft:#35310f;
+  --band-a:#121d23; --band-b:#15212a;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--ground);color:var(--ink);font:15px/1.5 var(--sans)}
+.wrap{max-width:1560px;margin:0 auto;padding-inline:16px;padding-block:22px 48px}
+header{position:relative}
+header h1{font:700 22px/1.2 var(--cond);margin:0 0 6px;text-wrap:balance;letter-spacing:.01em;padding-right:230px}
+.engine{position:absolute;top:0;right:0;display:flex;flex-direction:column;align-items:flex-end;gap:3px;font:500 12px/1.2 var(--sans);color:var(--muted)}
+.engine .v{font:600 12px/1 var(--mono);color:var(--accent);background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);border-radius:999px;padding:5px 10px;white-space:nowrap}
+.engine .old{font:500 11px/1 var(--mono);color:var(--trigger);background:var(--trigger-soft);border-radius:999px;padding:4px 9px;white-space:nowrap}
+@media (max-width:640px){header h1{padding-right:0}.engine{position:static;align-items:flex-start;margin:0 0 8px}}
+header p{margin:0;color:var(--muted);max-width:92ch;font-size:14px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:14px 0 4px;font-size:12.5px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:26px;height:0;border-top:2px solid var(--accent);display:inline-block}
+.sw.fail{border-top:2px dashed var(--fail)} .sw.branch{border-top:2px solid var(--alt)} .sw.opt{border-top:2px dotted var(--muted)}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+.chipk{font:500 11px/1 var(--sans);padding:3px 7px;border-radius:4px;background:var(--trigger-soft);color:var(--trigger);border:1px solid color-mix(in srgb,var(--trigger) 35%,transparent)}
+nav.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:16px 0 12px;border-bottom:1px solid var(--line)}
+nav.tabs button{font:600 14px var(--sans);color:var(--muted);background:none;border:0;border-bottom:3px solid transparent;padding:8px 12px;cursor:pointer}
+nav.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.tabs button:focus-visible,.node:focus-visible,.tbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:16px;align-items:start}
+@media (max-width:1100px){.layout{grid-template-columns:minmax(0,1fr)}}
+.graphbox{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:auto;max-height:calc(100vh - 40px);position:relative}
+.tools{position:sticky;top:0;left:0;z-index:5;display:flex;gap:6px;padding:8px;background:color-mix(in srgb,var(--surface) 88%,transparent);backdrop-filter:blur(4px);border-bottom:1px solid var(--line)}
+.tbtn{font:500 12.5px var(--sans);background:var(--sunk);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+.canvas{position:relative;transform-origin:0 0}
+.canvas svg{position:absolute;inset:0;overflow:visible}
+.band{position:absolute;left:0;right:0}
+.band b{position:absolute;left:10px;top:8px;font:700 11px/1.2 var(--cond);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);width:110px}
+.node{position:absolute;background:var(--surface);border:1.5px solid var(--accent);border-radius:8px;padding:7px 10px;cursor:pointer;display:flex;flex-direction:column;justify-content:center;box-shadow:0 1px 0 color-mix(in srgb,var(--ink) 8%,transparent)}
+.node .id{font:700 11px/1 var(--mono);color:var(--accent);letter-spacing:.02em}
+.node .t{font:600 14px/1.2 var(--cond);margin-top:3px}
+.node .s{font-size:11.5px;line-height:1.3;color:var(--muted);margin-top:2px}
+.node.alt{border-color:var(--alt)} .node.alt .id{color:var(--alt)}
+.node.opt{border-style:dashed}
+.node.term{border-radius:999px;background:var(--accent);color:var(--accent-ink);border-color:var(--accent);align-items:center;text-align:center;cursor:default}
+.node.term .t{margin:0}
+.node.term.bad{background:var(--fail-soft);color:var(--fail);border-color:var(--fail)}
+.node.sub{background:var(--sunk)}
+.node.container{background:color-mix(in srgb,var(--accent-soft) 45%,transparent);justify-content:flex-start}
+.node.sel{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 40%,transparent)}
+.node .st{position:absolute;top:6px;right:7px;width:9px;height:9px;border-radius:50%}
+.st.exists{background:var(--ok)} .st.change{background:var(--trigger)} .st.new{background:var(--fail)} .st.tbd{background:var(--tbd)}
+.trig{position:absolute;display:flex;flex-wrap:wrap;gap:4px;align-items:center;max-width:330px;pointer-events:none}
+.trig .chipk{pointer-events:auto;cursor:help;white-space:nowrap}
+.trig .arr{color:var(--trigger);font-size:11px}
+.ichips{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:5px}
+.ichips .arr{color:var(--trigger);font-size:11px}
+.elabel{position:absolute;font:500 11px/1.25 var(--sans);color:var(--muted);background:var(--surface);padding:1px 4px;border-radius:3px;white-space:normal}
+.elabel.fail{color:var(--fail)} .elabel.branch{color:var(--alt)}
+aside.detail{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 18px;position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}
+aside h2{font:700 18px/1.2 var(--cond);margin:2px 0 4px;text-wrap:balance}
+aside .kick{font:600 11px/1 var(--mono);color:var(--accent);letter-spacing:.04em}
+aside h3{font:700 11px/1.2 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:16px 0 6px}
+aside p,aside li{font-size:13.5px;overflow-wrap:anywhere}
+aside ul{margin:0;padding-left:18px} aside li{margin:2px 0}
+.pill{display:inline-block;font:600 11px/1 var(--sans);padding:3px 7px;border-radius:999px;margin-right:4px}
+.pill.exists{background:var(--ok-soft);color:var(--ok)} .pill.change{background:var(--trigger-soft);color:var(--trigger)}
+.pill.new{background:var(--fail-soft);color:var(--fail)} .pill.tbd{background:var(--tbd-soft);color:var(--tbd)}
+.tcard{border:1px solid var(--line);border-left:3px solid var(--trigger);border-radius:6px;padding:8px 10px;margin:6px 0;background:var(--band-b)}
+.tcard .n{font:600 13px var(--sans)} .tcard code,.mono{font:12px/1.45 var(--mono);word-break:break-word}
+.tcard .row{font-size:12.5px;margin-top:3px}
+.tcard .row.ev{color:var(--muted)} .tcard .row.bad{color:var(--fail)}
+.out{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:13px}
+.out .to{font:600 12px var(--mono);color:var(--accent);white-space:nowrap}
+.out .to.fail{color:var(--fail)} .out .to.branch{color:var(--alt)}
+.tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
+th{font:700 11px/1.2 var(--sans);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);background:var(--sunk);position:sticky;top:0}
+td.id{font:700 12px var(--mono);color:var(--accent);white-space:nowrap}
+td ul{margin:0;padding-left:16px}
+td{min-width:150px} td.id{min-width:0}
+.panel[hidden]{display:none!important}
+.note{font-size:13px;color:var(--muted);margin:10px 2px}
+.warn{font-size:13px;color:var(--fail);background:var(--fail-soft);border-radius:6px;padding:6px 10px;margin:8px 0}
+@media (prefers-reduced-motion:no-preference){.node{transition:box-shadow .15s}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="engine" id="h-engine"></div>
+  <h1 id="h-title"></h1>
+  <p id="h-sub"></p>
+  <p id="h-any" class="note" hidden></p>
+  <div class="legend" id="legend"></div>
+</header>
+
+<nav class="tabs" role="tablist" id="tabs"></nav>
+
+<section class="panel" id="p-graph">
+  <div class="layout">
+    <div class="graphbox" id="gbox">
+      <div class="tools">
+        <button class="tbtn" id="z-fit" type="button">Fit width</button>
+        <button class="tbtn" id="z-100" type="button">100%</button>
+      </div>
+      <div id="warnings"></div>
+      <div class="canvas" id="canvas"></div>
+    </div>
+    <aside class="detail" id="detail"></aside>
+  </div>
+</section>
+<div id="panels"></div>
+</div>
+
+<!-- The flow data is JSON in an inert script block: the builder escapes "</" so no value can close it,
+     and verify.py parses exactly this block back to check it against the spec. -->
+<script type="application/json" id="flow-data">{"meta": {"slug": "pizza-order", "engine_version": "3.0.1", "title": "Pizza order — phone agent step ladder", "subtitle": "A synthetic example. A box is a step: it gathers until its completeness check passes. ⚡ chips are the API calls fired when it closes, in order. Click any box for the details.", "intro": "The ladder a phone agent walks to take one pizza order, from greeting to delivery.", "source_of_truth": "the product owner's call walkthrough (synthetic).", "branch_label": "pickup / card branch", "rebuild": "uvx --with openpyxl python3 ../../templates/flowdoc/build.py pizza_order.py --out out"}, "steps": {"P0": {"stage": "A", "title": "Greeting & order type", "sub": "delivery or pickup?", "opens": "“Thanks for calling. Is this for delivery or pickup?”", "required": ["order type = delivery | pickup"], "completion": "Order type chosen.", "next": [{"to": "P1", "when": "type chosen", "kind": "main", "fail": false, "label": ""}], "engine": "start_order{orderType} · no gate · verdicts: set✓→orderType — the journey lives in host slots; no flow is opened here", "status": "change", "status_note": "Today add_item opens an `order` flow and keeps the cart in flow data (src/tools/pizza/actions/add_item/action.ts:14); an edit during the P4 read-back has to abort, which drops the flow and the cart with it.", "id": "P0", "optional": [], "prefilled": [], "triggers": [], "lookups": [], "open": [], "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "P1": {"stage": "B", "title": "Identify the caller", "sub": "phone number → known customer?", "opens": "“Can I have the phone number for the order?”", "required": ["phone number (10 digits)"], "optional": ["name, if new"], "completion": "Phone number valid; the customer is found or a new record is started.", "triggers": ["T1"], "next": [{"to": "P2", "when": "delivery", "kind": "main", "fail": false, "label": ""}, {"to": "P2B", "when": "pickup", "kind": "branch", "fail": false, "label": ""}, {"to": "P1", "when": "number invalid → re-ask", "kind": "fail", "fail": true, "label": ""}], "engine": "identify_caller{phone: digits} · prereqs[orderTypeSet] · asks invalid_params→identify_caller.phone:digits · captureBounces{max:2} · verdicts: known✓→customer | new✓→customer", "status": "exists", "id": "P1", "prefilled": [], "lookups": [], "open": [], "status_note": "", "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "P2": {"stage": "B", "title": "Delivery address", "sub": "saved address offered first", "opens": "“Same address as last time — 12 Example Street?”", "required": ["street + number", "postcode"], "optional": ["floor / doorbell note"], "prefilled": ["last used address (from T1)"], "completion": "Address complete and inside a delivery zone.", "triggers": ["T2"], "next": [{"to": "P3", "when": "in zone", "kind": "main", "fail": false, "label": ""}, {"to": "P2", "when": "out of zone → offer pickup", "kind": "fail", "fail": true, "label": ""}], "engine": "set_address{street, postcode} · invalidatesOnChange{address:[quote]} · verdicts: in_zone✓→address | out_of_zone✗ (summary offers pickup)", "status": "change", "status_note": "Zone check exists but is called by the model after the fact; move it into set_address.", "id": "P2", "lookups": [], "open": [], "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "P2B": {"stage": "B", "title": "Pick the store", "sub": "nearest open stores", "opens": "“The nearest open stores are Central and Harbour. Which one?”", "required": ["store"], "completion": "An open store chosen.", "next": [{"to": "P3", "when": "store chosen", "kind": "branch", "fail": false, "label": ""}], "engine": "choose_store{storeCode} · prereqs[orderTypeSet] · verdicts: chosen✓→store | closed✗", "status": "new", "open": ["Q2"], "id": "P2B", "optional": [], "prefilled": [], "triggers": [], "lookups": [], "status_note": "", "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "P3": {"stage": "C", "title": "Build the order", "sub": "cart hub · names what is still missing · routes to the next item", "opens": "Reads the cart back and asks what to add next.", "required": ["at least one pizza"], "completion": "The caller says the order is complete and the cart has at least one pizza.", "next": [{"to": "P4", "when": "cart complete", "kind": "main", "fail": false, "label": ""}], "engine": "get_cart{} · no gate (a plain read) · verdicts: shown✓ — the pending list is computed in code from the cart slot, never by the model", "status": "exists", "id": "P3", "optional": [], "prefilled": [], "triggers": [], "lookups": [], "open": [], "status_note": "", "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "C1": {"stage": "C", "parent": "P3", "title": "Pizzas", "required": ["pizza", "size", "crust"], "optional": ["extra toppings", "half-and-half"], "completion": "Every pizza has a size and a crust.", "triggers": [], "next": [{"to": "P3", "when": "item added to the cart → back to the hub", "kind": "main", "fail": false, "label": ""}, {"to": "C1", "when": "item unavailable → two alternatives offered", "kind": "fail", "fail": true, "label": ""}], "engine": "add_item{menuCode, size?, extras[]} · prereqs[orderTypeSet] · verdicts: added✓→cart (a host slot, so an edit during the read-back cannot lose it) | unavailable✗ (summary names two alternatives) · asks invalid_params→add_item.menuCode · captureBounces{max:2, ladder: menu_help}", "status": "exists", "lookups": ["menu read (get_menu, pageable) — today's items and prices"], "id": "C1", "prefilled": [], "open": [], "opens": "", "status_note": "", "label": "", "sub": "", "optional_step": false, "cross_cutting": false}, "C2": {"stage": "C", "parent": "P3", "title": "Sides & drinks", "required": ["item", "quantity"], "optional": [], "completion": "Each item has a quantity.", "triggers": [], "next": [{"to": "P3", "when": "item added to the cart → back to the hub", "kind": "main", "fail": false, "label": ""}, {"to": "C2", "when": "item unavailable → two alternatives offered", "kind": "fail", "fail": true, "label": ""}], "engine": "add_item{menuCode, size?, extras[]} · prereqs[orderTypeSet] · verdicts: added✓→cart (a host slot, so an edit during the read-back cannot lose it) | unavailable✗ (summary names two alternatives) · asks invalid_params→add_item.menuCode · captureBounces{max:2, ladder: menu_help}", "status": "exists", "lookups": ["menu read (get_menu, pageable) — today's items and prices"], "id": "C2", "prefilled": [], "open": [], "opens": "", "status_note": "", "label": "", "sub": "", "optional_step": false, "cross_cutting": false}, "C3": {"stage": "C", "parent": "P3", "title": "Dietary notes", "required": ["allergy or preference, if any"], "optional": [], "completion": "Answered, or the caller says none.", "triggers": [], "next": [{"to": "P3", "when": "item added to the cart → back to the hub", "kind": "main", "fail": false, "label": ""}, {"to": "C3", "when": "item unavailable → two alternatives offered", "kind": "fail", "fail": true, "label": ""}], "engine": "add_item{menuCode, size?, extras[]} · prereqs[orderTypeSet] · verdicts: added✓→cart (a host slot, so an edit during the read-back cannot lose it) | unavailable✗ (summary names two alternatives) · asks invalid_params→add_item.menuCode · captureBounces{max:2, ladder: menu_help}", "status": "exists", "lookups": ["menu read (get_menu, pageable) — today's items and prices"], "id": "C3", "prefilled": [], "open": [], "opens": "", "status_note": "", "label": "", "sub": "", "optional_step": false, "cross_cutting": false}, "CX": {"stage": "C", "parent": "P3", "cross_cutting": true, "title": "Menu questions — callable from any item", "label": "Menu questions", "required": ["the caller's question"], "completion": "Question answered from the menu data, never from memory.", "next": [{"to": "P3", "when": "answered → back where the caller was", "kind": "main", "fail": false, "label": ""}], "engine": "ask_menu{question} · no gate · verdicts: answered✓ | unknown✓ (summary says so plainly)", "status": "tbd", "open": ["Q3"], "id": "CX", "optional": [], "prefilled": [], "triggers": [], "lookups": [], "opens": "", "status_note": "", "sub": "", "optional_step": false}, "P4": {"stage": "D", "title": "Review & confirm", "sub": "full read-back · confirm or edit", "opens": "Reads back every item, the address or store, and the total.", "required": ["the caller's yes to the read-back"], "completion": "The caller confirms the exact read-back.", "triggers": ["T3", "T4"], "next": [{"to": "P5", "when": "order placed", "kind": "main", "fail": false, "label": ""}, {"to": "P3", "when": "edit", "kind": "fail", "fail": true, "label": ""}, {"to": "TECH", "when": "till system down, retries exhausted", "kind": "fail", "fail": true, "label": ""}], "engine": "place_order{} · prereqs[cartReady, destinationSet] · soleOnExecute · requiresConfirmation{maxAttempts:3, readBack} · verdicts: placed✓→orderId | price_changed✗ (re-propose) | pos_down✗ backendFailure", "status": "change", "status_note": "Quote and place are two model-driven calls today; fold them into one closing action.", "id": "P4", "optional": [], "prefilled": [], "lookups": [], "open": [], "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "P5": {"stage": "D", "title": "Payment method", "sub": "card now or cash on delivery", "required": ["method = card | cash"], "completion": "Method chosen.", "next": [{"to": "P7", "when": "cash", "kind": "main", "fail": false, "label": ""}, {"to": "P6", "when": "card", "kind": "branch", "triggers": ["T5"], "fail": false, "label": ""}], "triggers": ["T5"], "engine": "choose_payment{method} · card: startsFlow payment · issuesOtp{consumer_action: confirm_payment} · verdicts: cash✓→payment | card✓ fx:otp_issued — the only flow in this agent spans the payment code", "status": "new", "id": "P5", "optional": [], "prefilled": [], "lookups": [], "open": [], "opens": "", "status_note": "", "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "P6": {"stage": "D", "title": "Card payment code", "sub": "6-digit code from the bank", "opens": "“Your bank sent a 6-digit code. Please read it out.”", "required": ["6-digit code"], "completion": "The bank accepts the code. The caller's say-so never closes it.", "triggers": ["T6"], "next": [{"to": "P7", "when": "paid", "kind": "branch", "fail": false, "label": ""}, {"to": "P6", "when": "wrong code → re-ask", "kind": "fail", "fail": true, "label": ""}, {"to": "P5", "when": "card declined → choose again", "kind": "fail", "fail": true, "label": ""}], "engine": "confirm_payment{code: digits} · requiresFlow payment · requiresOtp · endsFlow · verdicts: paid✓→payment | code_invalid✗ | declined✗ fx:abort_flow (only the payment flow dies; the order is in host slots) · re-send: resend_payment_code · requiresFlow payment · issuesOtp{consumer_action: confirm_payment} — a startsFlow-only issuer is not admitted while the code is pending", "status": "new", "open": ["Q1"], "id": "P6", "optional": [], "prefilled": [], "lookups": [], "status_note": "", "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "P7": {"stage": "E", "title": "Kitchen & tracking", "sub": "caller asks → we always check", "opens": "“Your order is in the oven. Anything else I can help with?”", "required": ["nothing — waits"], "completion": "The till reports the order out for delivery (or ready for pickup).", "triggers": ["T7"], "next": [{"to": "P8", "when": "out for delivery", "kind": "main", "fail": false, "label": ""}, {"to": "P7", "when": "still baking → check again", "kind": "fail", "fail": true, "label": ""}], "engine": "check_order_status{} · no gate · closing action close_tracking prereqs[dispatched] — the verifier reads the till's status slot, never the caller's word", "status": "change", "status_note": "Status comes from local state today; ask the till every time.", "id": "P7", "optional": [], "prefilled": [], "lookups": [], "open": [], "parent": "", "label": "", "optional_step": false, "cross_cutting": false}, "P8": {"stage": "E", "title": "Tip & feedback", "sub": "optional", "optional_step": true, "required": ["tip amount or none", "rating 1–5 or skip"], "completion": "Answered or skipped.", "triggers": ["T8"], "next": [{"to": "END", "when": "saved", "triggers": ["T8"], "kind": "main", "fail": false, "label": ""}, {"to": "END", "when": "skipped", "kind": "opt", "label": "skip", "triggers": [], "fail": false}], "engine": "leave_feedback{tip?, rating?} · verdicts: saved✓ fx:request_handoff(completed)", "status": "new", "id": "P8", "optional": [], "prefilled": [], "lookups": [], "open": [], "opens": "", "status_note": "", "parent": "", "label": "", "cross_cutting": false}}, "triggers": {"T1": {"name": "Customer lookup", "short": "lookup", "spec": "GET /customer?phone=", "real": "GET /customers/by-phone/{phone}", "evidence": "src/tools/pizza/actions/identify_caller/executor.ts:18", "on_ok": "known or new → P2 / P2B", "on_fail": ["lookup down → continue as a new customer"], "retry": "Transient (5xx, timeout): retry in the executor, at most 3 attempts with exponential backoff (proposal, see Q1). Validation 4xx: no retry, name the field. Business refusal: no retry.", "status": "exists", "id": "T1", "step": "P1"}, "T2": {"name": "Delivery zone check", "short": "zone check", "real": "POST /zones/check {postcode, street}", "evidence": "src/tools/pizza/backend/zones.ts:9", "on_ok": "in zone → P3", "on_fail": ["out of zone → stay, offer pickup"], "retry": "Transient (5xx, timeout): retry in the executor, at most 3 attempts with exponential backoff (proposal, see Q1). Validation 4xx: no retry, name the field. Business refusal: no retry.", "status": "change", "id": "T2", "spec": "", "step": "P2"}, "T3": {"name": "Price quote", "short": "quote", "spec": "POST /basket/price", "real": "POST /orders/quote {items[], destination}", "evidence": "src/tools/pizza/actions/get_quote/executor.ts:22", "on_ok": "total → T4", "on_fail": ["price changed → re-propose with the new total"], "retry": "Transient (5xx, timeout): retry in the executor, at most 3 attempts with exponential backoff (proposal, see Q1). Validation 4xx: no retry, name the field. Business refusal: no retry.", "status": "exists", "id": "T3", "step": "P4"}, "T4": {"name": "Place the order", "short": "place", "real": "POST /orders {quoteId}", "evidence": "src/tools/pizza/actions/place_order/executor.ts:31", "on_ok": "orderId → P5", "on_fail": ["transient → graded retry", "exhausted → TECH, cart held"], "retry": "Transient (5xx, timeout): retry in the executor, at most 3 attempts with exponential backoff (proposal, see Q1). Validation 4xx: no retry, name the field. Business refusal: no retry.", "status": "change", "id": "T4", "spec": "", "step": "P4"}, "T5": {"name": "Request payment code", "short": "send code", "real": "not found in the till API — card gateway TBD", "on_ok": "code sent → P6", "on_fail": ["gateway down → offer cash"], "retry": "Transient (5xx, timeout): retry in the executor, at most 3 attempts with exponential backoff (proposal, see Q1). Validation 4xx: no retry, name the field. Business refusal: no retry.", "status": "tbd", "id": "T5", "spec": "", "evidence": "", "step": "P5"}, "T6": {"name": "Charge the card", "short": "charge", "real": "POST /payments/confirm {orderId, code} (gateway TBD)", "on_ok": "paid → P7", "on_fail": ["wrong code → re-ask", "declined → P5"], "status": "tbd", "id": "T6", "spec": "", "evidence": "", "retry": "", "step": "P6"}, "T7": {"name": "Order status", "short": "status", "real": "GET /orders/{orderId}/status", "evidence": "src/tools/pizza/actions/check_order_status/executor.ts:12", "on_ok": "out for delivery → P8", "on_fail": ["still baking → stay"], "retry": "on demand", "status": "change", "id": "T7", "spec": "", "step": "P7"}, "T8": {"name": "Save feedback", "short": "feedback", "real": "POST /feedback {orderId, tip, rating}", "on_ok": "→ END", "on_fail": ["save failed → thank the caller anyway, log it"], "retry": "none", "status": "new", "id": "T8", "spec": "", "evidence": "", "step": "P8"}}, "order": ["P0", "P1", "P2", "P2B", "P3", "C1", "C2", "C3", "CX", "P4", "P5", "P6", "P7", "P8"], "open": [{"id": "Q1", "question": "Retry numbers for the card charge (≤3, exponential) — accepted?", "where": "P6 / T6", "default": "Proposal: 3 attempts, 1 s → 4 s."}, {"id": "Q2", "question": "Is the store list served by the till API, or kept in config?", "where": "P2B", "default": "Config list, refreshed at deploy."}, {"id": "Q3", "question": "Where do allergen answers come from? The menu API has no allergen field.", "where": "CX", "default": "Answer 'please ask the store' until an allergen source exists."}], "sheets": [{"id": "menu", "title": "Menu fields", "columns": ["Section", "Field", "Required", "Multi-entry", "Prefilled from", "Rules", "Ref"], "rows": [["C1", "Pizza", "M", "yes (many pizzas)", "—", "From today's menu only", "walkthrough §2"], ["C1", "Size", "M", "—", "—", "small | medium | large", "walkthrough §2"], ["C1", "Crust", "M", "—", "last order (T1)", "thin | classic | stuffed", "walkthrough §2"], ["C1", "Extra toppings", "O", "yes", "—", "Max 5 per pizza", "walkthrough §2"], ["C2", "Side or drink", "O", "yes", "—", "From today's menu only", "walkthrough §3"], ["C2", "Quantity", "C: required when an item is chosen", "—", "—", "1–20", "walkthrough §3"], ["C3", "Allergy / preference", "O", "yes", "—", "Free text, read back verbatim", "walkthrough §3"]], "widths": {"Field": 28, "Rules": 44}}], "graph": {"nodes": [{"id": "P0", "label": "Greeting & order type", "sub": "delivery or pickup?", "w": 280, "h": 64, "cls": "", "status": "change", "x": 176, "y": 64}, {"id": "P1", "label": "Identify the caller", "sub": "phone number → known customer?", "w": 280, "h": 64, "cls": "", "status": "exists", "x": 176, "y": 248}, {"id": "P2", "label": "Delivery address", "sub": "saved address offered first", "w": 280, "h": 64, "cls": "", "status": "change", "x": 176, "y": 398}, {"id": "P2B", "label": "Pick the store", "sub": "nearest open stores", "w": 250, "h": 64, "cls": "alt", "status": "new", "x": 685.4, "y": 398}, {"id": "P3", "label": "Build the order", "sub": "cart hub · names what is still missing · routes to the next item", "w": 744, "h": 250, "cls": "container", "status": "exists", "x": 176, "y": 582}, {"id": "C1", "label": "Pizzas", "sub": "", "w": 190, "h": 64, "cls": "sub", "status": "exists", "x": 196, "y": 660}, {"id": "C2", "label": "Sides & drinks", "sub": "", "w": 190, "h": 64, "cls": "sub", "status": "exists", "x": 436, "y": 660}, {"id": "C3", "label": "Dietary notes", "sub": "", "w": 190, "h": 64, "cls": "sub", "status": "exists", "x": 676, "y": 660}, {"id": "CX", "label": "Menu questions", "sub": "", "w": 704, "h": 58, "cls": "sub cross", "status": "tbd", "x": 196, "y": 754}, {"id": "P4", "label": "Review & confirm", "sub": "full read-back · confirm or edit", "w": 280, "h": 64, "cls": "", "status": "change", "x": 176, "y": 952}, {"id": "P5", "label": "Payment method", "sub": "card now or cash on delivery", "w": 280, "h": 64, "cls": "", "status": "new", "x": 176, "y": 1102}, {"id": "P6", "label": "Card payment code", "sub": "6-digit code from the bank", "w": 250, "h": 64, "cls": "alt", "status": "new", "x": 685.4, "y": 1252}, {"id": "P7", "label": "Kitchen & tracking", "sub": "caller asks → we always check", "w": 280, "h": 64, "cls": "", "status": "change", "x": 176, "y": 1436}, {"id": "P8", "label": "Tip & feedback", "sub": "optional", "w": 280, "h": 64, "cls": "opt", "status": "new", "x": 176, "y": 1586}, {"id": "END", "label": "Order delivered", "w": 220, "h": 46, "cls": "term", "x": 176, "y": 1736}, {"id": "TECH", "label": "Technical issue — order held, call back", "w": 220, "h": 48, "cls": "term bad", "x": 685.4, "y": 984.3}], "edges": [{"from": "P0", "to": "P1", "kind": "main", "pts": [[316.0, 128], [316.0, 248]], "label": "", "when": "type chosen", "triggers": []}, {"from": "P1", "to": "P2", "kind": "main", "pts": [[316.0, 312], [316.0, 398]], "label": "delivery", "when": "delivery", "triggers": ["T1"], "tpos": [328.0, 345.0], "lpos": [244.8, 347.5], "lw": 65.2}, {"from": "P1", "to": "P2B", "kind": "branch", "pts": [[456, 304.32], [810.4, 304.32], [810.4, 398]], "label": "pickup", "when": "pickup", "triggers": [], "lpos": [607.5, 286.3], "lw": 51.400000000000006}, {"from": "P1", "to": "P1", "kind": "fail", "pts": [[456, 265.92], [490.0, 265.92], [490.0, 290.24], [456, 290.24]], "label": "number invalid → re-ask", "when": "number invalid → re-ask", "triggers": [], "lpos": [496.0, 270.6], "lw": 168.70000000000002}, {"from": "P2", "to": "P3", "kind": "main", "pts": [[316.0, 462], [316.0, 582]], "label": "", "when": "in zone", "triggers": ["T2"], "tpos": [328.0, 512.0]}, {"from": "P2", "to": "P2", "kind": "fail", "pts": [[456, 415.92], [490.0, 415.92], [490.0, 440.24], [456, 440.24]], "label": "out of zone → offer pickup", "when": "out of zone → offer pickup", "triggers": [], "lpos": [496.0, 420.6], "lw": 189.4}, {"from": "P2B", "to": "P3", "kind": "branch", "pts": [[810.4, 462], [810.4, 582]], "label": "store chosen", "when": "store chosen", "triggers": [], "lpos": [816.4, 514.5], "lw": 92.80000000000001}, {"from": "P3", "to": "P4", "kind": "main", "pts": [[316.0, 832], [316.0, 952]], "label": "", "when": "cart complete", "triggers": []}, {"from": "C1", "to": "C1", "kind": "fail", "pts": [[386, 677.92], [403.0, 677.92], [403.0, 702.24], [386, 702.24]], "label": "", "when": "item unavailable → two alternatives offered", "triggers": []}, {"from": "C2", "to": "C2", "kind": "fail", "pts": [[626, 677.92], [643.0, 677.92], [643.0, 702.24], [626, 702.24]], "label": "", "when": "item unavailable → two alternatives offered", "triggers": []}, {"from": "C3", "to": "C3", "kind": "fail", "pts": [[866, 677.92], [883.0, 677.92], [883.0, 702.24], [866, 702.24]], "label": "", "when": "item unavailable → two alternatives offered", "triggers": []}, {"from": "P4", "to": "P5", "kind": "main", "pts": [[316.0, 1016], [316.0, 1102]], "label": "", "when": "order placed", "triggers": ["T3", "T4"], "tpos": [328.0, 1049.0]}, {"from": "P4", "to": "P3", "kind": "fail", "pts": [[176, 984.0], [164.0, 984.0], [164.0, 621.0], [176, 621.0]], "label": "edit", "when": "edit", "triggers": [], "lpos": [120.4, 795.0], "lw": 37.6}, {"from": "P4", "to": "TECH", "kind": "fail", "pts": [[456, 1008.32], [685.4, 1008.32]], "label": "till system down, retries exhausted", "when": "till system down, retries exhausted", "triggers": [], "lpos": [475.7, 973.3], "lw": 190}, {"from": "P5", "to": "P7", "kind": "main", "pts": [[316.0, 1166], [316.0, 1436]], "label": "cash", "when": "cash", "triggers": [], "lpos": [322.0, 1293.5], "lw": 37.6}, {"from": "P5", "to": "P6", "kind": "branch", "pts": [[456, 1158.32], [810.4, 1158.32], [810.4, 1252]], "label": "card", "when": "card", "triggers": ["T5"], "tpos": [462, 1135.3], "lpos": [614.4, 1140.3], "lw": 37.6}, {"from": "P6", "to": "P7", "kind": "branch", "pts": [[810.4, 1316], [810.4, 1359.0], [440, 1359.0], [440, 1436]], "label": "paid", "when": "paid", "triggers": ["T6"], "tpos": [822.4, 1327.5], "lpos": [606.4, 1341.0], "lw": 37.6}, {"from": "P6", "to": "P6", "kind": "fail", "pts": [[935.4, 1269.92], [969.4, 1269.92], [969.4, 1294.24], [935.4, 1294.24]], "label": "wrong code → re-ask", "when": "wrong code → re-ask", "triggers": [], "lpos": [975.4, 1274.6], "lw": 141.1}, {"from": "P6", "to": "P5", "kind": "fail", "pts": [[935.4, 1308.32], [1188.8, 1308.32], [1188.8, 1124.4], [456, 1124.4]], "label": "card declined → choose again", "when": "card declined → choose again", "triggers": [], "lpos": [727.4, 1089.4], "lw": 190}, {"from": "P7", "to": "P8", "kind": "main", "pts": [[316.0, 1500], [316.0, 1586]], "label": "", "when": "out for delivery", "triggers": ["T7"], "tpos": [328.0, 1533.0]}, {"from": "P7", "to": "P7", "kind": "fail", "pts": [[456, 1453.92], [490.0, 1453.92], [490.0, 1478.24], [456, 1478.24]], "label": "still baking → check again", "when": "still baking → check again", "triggers": [], "lpos": [496.0, 1458.6], "lw": 189.4}, {"from": "P8", "to": "END", "kind": "main", "pts": [[316.0, 1650], [316.0, 1736]], "label": "saved", "when": "saved", "triggers": ["T8"], "tpos": [328.0, 1683.0], "lpos": [265.5, 1685.5], "lw": 44.5}, {"from": "P8", "to": "END", "kind": "opt", "pts": [[456, 1642.32], [484, 1642.32], [484, 1759.0], [396, 1759.0]], "label": "skip", "when": "skipped", "triggers": [], "lpos": [490, 1693.2], "lw": 37.6}], "stages": [{"id": "A", "name": "Start", "y0": 0, "y1": 214}, {"id": "B", "name": "Caller", "y0": 214, "y1": 548}, {"id": "C", "name": "Order", "y0": 548, "y1": 918}, {"id": "D", "name": "Checkout", "y0": 918, "y1": 1402}, {"id": "E", "name": "Delivery", "y0": 1402, "y1": 1816}], "width": 1219, "height": 1816, "warnings": []}}</script>
+<script>
+const D = JSON.parse(document.getElementById("flow-data").textContent);
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const STATUS_LABEL = {exists:"exists", change:"needs change", new:"new", tbd:"TBD"};
+const EDGE_COLOR = {main:"accent", branch:"alt", fail:"fail", opt:"muted"};
+const NS = "http://www.w3.org/2000/svg";
+const STORE_KEY = "flowdoc." + D.meta.slug + ".sel";
+const G = D.graph;
+const byId = Object.fromEntries(G.nodes.map(n => [n.id, n]));
+const problems = [];
+
+$("#h-title").textContent = D.meta.title;
+/* The engine version the step-engine column is written against, and — when the project's code still vendors
+   another version — that one too, so a reader never mistakes the target for what runs today. */
+$("#h-engine").innerHTML = `<span class="v" title="Step-engine expressions are written against this agent-step version">agent-step ${esc(D.meta.engine_version)}</span>` +
+  (D.meta.code_engine_version && D.meta.code_engine_version !== D.meta.engine_version
+    ? `<span class="old" title="The version the project's code vendors today">code today: ${esc(D.meta.code_engine_version)}</span>` : "");
+$("#h-sub").textContent = D.meta.subtitle;
+if (D.meta.global_exits?.length) { const any = $("#h-any"); any.hidden = false; any.textContent = "From any step: " + D.meta.global_exits.map(x => String(x).replace(/[ .;]+$/, "")).join(" · "); }
+
+function legend(){
+  const dot = s => `<i class="dot st ${s}"></i>`;
+  $("#legend").innerHTML = [
+    `<span><i class="sw"></i>happy path</span>`,
+    `<span><i class="sw branch"></i>${esc(D.meta.branch_label)}</span>`,
+    `<span><i class="sw fail"></i>failure / loop back</span>`,
+    `<span><i class="sw opt"></i>optional / skip</span>`,
+    `<span><span class="chipk">⚡ trigger</span>API call fired when the step completes</span>`,
+    `<span>${dot("exists")}exists today</span>`, `<span>${dot("change")}exists, needs change</span>`,
+    `<span>${dot("new")}new</span>`, `<span>${dot("tbd")}TBD / unverified</span>`,
+  ].join("");
+}
+
+/* ---------- graph: geometry is precomputed by layout.py; this only draws it ---------- */
+function drawGraph(){
+  const cv = $("#canvas");
+  cv.style.width = G.width + "px"; cv.style.height = G.height + "px";
+  G.stages.forEach((s, i) => {
+    const b = document.createElement("div");
+    b.className = "band"; b.style.top = s.y0 + "px"; b.style.height = (s.y1 - s.y0) + "px";
+    b.style.background = i % 2 ? "var(--band-b)" : "var(--band-a)";
+    b.innerHTML = `<b>${esc(s.id)} · ${esc(s.name)}</b>`;
+    cv.appendChild(b);
+  });
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("width", G.width); svg.setAttribute("height", G.height);
+  svg.innerHTML = `<defs>${Object.values(EDGE_COLOR).map(c =>
+    `<marker id="m-${c}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="var(--${c})"/></marker>`).join("")}</defs>`;
+  cv.appendChild(svg);
+  // Containers first so their children paint on top of them.
+  [...G.nodes].sort((a, b) => (b.cls||"").includes("container") - (a.cls||"").includes("container")).forEach(n => drawNode(cv, n));
+  G.edges.forEach(e => drawEdge(svg, cv, e));
+}
+function drawNode(cv, n){
+  const el = document.createElement("div");
+  el.className = "node " + (n.cls || "");
+  el.id = "n-" + n.id;
+  Object.assign(el.style, {left:n.x+"px", top:n.y+"px", width:n.w+"px", height:n.h+"px"});
+  if ((n.cls||"").includes("term")) { el.innerHTML = `<div class="t">${esc(n.label)}</div>`; cv.appendChild(el); return; }
+  el.tabIndex = 0; el.setAttribute("role", "button"); el.setAttribute("aria-label", `${n.id} ${n.label}`);
+  el.innerHTML = `${n.status ? `<i class="st ${n.status}" title="${esc(STATUS_LABEL[n.status])}"></i>` : ""}<div class="id">${esc(n.id)}</div><div class="t">${esc(n.label)}</div>${n.sub ? `<div class="s">${esc(n.sub)}</div>` : ""}${innerChips(n)}`;
+  el.addEventListener("click", ev => { ev.stopPropagation(); select(n.id); });
+  el.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(n.id); } });
+  cv.appendChild(el);
+}
+// A sub-step that closes back into its own container has no drawn edge; its chain is shown in its box.
+function innerChips(n){
+  if (!n.chips?.length) return "";
+  return `<div class="ichips">${n.chips.map(id => { const t = D.triggers[id];
+    if (!t) { problems.push(`node ${n.id} names unknown trigger ${id}`); return ""; }
+    return `<span class="chipk" title="${esc(t.real)}">⚡ ${esc(t.short)}</span>`; }).join('<span class="arr">→</span>')}</div>`;
+}
+function drawEdge(svg, cv, e){
+  // build.py validates every edge; this guard keeps a hand-edited file rendering, loudly, instead of blank.
+  if (!byId[e.from] || !byId[e.to] || !Array.isArray(e.pts) || e.pts.length < 2) {
+    const msg = `edge ${e.from} → ${e.to} names an unknown node or has no path — skipped`;
+    console.error("flow graph: " + msg); problems.push(msg); return;
+  }
+  const color = EDGE_COLOR[e.kind] || "accent";
+  const p = document.createElementNS(NS, "path");
+  p.setAttribute("d", e.pts.map((q, i) => (i ? "L" : "M") + q[0] + "," + q[1]).join(" "));
+  p.setAttribute("fill", "none"); p.setAttribute("stroke", `var(--${color})`);
+  p.setAttribute("stroke-width", e.kind === "fail" || e.kind === "opt" ? 1.5 : 2);
+  if (e.kind === "fail") p.setAttribute("stroke-dasharray", "6 4");
+  if (e.kind === "opt") p.setAttribute("stroke-dasharray", "2 4");
+  p.setAttribute("marker-end", `url(#m-${color})`);
+  const title = document.createElementNS(NS, "title"); title.textContent = `${e.from} → ${e.to}: ${e.when}`; p.appendChild(title);
+  svg.appendChild(p);
+  if (e.label && e.lpos) {
+    const l = document.createElement("div");
+    l.className = "elabel " + (e.kind === "fail" ? "fail" : e.kind === "branch" ? "branch" : "");
+    Object.assign(l.style, {left: e.lpos[0] + "px", top: e.lpos[1] + "px", maxWidth: (e.lw || 190) + "px"});
+    l.textContent = e.label; l.title = e.when; cv.appendChild(l);
+  }
+  if (e.triggers?.length && e.tpos) {
+    const t = document.createElement("div"); t.className = "trig";
+    Object.assign(t.style, {left: e.tpos[0] + "px", top: e.tpos[1] + "px"});
+    t.innerHTML = e.triggers.map(id => {
+      const tr = D.triggers[id];
+      if (!tr) { problems.push(`edge ${e.from} → ${e.to} names unknown trigger ${id}`); return ""; }
+      return `<span class="chipk" title="${esc(tr.real)}">⚡ ${esc(tr.short)}</span>`;
+    }).join('<span class="arr">→</span>');
+    cv.appendChild(t);
+  }
+}
+
+/* ---------- detail panel ---------- */
+const list = xs => xs?.length ? `<ul>${xs.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="note">—</p>`;
+function trigCard(id){
+  const t = D.triggers[id];
+  if (!t) return `<div class="warn">unknown trigger ${esc(id)}</div>`;
+  return `<div class="tcard"><div class="n">⚡ ${esc(t.id)} · ${esc(t.name)} <span class="pill ${t.status}">${esc(STATUS_LABEL[t.status])}</span></div>
+    ${t.spec ? `<div class="row">Brief: <code>${esc(t.spec)}</code></div>` : ""}
+    <div class="row">Real: <code>${esc(t.real)}</code></div>
+    ${t.evidence ? `<div class="row ev">Evidence: <code>${esc(t.evidence)}</code></div>` : ""}
+    <div class="row"><b>OK:</b> ${esc(t.on_ok)}</div>
+    ${(t.on_fail||[]).map(f => `<div class="row bad"><b>✗</b> ${esc(f)}</div>`).join("")}
+    ${t.retry ? `<div class="row ev">Retry: ${esc(t.retry)}</div>` : ""}</div>`;
+}
+function select(id){
+  const s = D.steps[id];
+  if (!s) return;
+  document.querySelectorAll(".node.sel").forEach(n => n.classList.remove("sel"));
+  $("#n-" + id)?.classList.add("sel");
+  const kidIds = D.order.filter(k => D.steps[k].parent === id);
+  $("#detail").innerHTML = `<div class="kick">${esc(id)} · STAGE ${esc(s.stage)}${s.parent ? " · IN " + esc(s.parent) : ""}</div><h2>${esc(s.title)}</h2>
+    <span class="pill ${s.status}">${esc(STATUS_LABEL[s.status])}</span>
+    ${s.opens ? `<h3>On entry, the agent says</h3><p>${esc(s.opens)}</p>` : ""}
+    <h3>Must gather</h3>${list(s.required)}
+    ${s.optional?.length ? `<h3>Offer (skippable)</h3>${list(s.optional)}` : ""}
+    ${s.prefilled?.length ? `<h3>Arrives prefilled</h3>${list(s.prefilled)}` : ""}
+    ${kidIds.length ? `<h3>Holds</h3>${list(kidIds.map(k => k + " · " + D.steps[k].title))}` : ""}
+    <h3>Complete when</h3><p>${esc(s.completion)}</p>
+    <h3>Triggers on completion (in order)</h3>${s.triggers?.length ? s.triggers.map(trigCard).join("") : `<p class="note">None — the step's answer only routes.</p>`}
+    ${s.lookups?.length ? `<h3>Lookups while gathering</h3>${list(s.lookups)}` : ""}
+    <h3>Next</h3><div class="out">${s.next.map(o => `<span class="to ${o.kind === "fail" ? "fail" : o.kind === "branch" ? "branch" : ""}">→ ${esc(o.to)}</span><span>${esc(o.when)}</span>`).join("")}</div>
+    <h3>In the step engine</h3><p class="mono">${esc(s.engine)}</p>
+    ${s.status_note ? `<h3>Today</h3><p>${esc(s.status_note)}</p>` : ""}
+    ${s.open?.length ? `<h3>Open</h3>${list(s.open.map(q => q + " — " + (D.open.find(o => o.id === q)?.question || "")))}` : ""}`;
+  try { localStorage.setItem(STORE_KEY, id); } catch (_) { /* storage blocked: selection just is not remembered */ }
+}
+
+/* ---------- tables (the same rows the xlsx carries) ---------- */
+const cell = v => Array.isArray(v) ? (v.length ? `<ul>${v.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "—") : esc(v === "" || v == null ? "—" : v);
+const pill = s => `<span class="pill ${s}">${esc(STATUS_LABEL[s] || s)}</span>`;
+function table(head, rows, idCol = true){
+  return `<thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map(r => `<tr>${r.map((c, i) => i === 0 && idCol ? `<td class="id">${c}</td>` : `<td>${c}</td>`).join("")}</tr>`).join("") + "</tbody>";
+}
+function panels(){
+  const tabs = [["graph", "Graph", null]];
+  const add = (key, name, html) => tabs.push([key, name, html]);
+  add("steps", "Steps", table(["Step", "Name", "Must gather", "Offer (skippable)", "Complete when", "Triggers", "Next", "Status"],
+    D.order.map(id => { const s = D.steps[id]; return [esc(id), `<b>${esc(s.title)}</b>`, cell(s.required), cell(s.optional), esc(s.completion),
+      cell((s.triggers||[]).map(t => t + " · " + (D.triggers[t]?.name || "?"))), cell(s.next.map(o => "→ " + o.to + " — " + o.when)), pill(s.status)]; })));
+  add("triggers", "Triggers & APIs", table(["ID", "Trigger", "Fired by", "Name in the brief", "Real route", "OK →", "Failure handling", "Status"],
+    Object.values(D.triggers).map(t => [esc(t.id), `<b>${esc(t.name)}</b>`, `<span class="mono">${esc(t.step)}</span>`, `<span class="mono">${esc(t.spec || "—")}</span>`,
+      `<span class="mono">${esc(t.real)}${t.evidence ? `<br><span style="color:var(--muted)">${esc(t.evidence)}</span>` : ""}</span>`, esc(t.on_ok), cell(t.on_fail), pill(t.status)])));
+  D.sheets.forEach(sh => add("sheet-" + sh.id, sh.title, table(sh.columns, sh.rows.map(r => r.map(c => cell(c))), false)));
+  add("open", "Open / TBD", table(["ID", "Question", "Where it bites", "Default until decided"],
+    D.open.map(o => [esc(o.id), esc(o.question), `<span class="mono">${esc(o.where)}</span>`, esc(o.default)])));
+  $("#tabs").innerHTML = tabs.map(([k, name], i) => `<button role="tab" id="tab-${k}" aria-selected="${i === 0}" data-p="${k}">${esc(name)}</button>`).join("");
+  $("#panels").innerHTML = tabs.slice(1).map(([k, , html]) => `<section class="panel" id="p-${k}" hidden><div class="tablewrap"><table>${html}</table></div></section>`).join("");
+  document.querySelectorAll("nav.tabs button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll("nav.tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
+    document.querySelectorAll(".panel").forEach(p => p.hidden = p.id !== "p-" + b.dataset.p);
+  }));
+}
+
+/* ---------- zoom ---------- */
+function zoom(fit){
+  const cv = $("#canvas"), box = $("#gbox");
+  const k = fit ? Math.min(1, (box.clientWidth - 4) / G.width) : 1;
+  cv.style.transform = `scale(${k})`;
+  cv.style.marginBottom = (G.height * (k - 1)) + "px";
+  cv.style.marginRight = (G.width * (k - 1)) + "px";
+}
+$("#z-fit").addEventListener("click", () => zoom(true));
+$("#z-100").addEventListener("click", () => zoom(false));
+
+legend(); drawGraph(); panels();
+if (problems.length) $("#warnings").innerHTML = problems.map(p => `<div class="warn">${esc(p)}</div>`).join("");
+let first = D.order[0];
+try { first = localStorage.getItem(STORE_KEY) || first; } catch (_) { /* storage blocked: start at the first step */ }
+select(D.steps[first] ? first : D.order[0]);
+zoom(true);
+</script>
+</body>
+</html>

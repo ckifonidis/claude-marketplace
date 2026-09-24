@@ -23,7 +23,7 @@ Install:
 /plugin install agent-step-toolkit@ckifonidis-marketplace
 ```
 
-Ships four skills:
+Ships five skills:
 
 - **`create-tool`** — bootstrap a new agent-step project (package.json, tsconfig,
   langgraph config, the agent-step runner **library**, graph/agent/state/prompt
@@ -58,6 +58,12 @@ Ships four skills:
   against a captured SSE stream. The agent side is correct by construction
   (`create-tool` scaffolds it, `test-agent-step` tests it); this grades the
   hand-written consumer of the wire.
+- **`document-agent-flow`** — document any agent-step agent (from a prose description, an
+  existing codebase, or specs and a walkthrough) as three files generated from ONE validated flow
+  spec: a Markdown design document, a self-contained interactive step graph (stage bands, ⚡ trigger
+  chips, click-for-detail panel, light/dark, phone width — laid out automatically) and an xlsx step
+  sheet. The generator (`templates/flowdoc/`) is vendored into the project; `verify.py` checks every
+  output in its own medium (xlsx read-back, headless render, break tests).
 
 The embedded runner library (`skills/create-tool/templates/agent-step/`) is the
 **canonical, versioned source** — its `VERSION` marker travels into every
@@ -154,7 +160,8 @@ plugins/
 │       ├── create-tool/             # bootstrap / add-tool / extend / port + workflows + references + templates (incl. the canonical agent-step library)
 │       ├── test-agent-step/         # three-layer testing methodology
 │       ├── pull-library/            # upgrade a downstream project's vendored library (consumer side)
-│       └── audit-middleware-contract-compliance/  # audit a channel middleware against the wire/streaming/handoff contract
+│       ├── audit-middleware-contract-compliance/  # audit a channel middleware against the wire/streaming/handoff contract
+│       └── document-agent-flow/     # flow spec → md + interactive graph + xlsx (vendorable flowdoc generator + verify)
 ├── langgraph-plugin/
 │   ├── .claude-plugin/plugin.json   # plugin manifest
 │   └── skills/
