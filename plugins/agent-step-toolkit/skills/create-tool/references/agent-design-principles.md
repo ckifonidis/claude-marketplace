@@ -32,7 +32,9 @@ fork is invisible until two agents disagree.
 *Why:* host-side mechanisms — envelope patching, hand-rolled guard latches, model-input notes —
 eventually either duplicate something the engine grows properly or actively fight the prompt. The
 host owns exactly: the Zod configuration, the prompt, the executors, and pure renderers (read-back
-lexicon, recaps, probe messages).
+lexicon, recaps, probe messages). A side effect that must follow the task's OUTCOME (a contact
+record) is the `HandoffSpec.onHandback` observer in that configuration — never a wrapper around the
+resolver node.
 
 *Enforcement:* the engine throws on library-slot writes from executors; a needed capability the
 engine lacks is drafted in the vendored tree and ported upstream via the toolkit's versioning flow —

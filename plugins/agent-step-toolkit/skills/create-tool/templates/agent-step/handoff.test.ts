@@ -867,3 +867,119 @@ test("metadata: returning undefined adds no fields at all", async () => {
     "no empty object, no stray keys",
   );
 });
+
+// ─── onHandback ───────────────────────────────────────────────────────────── //
+// An OBSERVER of the resolved handback: it sees what the closing was chosen
+// from, and nothing it does — throw, reject, take its time — can reach the
+// reply the caller hears.
+
+test("onHandback: called once per handback type, with the EFFECTIVE request and the pre-clear state", async () => {
+  const seen: { reason: string; context: string; outcome: string | null | undefined }[] = [];
+  const node = createHandoffNode<typeof BUSY_STATE>({
+    offTopic: { mode: "terminate" },
+    terminateMessage: "Transferring you now.",
+    clearsOnHandback: ["outcome"],
+    // completed → abandon from state: the observer must see the override.
+    resolveHandoffType: (_state, request) => (request.context === "escalate" ? "abandon" : undefined),
+    onHandback: (state, request) => {
+      seen.push({ reason: request.reason, context: request.context, outcome: state.outcome });
+    },
+  });
+  for (const handoff of [
+    { reason: "completed", context: "done" },
+    { reason: "completed", context: "escalate" },
+    { reason: "abandon", context: "gave up" },
+    { reason: "off_topic", context: "wants something else" },
+  ] as const) {
+    const update = await node({ ...BUSY_STATE, handoff }, nodeConfig([]));
+    if (handoff.reason !== "off_topic") assert.equal(update.outcome, null, "the clear still happens");
+  }
+  assert.deepEqual(seen, [
+    { reason: "completed", context: "done", outcome: "already_active" },
+    { reason: "abandon", context: "escalate", outcome: "already_active" },
+    { reason: "abandon", context: "gave up", outcome: "already_active" },
+    { reason: "off_topic", context: "wants something else", outcome: "already_active" },
+  ]);
+});
+
+test("onHandback: a throw cannot break the reply", async () => {
+  const node = createHandoffNode<S>({
+    offTopic: { mode: "terminate" },
+    terminateMessage: "Transferring you now.",
+    onHandback: () => {
+      throw new Error("CRM down");
+    },
+  });
+  const update = await node({ handoff: { reason: "completed", context: "the closing" } }, nodeConfig([]));
+  const [message] = update.messages as AIMessage[];
+  assert.equal(message.content, "the closing");
+  assert.equal(message.additional_kwargs.handoff_type, "completed");
+  assert.equal(update.handoff, null);
+});
+
+test("onHandback: not awaited, and a rejection is contained", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let settled = false;
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const node = createHandoffNode<S>({
+      offTopic: { mode: "terminate" },
+      terminateMessage: "Transferring you now.",
+      onHandback: async () => {
+        await gate;
+        settled = true;
+        throw new Error("CRM rejected the record");
+      },
+    });
+    const update = await node({ handoff: { reason: "abandon", context: "gave up" } }, nodeConfig([]));
+    // The node resolved while the observer was still pending on its gate.
+    assert.equal(settled, false, "the node must not wait for the observer");
+    const [message] = update.messages as AIMessage[];
+    assert.equal(message.content, "gave up");
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true);
+    assert.deepEqual(unhandled, [], "the rejection must not escape as unhandled");
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("onHandback: a delegate FAILURE is a handback (observed), a delegate SUCCESS is not", async () => {
+  const seen: string[] = [];
+  const failing = createHandoffNode<S>({
+    offTopic: { mode: "delegate", url: "http://127.0.0.1:9", assistantId: "general", timeoutMs: 2_000 },
+    terminateMessage: "Transferring you now.",
+    onHandback: (_state, request) => {
+      seen.push(`failed:${request.reason}`);
+    },
+  });
+  await failing({ handoff: { reason: "off_topic", context: "wants a transfer" } }, nodeConfig([]));
+
+  const realFetch = globalThis.fetch;
+  const sse =
+    'event: messages\ndata: [{"type":"AIMessageChunk","content":"delegate reply"},{"langgraph_node":"reply"}]\n\n';
+  globalThis.fetch = (async (url: unknown) =>
+    String(url).endsWith("/threads")
+      ? new Response("{}", { status: 200 })
+      : new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } })) as typeof fetch;
+  try {
+    const delegating = createHandoffNode<S>({
+      offTopic: { mode: "delegate", url: "http://delegate.test", assistantId: "general", timeoutMs: 2_000 },
+      terminateMessage: "Transferring you now.",
+      onHandback: (_state, request) => {
+        seen.push(`delegated:${request.reason}`);
+      },
+    });
+    const update = await delegating({ handoff: { reason: "off_topic", context: "wants a transfer" } }, nodeConfig([]));
+    const [message] = update.messages as AIMessage[];
+    assert.equal(message.content, "delegate reply");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(seen, ["failed:off_topic"], "a successful delegate never left this agent");
+});

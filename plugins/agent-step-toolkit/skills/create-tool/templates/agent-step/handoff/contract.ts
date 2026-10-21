@@ -173,6 +173,26 @@ export interface HandoffSpec<T> {
    *  accumulates) cannot be cleared this way — leave those out and let the
    *  pointer slot that selects from them carry the reset instead. */
   clearsOnHandback?: readonly Exclude<keyof T & string, "messages">[];
+  /** Observe a resolved handback — for a host SIDE EFFECT that must follow the
+   *  task's outcome, e.g. recording the contact in a CRM. Called once per
+   *  handback (`completed`, `abandon` AND `off_topic` — the host filters), never
+   *  for a successful delegate, which is not a handback. It receives the
+   *  EFFECTIVE request (after `resolveHandoffType`) and the state as it stood
+   *  BEFORE `clearsOnHandback` — the same view the closing was chosen from, so
+   *  what the host records cannot disagree with what the caller heard.
+   *
+   *  An observer, never a resolver: it runs after the reply, the signal and the
+   *  metadata are final, and NOTHING it does can change them. The node does not
+   *  await it — a returned promise runs on while the reply is delivered — and it
+   *  contains a throw or a rejection, so a failing side effect can never break
+   *  the handback. The library does not log: report failures inside the hook.
+   *
+   *  Exists because the outcome is known in one place only — this node — while
+   *  the engine-decided endings (an exhausted ladder, the auto-handoff) run no
+   *  host executor at all. Without the hook a host can reach those endings only
+   *  by wrapping this node, or by smuggling I/O into the pure `resolve*`
+   *  functions above. */
+  onHandback?: (state: T, request: HandoffRequest) => void | Promise<void>;
   /** Build the delegate run's input from host state + the handoff request.
    *  Default: `{ messages: [{ role: "user", content: request.context }] }`.
    *  Use this to forward identity/context the delegate needs (the shared
