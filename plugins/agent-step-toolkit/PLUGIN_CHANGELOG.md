@@ -11,6 +11,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.27.0] — 2026-10-21
+
+Ships **agent-step library 3.1.0** — a minor release: `HandoffSpec.onHandback`, an OBSERVER of the
+resolved handback for host side effects that must follow the task's outcome (e.g. a CRM contact
+record). It sees every ending — including the engine-decided ones (an exhausted ladder, the
+auto-handoff over a thrown executor) that run no host executor — without wrapping the resolver node.
+Additive: `/pull-library` replaces the vendored library wholesale — **no transforms**
+([migrations/3.0.1-to-3.1.0.md](migrations/3.0.1-to-3.1.0.md)); a spec without the field behaves as
+before. Library suite 225 → 229 tests; verified by throwaway bootstrap from these templates: clean
+typecheck, 229/229 passing.
+
+### Added
+- **Library 3.1.0** — `HandoffSpec.onHandback?: (state, request) => void | Promise<void>`: called
+  once per handback (never for a successful delegate) with the EFFECTIVE request and the PRE-clear
+  state, after the reply, signal and metadata are final; synchronous, never awaited, a throw or a
+  rejection contained. Details in [CHANGELOG.md](CHANGELOG.md).
+
+### Changed
+- `agent-step-api.md` `<handoff>`: the field in the `HandoffSpec` listing, a paragraph on the
+  observer contract, and the node's resolution sequence.
+- `agent-design-principles.md` principle 1: a side effect that must follow the task's outcome is the
+  `onHandback` observer in the configuration — never a wrapper around the resolver node.
+- `plugin.json` / marketplace entry: library version and description.
+
 ## [0.26.1] — 2026-08-29
 
 Ships **agent-step library 3.0.1** — a patch release: OTP/match gate-interplay fixes. The folded

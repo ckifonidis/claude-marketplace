@@ -22,6 +22,8 @@
 //     `HandoffSpec.clearsOnHandback` domain slots, because the thread outlives
 //     the task (middlewares reuse one thread id per call). `off_topic` and a
 //     successful delegate clear nothing — both stay resumable;
+//   - calls the host's `onHandback` observer once the handback is final (never
+//     for a successful delegate) — not awaited, a throw or rejection contained;
 //   - returns `{ handoff: null, ...clears, messages: [AIMessage] }` — the final AIMessage
 //     carries the channel-contract `additional_kwargs`: terminate (and
 //     delegate-failure fallback) is the HANDBACK (`is_handoff: true`,
@@ -178,6 +180,21 @@ export function createHandoffNode<T extends LibraryManagedSlots>(spec: HandoffSp
     if (!delegated && effective.reason !== "off_topic") {
       for (const slot of agentStepTaskScopedSlots) clears[slot] = null;
       for (const slot of spec.clearsOnHandback ?? []) clears[slot] = null;
+    }
+
+    // The host's observer (`onHandback`), once the handback is final. Called
+    // synchronously — so whatever it starts inherits this node's run context —
+    // but never awaited, and fully contained: neither a throw nor a rejection
+    // can reach the reply below.
+    if (!delegated && spec.onHandback) {
+      try {
+        const pending = spec.onHandback(state, effective);
+        if (pending && typeof (pending as Promise<void>).catch === "function") {
+          (pending as Promise<void>).catch(() => {});
+        }
+      } catch {
+        // Contained by contract: the observer can never break the handback.
+      }
     }
 
     return {
