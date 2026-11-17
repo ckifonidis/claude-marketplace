@@ -58,7 +58,7 @@ Tool level — `buildAgentStepTool` options:
 
 | Primitive | Declared as | In the ladder |
 |---|---|---|
-| handoff | `handoff: HandoffSpec` (`offTopic`, `modelRequestSchema` typed routes, `clearsOnHandback`, `resolve*`) (`<handoff>`) | terminals; off-topic delegation. The library's own reasons are `off_topic` / `completed` / `abandon` (back to the orchestrator) |
+| handoff | `handoff: HandoffSpec` (`offTopic`, `modelRequestSchema` typed routes, `clearsOnHandback`, `resolve*`, the `onHandback` observer) (`<handoff>`) | terminals; off-topic delegation. The library's own reasons are `off_topic` / `completed` / `abandon` (back to the orchestrator). A side effect that must follow the outcome (a contact record) is `onHandback` — it sees every handback, including the engine-decided ones, and cannot change the reply or the signal |
 | transfer to a named human or team (a nurse, a fraud desk) | the scaffold's own handoff action (`soleStep`, the `pendingHandoff` slot, `is_handoff` kwargs — `streaming-and-channel-contract.md`), routed by the channel middleware | a terminal naming who takes over |
 | escalation ladders | `ladders` + the `note_refusal` control | a "say it once, then escalate" rule |
 | abort policy | `abortPolicy: {requireActive, allowStandalone, allowedFollowers, allowedPendingTargets}` | what "cancel" does mid-gate |

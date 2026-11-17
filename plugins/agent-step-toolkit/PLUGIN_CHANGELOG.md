@@ -11,6 +11,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.28.0] — 2026-11-17
+
+New skill **`document-agent-flow`** (contributed by Kotsarinis Miltiadis, PR #11) — documents any
+agent-step agent as three files generated from ONE validated flow spec: a Markdown design document,
+a self-contained interactive step graph and an xlsx step sheet. Starts from a prose description, an
+existing codebase, or specs and a walkthrough. No library change — **agent-step stays 3.1.0**;
+downstream projects need no `/pull-library`.
+
+### Added
+- `skills/document-agent-flow/` — `SKILL.md`, three intake workflows (`intake-describe`,
+  `intake-existing`, `intake-docs`) converging on `document-flow.md` (vocabulary → parallel research
+  briefs → spec → build → verify → adversarial review → owner iteration), and five references:
+  `data-model.md`, `engine-notation.md` (3.x primitive catalog, notation, pitfalls), `layout.md`,
+  `design-guide.md`, `research-briefs.md`.
+- `templates/flowdoc/` — the vendorable generator (stdlib + openpyxl): spec validator, automatic ladder
+  layout (spine, branch lanes, gutter-routed back edges, self-loops, containers — no coordinates in the
+  spec), md / html / xlsx renderers, and `verify.py` (determinism, xlsx read-back, headless render in
+  light / dark / 400 px, edge, label and chip placement checks, validator and page break tests,
+  optional `--deny` scan).
+- The engine column is linted against the current library (removed primitives and `readOnly` are
+  refused); every set states the agent-step version it targets, shown top-right on the page.
+- `examples/pizza-order/` — a synthetic worked spec and its three outputs.
+
+### Changed
+- `bump-version`'s `references/tracked-assets.md` (Tier 6) now lists `skills/document-agent-flow/` — its
+  engine-notation catalog, `RETIRED_ENGINE_TERMS` and `engine_version` examples mirror the library, so a
+  library bump reconciles them.
+- Root `README.md`: the plugin lists five skills; the layout tree gains `document-agent-flow/`.
+- `plugin.json` / marketplace entry: the description gains the flow-documentation capability.
+
+### Fixed
+- The new skill is reconciled with the shipped library 3.1.0: the `engine_version` examples move from
+  3.0.1 to 3.1.0 (the `SKILL.md` spec skeleton and `examples/pizza-order/`, its `out/` rebuilt), and
+  the handoff row of `engine-notation.md` gains the `onHandback` observer — the primitive for a side
+  effect that must follow the outcome.
+
+Verified at release on the example: the generator rebuilds byte-identically (md, html) and `verify.py`
+passes all 29 non-browser checks; the browser checks (headless render) were not run at release. As
+contributed, `verify.py` passed with 0 skipped on the example, two more synthetic flows and five
+existing agent-step projects spanning library 1.0.0–3.0.1.
+
 ## [0.27.0] — 2026-10-21
 
 Ships **agent-step library 3.1.0** — a minor release: `HandoffSpec.onHandback`, an OBSERVER of the
