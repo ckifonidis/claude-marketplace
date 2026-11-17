@@ -79,6 +79,15 @@ function requiredManagedChannels(opts: ValidatableOptions): string[] {
   if (Object.keys(opts.ladders ?? {}).length > 0) {
     required.add("spentLadders");
   }
+  // …and the gate budgets: without the channel a spent proposal / mismatch is
+  // never recorded, and an abort refunds the whole budget again.
+  for (const action of Object.values(opts.config.actions) as {
+    controller?: { requiresConfirmation?: unknown; requiresMatch?: unknown };
+  }[]) {
+    if (action.controller?.requiresConfirmation || action.controller?.requiresMatch) {
+      required.add("spentLadders");
+    }
+  }
   return [...required];
 }
 
@@ -400,6 +409,30 @@ export function validateConfig(opts: ValidatableOptions): void {
           .map((issue) => issue.message)
           .join("; ")}`,
       );
+    }
+  }
+  // Gate `onExhaust` routes — same rules as a ladder's: engine-only, needs
+  // the library handoff, validated against the LIBRARY contract.
+  for (const [name, action] of Object.entries(config.actions)) {
+    const controller = (action as import("../types.js").ActionDef<string>).controller;
+    const confirm = controller?.requiresConfirmation;
+    const routes = [
+      typeof confirm === "object" ? confirm.onExhaust : undefined,
+      controller?.requiresMatch?.onExhaust,
+    ];
+    for (const route of routes) {
+      if (route === undefined) continue;
+      if (opts.handoff == null) {
+        throw new Error(`agent-step: action "${name}" sets onExhaust but handoff is not configured.`);
+      }
+      const parsed = handoffParamsSchema.safeParse(route);
+      if (!parsed.success) {
+        throw new Error(
+          `agent-step: action "${name}" has an invalid onExhaust: ${parsed.error.issues
+            .map((issue) => issue.message)
+            .join("; ")}`,
+        );
+      }
     }
   }
 }

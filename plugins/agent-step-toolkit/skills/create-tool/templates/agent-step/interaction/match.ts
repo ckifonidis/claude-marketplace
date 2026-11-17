@@ -29,6 +29,10 @@ import {
   setAwaitingMatchPatch,
 } from "../run/batch-state.js";
 
+/** The task-scoped `spentLadders` key carrying a consumer's SPENT mismatches —
+ *  the record `abort_pending_input` and a capturer re-run cannot refund. */
+export const matchLatchKey = (consumer: string): string => `match:${consumer}`;
+
 /** Default match-attempts budget when `requiresMatch.maxAttempts` is omitted. */
 export const MATCH_DEFAULT_MAX_ATTEMPTS = 3;
 

@@ -23,9 +23,20 @@ import { valueEqual } from "../run/value-equal.js";
 /** The compiled confirmation opts: every field filled, and `replyContract`
  *  always the wire STRING — a declared {@link GateContractSpec} is composed
  *  at construction, so the run pipeline never sees the spec form. */
-export type NormalizedConfirmation = Omit<Required<ConfirmationOpts>, "replyContract"> & {
+export type NormalizedConfirmation = Omit<
+  Required<ConfirmationOpts>,
+  "replyContract" | "onExhaust"
+> & {
   replyContract: string;
+  onExhaust?: ConfirmationOpts["onExhaust"];
 };
+
+/** The task-scoped `spentLadders` key carrying an action's SPENT proposals.
+ *  The gate's own `attempts_left` lives on the transient `awaitingInput` slot,
+ *  which `abort_pending_input` clears — so on its own it refunded the whole
+ *  budget on every bare rejection ("no" → new value → "no" … without bound).
+ *  The latch survives the abort; only an execute clears it. */
+export const confirmLatchKey = (action: string): string => `confirm:${action}`;
 
 /** Applied when `requiresConfirmation: true` is set bare (no opts object) and
  *  as the fill-in for any field omitted from an explicit opts object. */
@@ -59,6 +70,7 @@ export function normalizeConfirmation(
     readBack: v.readBack ?? CONFIRMATION_DEFAULTS.readBack,
     readBackDirective: v.readBackDirective ?? CONFIRMATION_DEFAULTS.readBackDirective,
     refuseProposal: v.refuseProposal ?? CONFIRMATION_DEFAULTS.refuseProposal,
+    ...(v.onExhaust ? { onExhaust: v.onExhaust } : {}),
     replyContract: spec ? composeGateContract(spec, ctx) : CONFIRMATION_DEFAULTS.replyContract,
   };
 }
@@ -114,7 +126,9 @@ export function paramsMatchPending(
 
 /** Confirm-mode state machine assigned during plan expansion:
  *  - `propose`: no pending exists for this action → store params, return
- *    needs_confirmation, do NOT call executor.
+ *    needs_confirmation, do NOT call executor. The attempts counter starts
+ *    from what the task has already SPENT on this action (`proposalsSpent`),
+ *    not from the full budget — an aborted proposal stays spent.
  *  - `rePropose`: pending exists with different params → overwrite params,
  *    decrement attemptsLeft, return needs_confirmation.
  *  - `execute`: pending exists with matching params, stored on an EARLIER
@@ -126,8 +140,9 @@ export function paramsMatchPending(
  *    only when BOTH the stored and the current turn identity exist (production
  *    always has message ids; identity-less direct consumers keep the
  *    params-only behavior rather than being locked out of confirmation).
- *  - `exhausted`: pending exists with `attemptsLeft <= 0` → clear pending,
- *    return error. Customer must restart the operation.
+ *  - `exhausted`: the budget is spent — a drifted call over a pending with
+ *    `attemptsLeft <= 0`, or a fresh proposal after more than `maxAttempts`
+ *    spent ones → clear pending and escalate (run/execution.ts).
  *
  *  Actions without `requiresConfirmation` skip this machine entirely — they
  *  run as a normal single step (subject to `soleStep`). */
@@ -150,6 +165,9 @@ export function decideConfirmMode(
   pending: PendingConfirmation | null,
   rawParams: unknown,
   currentCallerTurnId: string | undefined,
+  /** Proposals this task already stored for the action without executing
+   *  (the `confirmLatchKey` latch at batch start). */
+  proposalsSpent = 0,
 ): ConfirmDecision {
   const confirm = action.confirmation;
   if (!confirm) {
@@ -158,7 +176,9 @@ export function decideConfirmMode(
     );
   }
   if (!pending || pending.action !== action.name) {
-    return { mode: "propose", attemptsLeft: confirm.maxAttempts };
+    return proposalsSpent > confirm.maxAttempts
+      ? { mode: "exhausted" }
+      : { mode: "propose", attemptsLeft: confirm.maxAttempts - proposalsSpent };
   }
   if (paramsMatchPending(action, pending.params, rawParams)) {
     const sameTurn =

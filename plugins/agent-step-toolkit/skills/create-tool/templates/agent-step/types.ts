@@ -294,7 +294,16 @@ export interface ActionDef<PrereqName extends string, T = unknown> {
  *  clear via `abort_pending_input` or via backend signals the executor
  *  surfaces as `clear_awaiting_input` / `abort_flow` effects. */
 export interface ConfirmationOpts {
+  /** Proposals the caller may REJECT before the gate is spent. The budget is
+   *  task-scoped (`spentLadders["confirm:<action>"]`): a drifted re-proposal
+   *  spends it, and so does a fresh proposal after `abort_pending_input` — a
+   *  bare "no" followed by a new value is a rejected proposal like any other.
+   *  Only an EXECUTE refunds it. Default 3. */
   maxAttempts?: number;
+  /** The handoff applied when the budget is spent (requires the library
+   *  handoff). Default: `abandon` with the `auto_handoff` message. Without a
+   *  handoff path the spent gate errors once and the budget starts over. */
+  onExhaust?: import("./state.js").HandoffRequest;
   lockdown?: boolean;
   /** Persist a non-empty `readBack` rendering on the pending confirmation and
    *  inject the built-in `repeat_pending_question` control. The control
@@ -457,7 +466,16 @@ export interface ControllerHooks {
    *    customer can retry.
    *  - `ok: false` + any other verdict → library leaves state alone
    *    (unrelated failure, e.g. backend error). */
-  requiresMatch?: { capturer: string; maxAttempts?: number };
+  requiresMatch?: {
+    capturer: string;
+    /** Mismatches tolerated. Task-scoped (`spentLadders["match:<action>"]`):
+     *  neither `abort_pending_input` nor a capturer re-run refunds a spent
+     *  mismatch — only a successful match does. Default 3. */
+    maxAttempts?: number;
+    /** The handoff applied on exhaustion (requires the library handoff).
+     *  Default: `abandon` with the `auto_handoff` message. */
+    onExhaust?: import("./state.js").HandoffRequest;
+  };
   /** This action is the *capturer* of a double-entry pattern: it stores
    *  something (typically a tokenised form of the customer's first entry)
    *  for the consumer to compare against on the next turn. On `ok:true`,

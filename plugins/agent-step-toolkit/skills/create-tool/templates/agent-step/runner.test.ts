@@ -12,6 +12,7 @@ import {
 } from "./runner.js";
 import type { ExecutorRegistry, VerifierRegistry } from "./types.js";
 import type { AwaitingInput, CurrentFlow, HandoffRequest } from "./state.js";
+import { agentStepStateSpec } from "./state.js";
 import { DEFAULT_SYSTEM_MESSAGES } from "./messages.js";
 
 interface S {
@@ -25,6 +26,8 @@ interface S {
  *  every field. The library extracts each channel's `operator` (the reducer)
  *  via runtime cast. */
 const testStateAnnotation = Annotation.Root({
+  // The gate budgets (confirmation proposals, match mismatches) live here.
+  spentLadders: agentStepStateSpec.spentLadders,
   customer: Annotation<S["customer"] | null>({
     reducer: (_, n) => n ?? null,
     default: () => null,

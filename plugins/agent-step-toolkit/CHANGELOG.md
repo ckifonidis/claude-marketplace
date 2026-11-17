@@ -12,6 +12,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [3.2.0] — 2026-11-17
+
+Minor, two bounds for loops that had none.
+
+1. **Gate budgets are task-scoped** — the confirmation and match `maxAttempts` are no longer refunded
+   by `abort_pending_input` or a capturer re-run, and a spent budget escalates. **Behaviour-changing**
+   for every host with a confirm- or match-gated action.
+2. **`countToolFreeReply`** — a counter for caller turns the model answers with NO tool call, the one
+   path none of the runner's bounds can see. Additive and opt-in; a host that does not call it is
+   unaffected by this part.
+
+Migration: [migrations/3.1.0-to-3.2.0.md](migrations/3.1.0-to-3.2.0.md).
+
+### Changed — gate budgets
+- Reported 2026-11-17 (balances-info-ts, fleet-wide): `attempts_left` lives on the transient
+  `awaitingInput` slot. A read-back answered with a bare "no" is routed to `abort_pending_input`,
+  which clears the gate; the next dictation proposed with the full budget again. Nothing executes, so
+  no host counter moves and `confirmation_attempts_exhausted` is never reached — «no» → new value →
+  «no» … without bound. The match gate had the same flaw (abort, or a capturer re-run "resetting"
+  `attempts_left`).
+- The runner now mirrors what the task has SPENT into the task-scoped `spentLadders` latch
+  (`confirm:<action>`, `match:<consumer>`). A fresh proposal opens with `maxAttempts − spent`
+  (including `[abort_pending_input, <action>]` in one batch); a capturer opens the match gate with
+  what is left. Only an EXECUTE / a successful match refunds.
+- Exhaustion escalates: with `handoff` configured the runner applies the new
+  `ConfirmationOpts.onExhaust` / `requiresMatch.onExhaust` (default `abandon` + `auto_handoff`)
+  atomically and the entry carries `handoff_requested: true`. Without a handoff path the entry is the
+  historical plain error and the budget starts over (no deadlock).
+- `spentLadders` is now a REQUIRED channel for any config with `requiresConfirmation` or
+  `requiresMatch` (construction error otherwise — a missing channel would silently drop the write and
+  keep the refund). Hosts that spread `agentStepZodShape` / `agentStepStateSpec` already have it.
+- Not changed: the capture-bounce ladder still counts CONSECUTIVE bounces (a parsed capture resets
+  it), and an in-gate drifted re-proposal still spends exactly one attempt as before.
+- `gate-budget.test.ts` +8, driven through `runSteps` across threaded turns: bare rejections spend the
+  budget and the fifth proposal hands off; abort + new value in one batch; an execute refunds; default
+  route; no-handoff restart; match survives abort and re-capture; a match refunds; construction
+  checks. Six of the eight fail against 3.1.0.
+
+### Added
+- `countToolFreeReply(state, reply, { max, onExhaust })` → `{ exhausted, patch }`, plus
+  `ToolFreeReplyPolicy` and `TOOL_FREE_REPLIES_KEY`. Called by the HOST's model node with each model
+  reply: a reply with tool calls ends the run; the text that closes a tool turn is neutral; any other
+  reply is a caller turn the engine never saw and is counted under
+  `spentLadders["turn:tool_free"]`. Past `max` in a row the patch is the same atomic
+  `requestHandoffPatch` a spent ladder applies, and the host routes `handoffRequested` to
+  `HANDOFF_NODE` on the edge after its model node.
+- Why: `captureBounces`, the ladders, a gate's `attempts_left` and `errorCount` all advance inside a
+  tool batch, so a model that stops calling the tool stops being counted. Live incident 2026-11-16:
+  one `verify_card` bounce, then 26 caller turns answered with the same "didn't catch those digits"
+  sentence and no call — one of them carrying the complete value — until the caller asked for a
+  human.
+- It counts EVERY tool-free caller turn, not only failed captures: with no call there is nothing to
+  tell an unheard number from a legitimate "one moment" without reading the wording. `max` is the
+  host's patience for a turn that advances nothing — set it well above `captureBounces.max`.
+- `tool-free-reply.test.ts` +5: escalates on the turn after `max` with the other latches intact; a
+  tool-calling reply ends the run; the text closing a tool turn is neutral; no patch on untouched
+  state; a bad `max` throws. Library suite 229 → 242 with the gate-budget tests.
+
 ## [3.1.0] — 2026-10-21
 
 Minor: **`HandoffSpec.onHandback`** — an OBSERVER of the resolved handback, for host side effects
