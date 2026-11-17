@@ -1,0 +1,84 @@
+"""<Flow title> — flow spec for flowdoc.
+
+Source of truth for the FLOW: <whose walkthrough / which document, and its date>.
+Specs and code are used only for fields, documents and real routes.
+
+Rebuild:  uvx --with openpyxl python3 scripts/flowdoc/build.py <this file> --out docs/<slug>
+Verify:   uvx --with openpyxl --with playwright python3 scripts/flowdoc/verify.py <this file> --out docs/<slug>
+
+Schema: the document-agent-flow skill's references/data-model.md. Never edit the outputs — edit this.
+"""
+
+EXISTS, CHANGE, NEW, TBD = "exists", "change", "new", "tbd"
+FAIL, BRANCH, OPT = "fail", "branch", "opt"
+
+# Name every sentence you would otherwise repeat (retry policies, shared engine text).
+RETRY_GRADED = (
+    "Transient (5xx, timeout): retry in the executor, at most <n> attempts, exponential backoff. "
+    "Validation 4xx: no retry, name the field. Business refusal: no retry. "
+    "Exhausted: say it is a technical issue, keep everything gathered, offer a manual re-try."
+)
+
+STEPS = {
+    "S0": {
+        "stage": "A", "title": "<what the owner calls this step>", "sub": "<the step at a glance>",
+        "opens": "<what the agent says on entry>",
+        "required": ["<what completion needs>"], "optional": [], "prefilled": [],
+        "completion": "<the completeness check, in words>",
+        "triggers": ["T1"],
+        "next": [
+            {"to": "S1", "when": "<success>"},
+            {"to": "S0", "when": "<what makes it stay — re-ask>", "kind": FAIL},
+        ],
+        "lookups": [],
+        "engine": "<closing_action>{params} · prereqs[...] · <gates> · verdicts: ok✓→slot | refused✗",
+        "status": NEW, "status_note": "<what the code does today, with path:line>",
+        "open": ["Q1"],
+    },
+    "S1": {
+        "stage": "B", "title": "<next step>", "completion": "<...>",
+        "next": [{"to": "END", "when": "<done>"}],
+        "engine": "<...>", "status": TBD,
+    },
+}
+
+TRIGGERS = {
+    "T1": {
+        "name": "<full name>", "short": "<chip text>",
+        "spec": "<the brief's name for it, if different>",
+        "real": "<METHOD /real/route {body shape}> — or 'not found in <surfaces>, searched <how>'",
+        "evidence": "<path:line>",          # required when status is exists / change
+        "on_ok": "<what success leads to>",
+        "on_fail": ["<failure class → where it goes>"],
+        "retry": RETRY_GRADED, "status": EXISTS,
+    },
+}
+
+OPEN = [
+    {"id": "Q1", "question": "<plain-words question, with the options and their trade-offs>",
+     "where": "S0 / T1", "default": "<what the ladder does until decided>"},
+]
+
+FLOW = {
+    "meta": {
+        "slug": "<slug>",
+        "engine_version": "<X.Y.Z — the toolkit's templates/agent-step/VERSION>",
+        # "code_engine_version": "<X.Y.Z — the project's src/agent-step/VERSION, if it vendors another>",
+        "title": "<Flow title>",
+        "subtitle": ("A box is a step: it gathers until its completeness check passes. ⚡ chips are the API "
+                     "calls fired when it closes, in order. Click any box for the details."),
+        "intro": "<one paragraph: what this flow is and who it is for>",
+        "source_of_truth": "<whose walkthrough, which date>",
+        "rebuild": "uvx --with openpyxl python3 scripts/flowdoc/build.py <this file> --out docs/<slug>",
+    },
+    "stages": [{"id": "A", "name": "<stage>"}, {"id": "B", "name": "<stage>"}],
+    "steps": STEPS,
+    "order": list(STEPS),
+    "terminals": {"END": {"label": "<the happy end>"}},
+    "triggers": TRIGGERS,
+    "open": OPEN,
+    "engine_notes": {"concepts": [], "facts": []},
+    "decisions": [],
+    "changes": [],
+    "sheets": [],
+}

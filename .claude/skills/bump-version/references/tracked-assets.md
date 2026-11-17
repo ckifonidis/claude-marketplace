@@ -106,6 +106,7 @@ new template + a new import line in `tool-index.ts.template`).
 - `skills/create-tool/SKILL.md` — `<essential_principles>` (states the library invariants), `<quick_reference>` (canonical layout block), `<templates_index>` (template inventory).
 - `skills/test-agent-step/SKILL.md` — only if the test surface (runner unit-test entry points, harness helpers) shifted.
 - `skills/audit-middleware-contract-compliance/SKILL.md` — only if the channel/streaming surface shifted (handoff custom events, `HANDBACK_SIGNALS`, the `resolve_handoff` node, stream modes). Its checklist summaries are navigation aids over `streaming-and-channel-contract.md` — when that doc changes, reconcile this prose too.
+- `skills/document-agent-flow/` — `references/engine-notation.md` (primitive catalog, controls, library slots, retired terms), `templates/flowdoc/model.py` `RETIRED_ENGINE_TERMS`, and the `engine_version` examples (SKILL.md quick reference, `examples/pizza-order/` — rebuild its `out/`) — update when a primitive, control or slot is added, removed or renamed.
 
 **Touched by:** invariant changes (e.g. "executor receives whole state" → "executor receives a
 projected slice"), layout changes, template inventory changes.
