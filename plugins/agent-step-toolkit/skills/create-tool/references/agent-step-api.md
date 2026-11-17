@@ -916,6 +916,14 @@ interface HandoffSpec<T> {
                                      // cleared automatically; list only your own. Each is written
                                      // as `null`, so it must be nullable with a replace-style
                                      // reducer.
+  onHandback?: (state: T, request: HandoffRequest) => void | Promise<void>;
+                                     // OPTIONAL (3.1.0) — OBSERVE a resolved handback, for a host
+                                     // side effect that must follow the task's outcome (e.g. a
+                                     // CRM contact record). Called once per handback — completed,
+                                     // abandon, off_topic, a delegate failure — never for a
+                                     // successful delegate; gets the EFFECTIVE request and the
+                                     // PRE-clear state. Never awaited; a throw or a rejection is
+                                     // contained — it cannot change the reply, signal or clears.
   modelRequestSchema?: z.ZodType<HandoffRequest>;
                                      // OPTIONAL (2.5.0) — a NARROWER schema for the MODEL-FACING
                                      // request_handoff params, used both to generate the wire
@@ -972,6 +980,20 @@ task and re-fires its branch on every later turn of the same call. Slots whose r
 be cleared this way (the write is a plain `null`); reset those through the pointer slot that selects
 from them.
 
+**A side effect that follows the outcome is an observer (3.1.0).** `onHandback` runs once the reply,
+the signal and the metadata are final, with the same state view the closing was chosen from — the
+PRE-clear state and the EFFECTIVE request — so whatever it records cannot disagree with what the
+caller heard. It is called synchronously (anything it starts inherits the node's run context, so
+its traces stay in the conversation) but never awaited, and a throw or a rejection is contained:
+nothing it does can reach the reply, the signal, the metadata or the clears. It is called for every
+handback type (`off_topic` included — the host filters) and never for a successful delegate. It is
+an observer by construction: it returns nothing the node reads and cannot write state, so it can
+never become a second resolver. Why the field exists: some endings run no host executor at all —
+an exhausted ladder, the auto-handoff over a thrown executor — so the resolver is the only place
+that sees every ending; without it a host could reach those endings only by wrapping the node or by
+hiding I/O in the pure `resolve*` functions. The library does not log: report failures inside the
+hook.
+
 **Asides mid-task**: the free-deflection damper that was `HandoffSpec.deflectAside` (2.4.0) is now a
 LADDER — configure an aside ladder in the `ladders` registry (instruction: decline in one short
 sentence and re-ask in the same turn; `onExhaust`: the `off_topic` handback carrying the aside as
@@ -980,7 +1002,7 @@ one mechanism, one latch (see `<ladders>`).
 
 Exports: `HANDOFF_ACTION` (`"request_handoff"`), `HANDOFF_NODE` (`"resolve_handoff"` — a node can't be named `handoff`, the state channel claims it), `HANDOFF_ACTION_DESCRIPTION`, `HANDBACK_SIGNALS` (reason → `handoff_type` signal; identity over `off_topic` / `completed` / `abandon`), `handoffParamsSchema`, `handoffRequested(state)` (edge predicate), `createHandoffNode(spec)`, and types `HandoffSpec`, `HandoffOffTopicSpec`, `HandoffDelegateTarget`.
 
-Wire a conditional edge after the tool node — `createReactAgent` cannot express it, so the graph is hand-rolled: `addConditionalEdges("tools", s => handoffRequested(s) ? HANDOFF_NODE : "agent")`, `addNode(HANDOFF_NODE, createHandoffNode(spec))`, `addEdge(HANDOFF_NODE, END)`. The node emits a `handoff` custom event FIRST (streaming clients abort TTS / reroute before any content), resolves the response (terminate envelope, or a delegate run over the Platform API with live `delegated_token` pass-through and a behavioral fallback to the envelope on failure), emits `handoff_complete`, and returns `{ handoff: null, ...clears, messages: [AIMessage] }` (the clears are empty unless a task-ending handback resolved — see above) — the model never paraphrases the result.
+Wire a conditional edge after the tool node — `createReactAgent` cannot express it, so the graph is hand-rolled: `addConditionalEdges("tools", s => handoffRequested(s) ? HANDOFF_NODE : "agent")`, `addNode(HANDOFF_NODE, createHandoffNode(spec))`, `addEdge(HANDOFF_NODE, END)`. The node emits a `handoff` custom event FIRST (streaming clients abort TTS / reroute before any content), resolves the response (terminate envelope, or a delegate run over the Platform API with live `delegated_token` pass-through and a behavioral fallback to the envelope on failure), emits `handoff_complete`, calls the host's `onHandback` observer when one is configured (3.1.0 — not awaited, contained), and returns `{ handoff: null, ...clears, messages: [AIMessage] }` (the clears are empty unless a task-ending handback resolved — see above) — the model never paraphrases the result.
 
 **Final-message kwargs** (the channel contract): every non-delegate resolution is a handback — `is_handoff: true`, `handoff_type` = the effective reason's signal (`off_topic` / `completed` / `abandon`, after any `resolveHandoffType`), `handoff_reason` = `context`, `handoff_metadata: { ...host fields from resolveHandoffMetadata, service_type, success_message }` — host fields first, library keys last and unclobberable. Spoken content: the `off_topic` envelope (`terminateMessage`, also the delegate-failure fallback) or the closing in `context` for `completed` / `abandon` (the middleware delivers it and flips routing for the NEXT request). Delegate success → NOT a handoff (conversation kept) — informational `{ delegated_to }` only. Streaming clients must request `stream_mode: ["messages-tuple", "custom"]` — the node-built final message never appears in the token stream; `handoff_complete` carries its text. Full wire details + the middleware checklist: `streaming-and-channel-contract.md`.
 </handoff>

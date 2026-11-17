@@ -12,6 +12,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [3.1.0] — 2026-10-21
+
+Minor: **`HandoffSpec.onHandback`** — an OBSERVER of the resolved handback, for host side effects
+that must follow the task's outcome (e.g. a CRM contact record). Additive; a spec without the field
+behaves byte-for-byte as before.
+Migration: [migrations/3.0.1-to-3.1.0.md](migrations/3.0.1-to-3.1.0.md).
+
+### Added
+- `HandoffSpec.onHandback?: (state, request) => void | Promise<void>` — called by
+  `createHandoffNode` once per handback (`completed` / `abandon` / `off_topic` / a delegate failure;
+  never a successful delegate) with the EFFECTIVE request (after `resolveHandoffType`) and the
+  PRE-clear state, after the reply, the signal and the metadata are final. Called synchronously
+  (what it starts inherits the node's run context) but never awaited; a throw or a rejection is
+  contained, so it cannot change the reply, the signal, the metadata or the clears.
+- Why: engine-decided endings — an exhausted ladder, the auto-handoff over a thrown executor — run
+  no host executor, so the resolver is the only place that sees every ending. Hosts otherwise had to
+  wrap the node (forbidden by the design principles) or hide I/O in the pure `resolve*` functions.
+- `handoff.test.ts` +4: called once per handback type with the effective request and the pre-clear
+  state; a throw cannot break the reply; not awaited and a rejection contained (no unhandled
+  rejection); a delegate failure is observed, a delegate success is not. Library suite 225 → 229.
+
 ## [3.0.1] — 2026-08-29
 
 Patch: OTP/match gate-interplay fixes enabling the folded **"confirming the value sends the code"**
