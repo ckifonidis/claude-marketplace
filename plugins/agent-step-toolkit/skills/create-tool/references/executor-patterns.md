@@ -404,7 +404,7 @@ export async function proposeNewPin(
 }
 ```
 
-Library on the ok verdict: sets `awaitingInput.kind = "match"` for the consumer with `attempts_left = consumer.requiresMatch.maxAttempts`. Re-running the capturer mid-match resets that counter.
+Library on the ok verdict: sets `awaitingInput.kind = "match"` for the consumer with `attempts_left = consumer.requiresMatch.maxAttempts`. Re-running the capturer mid-match changes the first entry but (3.2.0) does not refund spent mismatches — the gate opens with what is left of the budget.
 
 ### Consumer
 

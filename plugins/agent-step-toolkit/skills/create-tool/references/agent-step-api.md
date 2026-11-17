@@ -169,11 +169,19 @@ interface ControllerHooks {
 
   // ─── Double-entry verification (PIN/password repeat) ───────────────────────
   startsMatchFor?: { consumer_action: string };
-  requiresMatch?: { capturer: string; maxAttempts?: number };
+  requiresMatch?: { capturer: string; maxAttempts?: number; onExhaust?: HandoffRequest };
+                                   // maxAttempts = mismatches tolerated, TASK-scoped (3.2.0): an
+                                   // abort or a capturer re-run does not refund a spent one.
+                                   // onExhaust = the handoff applied when spent (default: abandon).
 }
 
 interface ConfirmationOpts {
-  maxAttempts?: number;            // re-propose budget before the gate exhausts. Default 3.
+  maxAttempts?: number;            // rejected-proposal budget before the gate exhausts. Default 3.
+                                   // TASK-scoped (3.2.0): a fresh proposal after an abort spends
+                                   // it like a drifted re-proposal; only an execute refunds it.
+  onExhaust?: HandoffRequest;      // 3.2.0 — the handoff applied when the budget is spent.
+                                   // Engine-only, requires `handoff`. Default: abandon with the
+                                   // `auto_handoff` message.
   lockdown?: boolean;              // default true — refuses unrelated batches while pending.
   readBack?: (params: Record<string, unknown>, state: unknown) => string | undefined;
                                    // (2.3.0) render what the runner ACTUALLY recorded, for the model
@@ -362,7 +370,7 @@ Lockdown semantics for the three GATES (first step of the next batch must satisf
 |------|-------------------|------|
 | `confirmation` | `for_action` (resolves to execute/re-propose/exhausted) or `abort_pending_input` | `pending_confirmation_locked` |
 | `otp` | `for_action`, a **same-flow issuer** (an action whose `issuesOtp.consumer_action` is this gate's `for_action` AND whose `requiresFlow` equals this gate's `flow_ref` — re-send replaces the gate with a fresh one), or `abort_pending_input` | `otp_pending_locked` |
-| `match` | `for_action`, the **capturer** (re-capture resets), or `abort_pending_input` | `match_pending_locked` |
+| `match` | `for_action`, the **capturer** (re-capture; the mismatch budget is kept), or `abort_pending_input` | `match_pending_locked` |
 
 A `dictation` never locks anything — the caller may pivot; the record exists so results can tell the model what is owed. The library does NOT TTL any slot. Stale gates clear via `abort_pending_input` or via backend signals (surfaced by the executor as `clear_awaiting_input` / `abort_flow` effects).
 
@@ -382,8 +390,9 @@ Starting a different flow while another is active fails with `error: "flow_alrea
 ## spentLadders (library-managed) — 3.0.0
 
 Per-ladder free-use counts: `Record<string, number> | null`, ladder name → uses so far. Carries every
-once-latch — the configured `note_refusal` ladders AND the per-action capture-bounce counters (under
-the reserved key shape `"capture:<action>"`). When a ladder's count reaches its configured
+once-latch — the configured `note_refusal` ladders, the per-action capture-bounce counters (under
+the reserved key shape `"capture:<action>"`), the spent gate budgets (`"confirm:<action>"`,
+`"match:<consumer>"`, 3.2.0) and the host-driven tool-free-reply run (`"turn:tool_free"`, 3.2.0). When a ladder's count reaches its configured
 `maxFreeUses` (or a capture policy's `max`), the next use escalates atomically into the configured
 handoff. Task-scoped: a task-ending handback clears it; an `off_topic` roundtrip does not — a spent
 explanation stays spent when the same task resumes. The runner is the only writer.
@@ -559,6 +568,29 @@ instructions answer vs a cancellation); the control's composed description carri
 that succeeds; when the count reaches `max`, the bounce escalates through the named ladder (which must
 exist in the registry — validated at construction). `max: 2` is the measured knob — the model
 improvises past ~3 identical bounces, and the escalation must fire before that.
+
+**`countToolFreeReply` (3.2.0)** bounds the path none of the above can see: a caller turn the model
+answers with NO tool call. Every runner bound advances inside a tool batch, so a model that stops
+calling the tool stops being counted (live: one capture bounce, then 26 identical "didn't catch
+those digits" replies with no call). The runner does not run on that path, so the HOST's model node
+calls the helper with each reply:
+
+```ts
+const response = await model.invoke(buildPrompt(state));
+const idle = countToolFreeReply(state, response, {
+  max: 6,                                             // tool-free caller turns tolerated in a row
+  onExhaust: { reason: "abandon", context: NO_PROGRESS },
+});
+if (idle.exhausted) return idle.patch;                // handoff requested — drop the reply
+return { messages: [response], ...idle.patch };
+```
+
+and the edge after the model node routes `handoffRequested(state)` to `HANDOFF_NODE` before it looks
+at tool calls. A reply with tool calls ends the run; the text that closes a tool turn is neutral; any
+other reply counts under `spentLadders["turn:tool_free"]` (`TOOL_FREE_REPLIES_KEY` — not a ladder
+name). It counts EVERY tool-free caller turn, a legitimate "one moment" included — with no call there
+is nothing to tell the two apart without reading the wording — so `max` is the host's patience for a
+turn that advances nothing and sits well above `captureBounces.max`.
 </ladders>
 
 <conventions>
@@ -706,6 +738,20 @@ The runner switches the mutation action into a five-mode state machine. Detected
 - If `attempts_left > 0`: return new `needs_confirmation` envelope with decremented `attempts_left` — including a fresh `read_back` rendered from the CORRECTED params, so the caller hears what actually replaced the old value.
 - If `attempts_left === 0`: return `{ ok: false, summary, error: "confirmation_attempts_exhausted" }` and clear pending.
 
+### The budget is task-scoped (3.2.0)
+`attempts_left` lives on the transient `awaitingInput` slot, which `abort_pending_input` clears — so
+a rejection the reply contract routes to abort ("no", with no corrected value) used to refund the whole
+budget: «no» → new value → «no» … had no cap, because nothing ever executed. The runner now mirrors
+what the task has SPENT into `spentLadders["confirm:<action>"]` each time a proposal is stored:
+
+- A fresh **propose** opens with `maxAttempts − spent`, not `maxAttempts` — including the
+  `[abort_pending_input, <action>]` batch.
+- Only an **execute** (the caller accepted a proposal) clears the latch.
+- A proposal made when the budget is spent returns `confirmation_attempts_exhausted` and **escalates**:
+  with `handoff` configured the runner applies `onExhaust` (default `abandon` + `auto_handoff`)
+  atomically and the entry carries `handoff_requested: true`. Without a handoff path there is nowhere
+  to escalate to, so the entry is the plain error and the budget starts over.
+
 ### The repeat control (`repeat_pending_question`)
 When an action opts into `repeatReadBack`, a "pardon?" / channel-check turn has a legal move that is
 neither consent nor drift: the sole-step `repeat_pending_question` control re-presents the gate's
@@ -789,7 +835,7 @@ The customer provides a value once, then again; the system verifies they match. 
 ### Capturer (`controller.startsMatchFor = { consumer_action }`)
 - Executor validates/encodes/persists the first entry (typically into flow data, via a `merge_flow_data` effect).
 - On the ok verdict, library sets `awaitingInput = { kind: "match", for_action: consumer_action, attempts_left: maxAttempts, max_attempts: maxAttempts, flow_ref? }`.
-- Re-running the capturer while a match is awaiting **resets** `attempts_left` (lets the customer change their first entry).
+- Re-running the capturer while a match is awaiting lets the customer change their first entry. Since 3.2.0 it does NOT refund spent mismatches: the gate opens with `maxAttempts − spentLadders["match:<consumer>"]`, and the same holds after an `abort_pending_input`. Only a successful match clears the latch.
 
 ### Consumer (`controller.requiresMatch = { capturer, maxAttempts }`)
 - Refused unless `awaitingInput.kind === "match" && for_action === <this action>`. Error: `match_not_pending` if absent.
@@ -797,7 +843,7 @@ The customer provides a value once, then again; the system verifies they match. 
 - Executor receives the second entry, owns the comparison (e.g. compares ciphertexts), performs the side-effect on match.
 - Library reads the verdict's outcome:
   - `ok: true` → match succeeded; library auto-clears `awaitingInput`. Pair with `endsFlow: true` to wrap the flow — or with `issuesOtp` for the folded "confirming the value sends the code" shape (the consumed match is cleared, then the OTP gate opens; see `<otp_lifecycle>`).
-  - `ok: false` + body `verdict === "match_mismatch"` → library decrements `attempts_left`. On exhaustion, library clears `awaitingInput` AND `currentFlow` (terminal) and surfaces `verdict: "match_attempts_exhausted"`, `error: "match_attempts_exhausted"`.
+  - `ok: false` + body `verdict === "match_mismatch"` → library decrements `attempts_left`. On exhaustion, library clears `awaitingInput` AND `currentFlow` (terminal), surfaces `verdict: "match_attempts_exhausted"`, `error: "match_attempts_exhausted"`, and (3.2.0) escalates like a spent confirmation: `requiresMatch.onExhaust` (default `abandon`) when `handoff` is configured, else the budget starts over.
   - `ok: false` + any other verdict → library leaves state alone (unrelated failure, e.g. backend error).
 
 ### Lockdown

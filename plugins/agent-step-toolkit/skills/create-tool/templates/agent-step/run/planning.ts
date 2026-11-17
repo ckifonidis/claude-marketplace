@@ -13,14 +13,16 @@
 //
 // ABORT-AWARENESS: an `abort_pending_input` step destroys the pending gate,
 // so confirm steps AFTER it in the same batch are planned against NO pending —
-// they propose fresh (full attempts) instead of resolving to execute /
-// re-propose against a gate the batch just cleared. Without this,
+// they propose fresh (with whatever budget the task has left — an abort does
+// not refund it) instead of resolving to execute / re-propose against a gate
+// the batch just cleared. Without this,
 // `[abort, mutation(matching params)]` would execute a mutation whose
 // confirmation the same batch aborted.
 
 import type { CompiledPlan } from "../compile/plan.js";
 import type { LibraryManagedSlots } from "../state.js";
 import {
+  confirmLatchKey,
   decideConfirmMode,
   pendingConfirmationOf,
   type ConfirmMode,
@@ -45,6 +47,8 @@ export function expandPlan<T extends LibraryManagedSlots>(
   currentCallerTurnId: string | undefined,
 ): PlannedStep[] {
   const pending = pendingConfirmationOf(getAwaitingInput(batchStartView));
+  const spent =
+    (batchStartView as { spentLadders?: Record<string, number> | null }).spentLadders ?? {};
   const planned: PlannedStep[] = [];
   let aborted = false;
   for (const s of userSteps) {
@@ -61,6 +65,7 @@ export function expandPlan<T extends LibraryManagedSlots>(
         effectivePending,
         s.params,
         currentCallerTurnId,
+        spent[confirmLatchKey(action.name)] ?? 0,
       );
       planned.push({
         action: s.action,

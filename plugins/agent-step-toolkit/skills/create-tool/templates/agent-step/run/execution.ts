@@ -66,10 +66,12 @@ import {
   tryPageFromCache,
   type PagedCache,
 } from "../paginate.js";
-import { CONFIRMATION_DEFAULTS } from "../interaction/confirmation.js";
+import { CONFIRMATION_DEFAULTS, confirmLatchKey } from "../interaction/confirmation.js";
+import type { HandoffRequest } from "../state.js";
 import { refuseOtpNotPending, refuseOtpIssueWhileMatchPending } from "../interaction/otp.js";
 import {
   MATCH_DEFAULT_MAX_ATTEMPTS,
+  matchLatchKey,
   matchMismatchLifecycle,
   refuseMatchNotPending,
 } from "../interaction/match.js";
@@ -146,6 +148,47 @@ export async function executeSteps<T extends LibraryManagedSlots>(
 
   const spentLaddersOf = (): Record<string, number> =>
     (st.view as { spentLadders?: Record<string, number> | null }).spentLadders ?? {};
+
+  // ─── Gate budgets (confirmation proposals, match mismatches). The gates keep
+  //     `attempts_left` on the transient `awaitingInput` slot, which an abort
+  //     clears and a capturer re-run rewrites — so the slot alone refunded the
+  //     whole budget every time (a bare "no" then a new value, without bound).
+  //     What the task has SPENT is mirrored into the same task-scoped latch as
+  //     every other once-counter; a fresh gate opens with what is left.
+
+  /** Write (`value`) or drop (`undefined`) one latch entry. */
+  const setLatch = (key: string, value: number | undefined): void => {
+    const spent = spentLaddersOf();
+    if (value === undefined) {
+      if (spent[key] === undefined) return;
+      const { [key]: _dropped, ...rest } = spent;
+      st.apply({ spentLadders: rest } as unknown as Partial<T>);
+      return;
+    }
+    st.apply({ spentLadders: { ...spent, [key]: value } } as unknown as Partial<T>);
+  };
+
+  /** A spent gate budget ends the task: apply the gate's `onExhaust` handoff
+   *  (default: abandon with the auto-handoff closing) — the same atomic patch
+   *  a spent ladder applies. Without a handoff path there is nowhere to
+   *  escalate to, so the budget starts over (the historical behaviour) rather
+   *  than deadlocking the action for the rest of the thread. */
+  const escalateExhausted = (
+    key: string,
+    onExhaust: HandoffRequest | undefined,
+  ): Record<string, unknown> => {
+    if (!activation.handoffEnabled || getHandoff(st.view) != null) {
+      setLatch(key, undefined);
+      return {};
+    }
+    const request = onExhaust ?? { reason: "abandon", context: msgs.auto_handoff };
+    st.apply(requestHandoffPatch<T>(request));
+    return {
+      summary: formatMessage(msgs.handoff_requested, { reason: request.reason }),
+      handoff_requested: true,
+      reason: request.reason,
+    };
+  };
 
   /** A capture that parsed ends this action's bounce run. */
   const clearCaptureBounces = (action: CompiledAction): void => {
@@ -361,6 +404,9 @@ export async function executeSteps<T extends LibraryManagedSlots>(
             )
           : confirmationPatch,
       );
+      // The proposal is spent the moment it is stored — an abort will not
+      // give it back.
+      setLatch(confirmLatchKey(step.action), maxAttempts - attemptsLeft + 1);
       results.push({
         action: step.action,
         ok: true,
@@ -401,7 +447,7 @@ export async function executeSteps<T extends LibraryManagedSlots>(
       break;
     }
 
-    // ─── 6. Confirm-required attempts exhausted: clear the gate, error out.
+    // ─── 6. Confirm-required attempts exhausted: clear the gate, escalate.
     if (step.confirmMode === "exhausted") {
       st.apply(clearAwaitingInputPatch<T>());
       fail({
@@ -409,13 +455,17 @@ export async function executeSteps<T extends LibraryManagedSlots>(
         ok: false,
         summary: formatMessage(msgs.confirm_exhausted, { action: step.action }),
         error: "confirmation_attempts_exhausted",
+        ...escalateExhausted(confirmLatchKey(step.action), action.confirmation?.onExhaust),
       });
       break;
     }
 
     // ─── 7. Execute mode: clear the gate atomically BEFORE the executor runs.
+    //     The caller accepted a proposal — the only event that refunds the
+    //     action's proposal budget.
     if (step.confirmMode === "execute") {
       st.apply(clearAwaitingInputPatch<T>());
+      setLatch(confirmLatchKey(step.action), undefined);
     }
 
     // ─── 7.–9. OTP / match gates (freeze semantics documented per gate).
@@ -623,6 +673,8 @@ export async function executeSteps<T extends LibraryManagedSlots>(
       }
       if (controller?.requiresMatch) {
         st.apply(clearAwaitingInputPatch<T>());
+        // Matched — the only event that refunds the mismatch budget.
+        setLatch(matchLatchKey(step.action), undefined);
       }
 
       if (effects.some((e) => e.type === "otp_issued")) {
@@ -643,7 +695,8 @@ export async function executeSteps<T extends LibraryManagedSlots>(
       }
 
       // startsMatchFor on ok → open (or reset) the match gate for the named
-      // consumer with a fresh attempts counter from the consumer's config.
+      // consumer with what is LEFT of the consumer's budget: a re-capture
+      // changes the first entry, it does not refund spent mismatches.
       // (validate.ts checks the pair at construction; the throw remains as
       // defense for direct runSteps consumers with unvalidated configs.)
       if (controller?.startsMatchFor) {
@@ -657,8 +710,12 @@ export async function executeSteps<T extends LibraryManagedSlots>(
         const maxAttempts =
           consumer.requiresMatch.maxAttempts ?? MATCH_DEFAULT_MAX_ATTEMPTS;
         const finalFlow = getCurrentFlow(st.view);
+        const attemptsLeft = Math.max(
+          1,
+          maxAttempts - (spentLaddersOf()[matchLatchKey(consumerName)] ?? 0),
+        );
         st.apply(
-          setAwaitingMatchPatch<T>(consumerName, maxAttempts, maxAttempts, finalFlow?.name),
+          setAwaitingMatchPatch<T>(consumerName, attemptsLeft, maxAttempts, finalFlow?.name),
         );
       }
 
@@ -679,8 +736,18 @@ export async function executeSteps<T extends LibraryManagedSlots>(
         st.apply(mismatch.patch);
         const entryIndex = results.length - 1;
         results[entryIndex] = { ...results[entryIndex], ...mismatch.entryPatch };
+        const key = matchLatchKey(step.action);
         if (mismatch.exhausted) {
+          results[entryIndex] = {
+            ...results[entryIndex],
+            ...escalateExhausted(key, controller?.requiresMatch?.onExhaust),
+          };
           lastSummary = results[entryIndex].summary as string;
+        } else {
+          const live = getAwaitingInput(st.view);
+          if (live?.kind === "match") {
+            setLatch(key, live.max_attempts - live.attempts_left);
+          }
         }
       }
     }

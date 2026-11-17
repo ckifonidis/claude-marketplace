@@ -12,7 +12,7 @@ import {
   type HandoffSpec,
 } from "./handoff/contract.js";
 import { createHandoffNode } from "./handoff/node.js";
-import { agentStepTaskScopedSlots } from "./state.js";
+import { agentStepStateSpec, agentStepTaskScopedSlots } from "./state.js";
 import type { ExecutorRegistry, VerifierRegistry } from "./types.js";
 import type {
   AwaitingInput,
@@ -37,6 +37,8 @@ const replaceNull = <T>() => ({
 });
 
 const testStateAnnotation = Annotation.Root({
+  // The gate budgets (confirmation proposals, match mismatches) live here.
+  spentLadders: agentStepStateSpec.spentLadders,
   thing: Annotation<string | null>(replaceNull<string>()),
   awaitingInput: Annotation<AwaitingInput | null>(replaceNull<AwaitingInput>()),
   currentFlow: Annotation<CurrentFlow | null>(replaceNull<CurrentFlow>()),
