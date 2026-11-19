@@ -53,6 +53,11 @@ const stateSchema = Annotation.Root({
   currentFlow: Annotation<CurrentFlow | null>(replace<CurrentFlow>()),
   pagedRead: Annotation<PagedCache<unknown> | null>(replace<PagedCache<unknown>>()),
   handoff: Annotation<HandoffRequest | null>(replace<HandoffRequest>()),
+  // The escalation latch: a configured handoff opts into `note_refusal`, which
+  // writes it — a missing channel would discard that write silently.
+  spentLadders: Annotation<Record<string, number> | null>(
+    replace<Record<string, number>>(),
+  ),
   errorCount: Annotation<number | null>(replace<number>()),
 });
 
@@ -137,7 +142,11 @@ function makeOpts(mock: { terminalIssuesOtp?: boolean } = {}): {
       },
       gated_input: {
         description: "prereq- and shape-gated direct input",
-        paramsSchema: z.object({ v: z.string().min(2) }),
+        paramsSchema: z.object({
+          v: z.string().superRefine((val, ctx) => {
+            if (val.length < 2) ctx.addIssue({ code: "custom", message: "too short" });
+          }),
+        }),
         prereqs: ["ready"],
         verdicts: {
           ok: { ok: true, summary: "gated ok" },
@@ -192,7 +201,7 @@ function makeOpts(mock: { terminalIssuesOtp?: boolean } = {}): {
   const verifiers: VerifierRegistry<S> = {
     ready: {
       check: (s) => s.ready === true,
-      denial: { summary: "not ready", error: "not_ready" },
+      denial: { instruction: "not ready", error: "not_ready" },
     },
   };
   const opts: BuildAgentStepToolOptions<
@@ -206,7 +215,7 @@ function makeOpts(mock: { terminalIssuesOtp?: boolean } = {}): {
     selectors,
     executors: executors as never,
     verifiers,
-    handoff: { offTopic: { mode: "terminate" }, terminateMessage: "bye" },
+    handoff: { offTopic: { mode: "terminate" }, resolveClosingMessage: (_s: unknown, r: { context: string }) => r.context },
   };
   return { opts, calls };
 }

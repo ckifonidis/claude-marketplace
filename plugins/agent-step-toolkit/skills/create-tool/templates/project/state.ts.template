@@ -5,8 +5,8 @@
 // `spentLadders` + `handoff` + `errorCount` are library-managed slots used by
 // the runner to coordinate confirmation gates, OTP gates, double-entry-match
 // gates, standing dictation asks, multi-turn flows, the `pageable` read
-// reslice-cache, the per-ladder once-latch counts (note_refusal +
-// captureBounces), and the auto-handoff counter. They are NOT
+// reslice-cache, the bounded-patience latch (unusable captures, in-place
+// explanations, misuse attempts), and the auto-handoff counter. They are NOT
 // declared here — the library exports them as a single spreadable Zod fragment
 // (`agentStepZodShape`), built from the same source-of-truth schemas the runner
 // mutates, so the host's storage can never drift from the library's contract.

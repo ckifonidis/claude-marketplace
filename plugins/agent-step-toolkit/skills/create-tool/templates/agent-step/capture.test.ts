@@ -19,6 +19,7 @@ import {
   exactlyOneOf,
   digitGroupsParam,
   digitCandidatesParam,
+  fieldKindOf,
 } from "./capture.js";
 
 // ─── digitsOnly ──────────────────────────────────────────────────────────────
@@ -102,6 +103,27 @@ test("digitGroupsParam: an unusable JOINED capture fails with the count-free mes
 });
 test("digitGroupsParam: the description is the host's, verbatim", () => {
   assert.equal(groups.description, "test field");
+});
+
+// `normalize`: a host canonicaliser for captures that carry
+// letters. The default must stay byte-identical to the digit strip above.
+const lettered = digitGroupsParam({
+  shape: /^(?=[A-Z0-9]*\d)[A-Z0-9]{8,18}$/u,
+  message: "not a usable capture",
+  describe: "lettered field",
+  normalize: (raw) => raw.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+});
+
+test("digitGroupsParam normalize: letters survive the host canonicaliser, groups still join", () => {
+  assert.equal(lettered.parse(["sk", "479 482", "c"]), "SK479482C");
+  assert.equal(lettered.parse("sk-479-482-c"), "SK479482C");
+});
+test("digitGroupsParam normalize: the shape still judges the JOINED canonical value", () => {
+  assert.equal(lettered.safeParse(["AB", "12"]).success, false);
+});
+test("digitGroupsParam normalize: omission stays undefined, and the kind is still a capture", () => {
+  assert.equal(lettered.parse(undefined), undefined);
+  assert.equal(fieldKindOf(lettered), "digits");
 });
 
 // ─── digitCandidatesParam ────────────────────────────────────────────────────

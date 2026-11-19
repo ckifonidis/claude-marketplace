@@ -130,8 +130,8 @@ export function setAwaitingMatchPatch<T extends LibraryManagedSlots>(
   return { awaitingInput } as Partial<T>;
 }
 
-/** Record the standing ask: a verdict requested a fresh value from the
- *  customer (`ActionDef.asks`). Non-locking — the record of the current
+/** Record the standing ask: a verdict row requested a fresh value from the
+ *  customer (`VerdictDef.ask`). Non-locking — the record of the current
  *  question and the interception target, not a gate. */
 export function setDictationPatch<T extends LibraryManagedSlots>(
   forAction: string,

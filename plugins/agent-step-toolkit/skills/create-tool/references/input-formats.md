@@ -119,7 +119,7 @@ And every prereq has:
 
 - [ ] `name` matches a state-slot predicate
 - [ ] `check` function (one line of logic, just `state.X != null` typically)
-- [ ] `denial` body with `summary` (LLM-facing) and `error` (machine-readable)
+- [ ] `denial` body with `instruction` (model-facing: what to do next) and `error` (machine-readable)
 
 And every state slot has:
 

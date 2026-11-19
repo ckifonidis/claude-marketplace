@@ -9,8 +9,7 @@
 // admission: a batch mixing a handoff with a choice control is attributed to
 // the handoff group.
 
-import type { SystemMessages } from "../messages.js";
-import { formatMessage } from "../messages.js";
+import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
 import type { ControlAction, ControlActivation, ExclusivityGroup } from "./contract.js";
 import { abortControl, ABORT_ACTION } from "./abort.js";
 import { requestHandoffControl } from "./request-handoff.js";
@@ -31,6 +30,11 @@ export const CONTROL_REGISTRY: readonly ControlAction[] = [
   noteRefusalControl,
 ];
 
+// All three groups share ENGINE_TEXT.must_be_sole_step (their 3.x summaries
+// were byte-identical; only the error codes stay per-group).
+const soleStepInstruction = (foundAction: string): string =>
+  formatMessage(ENGINE_TEXT.must_be_sole_step, { action: foundAction });
+
 export const EXCLUSIVITY_GROUPS: readonly ExclusivityGroup[] = [
   {
     name: "handoff",
@@ -39,8 +43,7 @@ export const EXCLUSIVITY_GROUPS: readonly ExclusivityGroup[] = [
     // A handoff abandons the turn, so a batch mixing it with anything else is
     // incoherent ([list_x, request_handoff] would half-execute work whose
     // result nobody will see).
-    summary: (foundAction: string, msgs: SystemMessages) =>
-      formatMessage(msgs.handoff_must_be_sole_step, { action: foundAction }),
+    instruction: soleStepInstruction,
   },
   {
     // Group name and error code keep the historical "confirmation" vocabulary
@@ -51,8 +54,7 @@ export const EXCLUSIVITY_GROUPS: readonly ExclusivityGroup[] = [
     errorCode: "repeat_confirmation_must_be_sole_step",
     // A recap is a read-only turn boundary. Mixing domain work into the same
     // batch could turn the caller's clarification into confirmation.
-    summary: (foundAction: string) =>
-      `"${foundAction}" must be the only step in the batch.`,
+    instruction: soleStepInstruction,
   },
   {
     name: "ladder",
@@ -62,8 +64,7 @@ export const EXCLUSIVITY_GROUPS: readonly ExclusivityGroup[] = [
     // would mean the model both recorded the refusal and kept working, and on
     // the exhausted path the step escalates into a handoff, which abandons
     // the turn (same incoherence as the deflect group).
-    summary: (foundAction: string) =>
-      `"${foundAction}" must be the only step in the batch.`,
+    instruction: soleStepInstruction,
   },
 ];
 

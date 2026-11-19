@@ -43,6 +43,11 @@ const testStateAnnotation = Annotation.Root({
   pagedRead: Annotation<PagedCache<unknown> | null>(replaceNull<PagedCache<unknown>>()),
   handoff: Annotation<HandoffRequest | null>(replaceNull<HandoffRequest>()),
   errorCount: Annotation<number | null>(replaceNull<number>()),
+  // The escalation latch: opting into the handoff opts into `note_refusal`,
+  // which writes it — and a missing channel would discard that write silently.
+  spentLadders: Annotation<Record<string, number> | null>(
+    replaceNull<Record<string, number>>(),
+  ),
 });
 
 type ActionName = "read_thing" | "change_thing";
@@ -95,7 +100,9 @@ function makeOpts(withHandoff: boolean): {
   const verifiers: VerifierRegistry<S> = {};
   const handoff: HandoffSpec<S> = {
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
   };
   return {
     opts: {
@@ -223,7 +230,9 @@ test("request_handoff from a pending confirmation resolves exactly once", async 
   const pending = { ...initial, ...committed };
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
   });
   const events: unknown[] = [];
 
@@ -481,7 +490,9 @@ function nodeConfig(events: unknown[], threadId = "t-1") {
 test("handoff node (terminate) off_topic is SILENT — empty content, slot cleared, envelope emitted", async () => {
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
   });
   const events: unknown[] = [];
   const update = await node(
@@ -491,8 +502,8 @@ test("handoff node (terminate) off_topic is SILENT — empty content, slot clear
   assert.equal(update.handoff, null);
   const [message] = update.messages as AIMessage[];
   // off_topic is a silent agent-to-agent hand-back — the caller hears nothing
-  // from this agent; the router/destination owns the reply. The terminateMessage
-  // is NOT spoken on a topic-change redirect.
+  // from this agent; the router/destination owns the reply — the host's
+  // closing renderer is never consulted on a topic-change redirect.
   assert.equal(message.content, "");
   assert.deepEqual(message.additional_kwargs, {
     is_handoff: true,
@@ -508,10 +519,12 @@ test("handoff node (terminate) off_topic is SILENT — empty content, slot clear
   assert.equal((events[1] as { content: string }).content, "");
 });
 
-test("handoff node (completed) speaks the LLM-composed closing with the completed signal", async () => {
+test("handoff node (completed) speaks the HOST-rendered closing with the completed signal", async () => {
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
   });
   const events: unknown[] = [];
   const update = await node(
@@ -520,7 +533,8 @@ test("handoff node (completed) speaks the LLM-composed closing with the complete
   );
   assert.equal(update.handoff, null);
   const [message] = update.messages as AIMessage[];
-  // The closing is the LLM-composed context, NOT the off_topic envelope.
+  // The closing is whatever the HOST resolver returned (this fixture echoes
+  // the context); there is no engine fallback and no off_topic envelope.
   assert.equal(message.content, "All done — your card is now active. Goodbye!");
   assert.deepEqual(message.additional_kwargs, {
     is_handoff: true,
@@ -536,7 +550,9 @@ test("handoff node (completed) speaks the LLM-composed closing with the complete
 test("handoff node (abandon) speaks the acknowledgement with the abandon signal", async () => {
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
   });
   const update = await node(
     { handoff: { reason: "abandon", context: "No problem, we can stop here." } },
@@ -564,7 +580,7 @@ test("request_handoff accepts the completed and abandon reasons (sole step)", as
 test("handoff node is a no-op when no handoff is pending", async () => {
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "x",
+    resolveClosingMessage: () => "x",
   });
   const update = await node({ handoff: null }, nodeConfig([]));
   assert.deepEqual(update, {});
@@ -578,7 +594,8 @@ test("handoff node (delegate) falls back to terminate when the delegate is unrea
       assistantId: "general",
       timeoutMs: 2_000,
     },
-    terminateMessage: "Transferring you now.",
+    resolveClosingMessage: (_s, r) => r.context,
+    delegateFailureMessage: () => "Transferring you now.",
   });
   const events: unknown[] = [];
   const update = await node(
@@ -615,7 +632,8 @@ test("handoff node (delegate) connect timeout aborts a hung thread-create and fa
         connectTimeoutMs: 50,
         timeoutMs: 60_000,
       },
-      terminateMessage: "Transferring you now.",
+      resolveClosingMessage: (_s, r) => r.context,
+      delegateFailureMessage: () => "Transferring you now.",
     });
     const events: unknown[] = [];
     const started = Date.now();
@@ -661,7 +679,8 @@ test("handoff node (delegate) stream timer starts after connect, not at delegate
         connectTimeoutMs: 60_000,
         timeoutMs: 150,
       },
-      terminateMessage: "Transferring you now.",
+      resolveClosingMessage: (_s, r) => r.context,
+      delegateFailureMessage: () => "Transferring you now.",
     });
     const events: unknown[] = [];
     const update = await node(
@@ -701,7 +720,9 @@ const BUSY_STATE: S & { outcome?: string | null; pointer?: string | null } = {
 test("handoff node clears library task-scoped slots + declared domain slots on completed", async () => {
   const node = createHandoffNode<typeof BUSY_STATE>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
     clearsOnHandback: ["outcome", "pointer"],
   });
   const events: unknown[] = [];
@@ -734,7 +755,9 @@ test("handoff node clears library task-scoped slots + declared domain slots on c
 test("handoff node clears on abandon too (a failed task ends the task)", async () => {
   const node = createHandoffNode<typeof BUSY_STATE>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
     clearsOnHandback: ["outcome"],
   });
   const update = await node(
@@ -748,7 +771,9 @@ test("handoff node clears on abandon too (a failed task ends the task)", async (
 test("handoff node clears NOTHING on off_topic — a mid-task aside stays resumable", async () => {
   const node = createHandoffNode<typeof BUSY_STATE>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
     clearsOnHandback: ["outcome", "pointer"],
   });
   const update = await node(
@@ -764,11 +789,10 @@ test("resolveClosingMessage still sees the pre-clear state", async () => {
   const seen: (string | null | undefined)[] = [];
   const node = createHandoffNode<typeof BUSY_STATE>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
     clearsOnHandback: ["outcome"],
     resolveClosingMessage: (state) => {
       seen.push(state.outcome);
-      return state.outcome === "already_active" ? "No activation needed." : undefined;
+      return state.outcome === "already_active" ? "No activation needed." : "";
     },
   });
   const update = await node(
@@ -784,7 +808,9 @@ test("resolveClosingMessage still sees the pre-clear state", async () => {
 test("a spec without clearsOnHandback clears only the library's own slots", async () => {
   const node = createHandoffNode<typeof BUSY_STATE>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
   });
   const update = await node(
     { ...BUSY_STATE, handoff: { reason: "completed", context: "done" } },
@@ -803,7 +829,9 @@ test("metadata: host fields ride the envelope on every handback type", async () 
   const seen: string[] = [];
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
     resolveHandoffMetadata: (_state, request) => {
       seen.push(request.reason);
       return { collected_identity: { afm: "012345678" } };
@@ -830,7 +858,9 @@ test("metadata: host fields ride the envelope on every handback type", async () 
 test("metadata: the LIBRARY's own keys win — a host cannot clobber the contract", async () => {
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
     // A host returning these exact keys must NOT be able to rewrite the wire
     // contract the middleware routes on.
     resolveHandoffMetadata: () => ({
@@ -853,7 +883,9 @@ test("metadata: the LIBRARY's own keys win — a host cannot clobber the contrac
 test("metadata: returning undefined adds no fields at all", async () => {
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
     resolveHandoffMetadata: () => undefined,
   });
   const update = await node(
@@ -877,7 +909,9 @@ test("onHandback: called once per handback type, with the EFFECTIVE request and 
   const seen: { reason: string; context: string; outcome: string | null | undefined }[] = [];
   const node = createHandoffNode<typeof BUSY_STATE>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
     clearsOnHandback: ["outcome"],
     // completed → abandon from state: the observer must see the override.
     resolveHandoffType: (_state, request) => (request.context === "escalate" ? "abandon" : undefined),
@@ -905,7 +939,9 @@ test("onHandback: called once per handback type, with the EFFECTIVE request and 
 test("onHandback: a throw cannot break the reply", async () => {
   const node = createHandoffNode<S>({
     offTopic: { mode: "terminate" },
-    terminateMessage: "Transferring you now.",
+    // 4.0.0: caller-audible closings are host-rendered, required and total.
+    // These semantics fixtures echo the request context deliberately.
+    resolveClosingMessage: (_s, r) => r.context,
     onHandback: () => {
       throw new Error("CRM down");
     },
@@ -927,7 +963,9 @@ test("onHandback: not awaited, and a rejection is contained", async () => {
   try {
     const node = createHandoffNode<S>({
       offTopic: { mode: "terminate" },
-      terminateMessage: "Transferring you now.",
+      // 4.0.0: caller-audible closings are host-rendered, required and total.
+      // These semantics fixtures echo the request context deliberately.
+      resolveClosingMessage: (_s, r) => r.context,
       onHandback: async () => {
         await gate;
         settled = true;
@@ -953,7 +991,8 @@ test("onHandback: a delegate FAILURE is a handback (observed), a delegate SUCCES
   const seen: string[] = [];
   const failing = createHandoffNode<S>({
     offTopic: { mode: "delegate", url: "http://127.0.0.1:9", assistantId: "general", timeoutMs: 2_000 },
-    terminateMessage: "Transferring you now.",
+    resolveClosingMessage: (_s, r) => r.context,
+    delegateFailureMessage: () => "Transferring you now.",
     onHandback: (_state, request) => {
       seen.push(`failed:${request.reason}`);
     },
@@ -970,7 +1009,8 @@ test("onHandback: a delegate FAILURE is a handback (observed), a delegate SUCCES
   try {
     const delegating = createHandoffNode<S>({
       offTopic: { mode: "delegate", url: "http://delegate.test", assistantId: "general", timeoutMs: 2_000 },
-      terminateMessage: "Transferring you now.",
+      resolveClosingMessage: (_s, r) => r.context,
+      delegateFailureMessage: () => "Transferring you now.",
       onHandback: (_state, request) => {
         seen.push(`delegated:${request.reason}`);
       },

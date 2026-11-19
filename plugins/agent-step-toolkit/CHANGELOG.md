@@ -12,6 +12,106 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [4.0.0] — 2026-11-19
+
+Major: **engine-owned instruction text, the declared-capture model, and universal bounded
+patience.** Every string the engine emits becomes a model-facing `instruction` it owns outright
+(no wording override); everything a caller can hear is rendered by the host from state. Standing
+asks move onto the verdict row that asks, capture params declare a machine-readable kind, and the
+configured escalation ladders are replaced by one universal, reset-on-progress latch — nothing
+declared per action, its numbers deployment-level tolerances (`AGENT_STEP_*`). Carries
+3.0.1 and 3.1.0 forward unchanged (`onHandback`, the OTP/match fold).
+Migration: [migrations/3.1.0-to-4.0.0.md](migrations/3.1.0-to-4.0.0.md).
+
+### Breaking
+- **`messages.ts` and the `messages` build option are removed** (`SystemMessages`,
+  `DEFAULT_SYSTEM_MESSAGES`, `resolveSystemMessages`). Engine text lives in `engine-text.ts`
+  (`ENGINE_TEXT`, `formatMessage`, `EngineTextKey` — exported for goldens and tests, never for
+  overriding). The standing-ask contract is extended, not replaced, through
+  `BuildAgentStepToolOptions.askContract: AskContractSpec` (`{ categories }`, composed by
+  `composeAskContract`).
+- **The register is wire-visible.** A result entry carries EITHER `summary` (host caller-audible
+  bytes, relayed faithfully) OR `instruction` (an engine directive the model follows, composing any
+  caller line in the session language). `RunnerResultBody.summary` is now optional and
+  `RunnerResultBody.instruction` mirrors a batch that ended on an engine entry. Every runner-raised
+  entry — refusals, proposals, controls, the empty batch — moved from `summary` to `instruction`.
+- **`Verifier.denial` is `{ instruction, error }`** (was `{ summary, error }`): model-facing host
+  doctrine, never caller-audible.
+- **`ConfirmationOpts.refuseProposal` returns `{ verdict, data? }`** naming a declared row (was a
+  hand-built `{ summary, error, … }` body).
+- **`ActionDef.asks` and `DictationAsk` are removed.** A standing ask is declared on the row:
+  `VerdictDef.ask: RowAsk` — `"self"` or `{ action, param?, render? }`. `param` defaults to the
+  target's sole capture field and `expects` is derived from that field's kind. The `invalid_params`
+  bounce re-ask is derived from the bouncing action's capture field and is no longer declared.
+- **Ladders are removed**: `BuildAgentStepToolOptions.ladders`, `ActionDef.captureBounces`,
+  `CaptureBouncePolicy`, `EscalationLadder`, `LadderRegistry`, `SpentLadders`. `note_refusal` takes
+  `{ kind }` (`REFUSAL_KINDS`: `declined_or_cannot` | `unsupported_question` | `malicious_intent`)
+  instead of `{ ladder }`, and is active whenever `handoff` is configured.
+- **`ActionDef.invalidatesOnChange` is removed** in favour of one config-level table,
+  `AgentStepConfig.invalidations`, validated against the state schema.
+- **`HandoffSpec`**: `terminateMessage` is removed; `resolveClosingMessage` is **required and
+  total** (returns `string` — the engine never falls back to `request.context` or a default);
+  `delegateFailureMessage(state)` replaces it as the delegate-failure fallback and is required in
+  delegate mode (terminate-mode `off_topic` stays silent, as since 1.6.0). The auto-handoff
+  arrives as the structural `AUTO_HANDOFF_CONTEXT` (`"auto_handoff"`) instead of a byte-matched
+  sentence, and `HANDOFF_ACTION_DESCRIPTION` now describes `context` as routing metadata. The
+  channel envelope and custom events are unchanged.
+- **`ProtocolSurface`** (`composeProtocolPrompt`) drops `ladders` and reads `verdicts` +
+  `paramsSchema` instead of `asks`; the composed SPEAKING TURN bullet names `instruction`.
+- **New construction-time failures**: a value-shape keyword (`pattern`, `minLength`, `maxLength`,
+  `format`) in a model-facing params schema; an action with no verdict rows; an ask whose target
+  has no caller-capture field, names a judged/relay param, or sits on a terminal row; a
+  double-quoted snake_case name in an `askContract` / `replyContract` category that is not a
+  declared action or control; an
+  `invalidations` slot that is not a host channel. `runSteps` now validates too (once per options
+  object), so a test harness surfaces these instead of `npm run dev`.
+
+### Added
+- **Field kinds** (`capture.ts`): the capture builders register a machine-readable kind —
+  `digits` (`callerDigits`, `digitGroupsParam`, `digitCandidatesParam`), `text`
+  (`callerTextParam`), `judged` (new `judgedEnum`, `judgedFlag`), `relay` (`relayParam`). Exports
+  `fieldKindOf`, `fieldMetaOf`, `objectShapeOf`, `captureFieldsOf`, `FieldKind`, `FieldMeta`.
+  `DigitGroupsParamOpts.normalize` — a per-group canonicaliser for captures that carry letters.
+- **Universal bounded patience** (`interaction/escalation.ts`): two task-scoped counters in the
+  `spentLadders` latch, both reset on progress — by default `BOUNCE_TOLERANCE` (2) consecutive unusable
+  captures, then `FREE_EXPLANATIONS` (1) in-place explanation, then an atomic `abandon` handoff on
+  the structural context `escalationContext(action)` (`"agent-step:escalated[:<action>]"`,
+  `ESCALATION_CONTEXT_PREFIX`). `ActionDef.bounceCapture` names the owed capture on an action with
+  several capture fields.
+- **`note_refusal` kind `malicious_intent`**: the model classifies, the engine directs the decline
+  and repeats the pending question; the attempt that reaches the limit — cumulative, never reset by
+  progress; by default the third (`MALICIOUS_LIMIT`) — hands back `completed` on `MALICIOUS_CONTEXT`
+  (`"agent-step:malicious"`).
+- **Engine tolerances** (`tolerances.ts`): the four numbers behind bounded patience and the
+  backend-failure auto-handoff are process-wide, with measured defaults and environment overrides
+  the ENGINE reads — `AGENT_STEP_BOUNCE_TOLERANCE` (≥ 0, default 2), `AGENT_STEP_FREE_EXPLANATIONS`
+  (≥ 0, default 1), `AGENT_STEP_MALICIOUS_LIMIT` (≥ 1, default 3),
+  `AGENT_STEP_ERROR_HANDOFF_THRESHOLD` (≥ 1, default 3). Resolved once at construction and carried
+  on the compiled plan; unset or blank means the default; a value that is not a plain integer in
+  range throws at construction, naming the variable. An explicit `errorHandoffThreshold` option
+  wins over its variable; the other three have no option — nothing is declared per action or per
+  tool. No model-facing byte carries a count, so moving a tolerance moves no wire text. Exports
+  `resolveTolerances`, `TOLERANCE_ENV`, `DEFAULT_TOLERANCES`, `ERROR_HANDOFF_THRESHOLD`,
+  `EngineTolerances`, `ToleranceEnv`. This is the only module that reads the environment.
+- **State-satisfied inputs** — `ActionDef.satisfies: SatisfiesSpec` (`values`, `mode: "silent" |
+  "consent"`, `ask`, `elseVerdict`): an EMPTY call (no capture field supplied) is answered from
+  state, silently or behind a rendered reuse-consent question on the action's confirmation gate.
+  The resolved bundle reaches the executor as an optional third argument (`SatisfiedSource`); the
+  values never reach the model.
+- `repeat_pending_question` re-presents a standing ASK byte-exact: a row ask's `render` output is
+  stored on the dictation record as `ask_text`.
+- `_debug` (raw Zod issues, executor throw text) is stripped from the `ToolMessage` content and
+  carried on its `artifact` — trace-visible, model-invisible. `runSteps` still returns it.
+- Tests: `engine-text`, `escalation`, `tolerances`, `field-kinds`, `declare-hardening`, `satisfies`
+  suites; `capture-bounce` and `note-refusal` suites retired with their mechanisms. Library suite
+  229 → 300.
+
+### Changed
+- A pageable action's params must be a PLAIN `z.object` (a refined schema cannot be page-extended);
+  the error now says so.
+- Library state is still six slots; `spentLadders` keeps its name and now holds the fixed keys
+  `bounce`, `escalation` and `malicious`.
+
 ## [3.1.0] — 2026-10-21
 
 Minor: **`HandoffSpec.onHandback`** — an OBSERVER of the resolved handback, for host side effects

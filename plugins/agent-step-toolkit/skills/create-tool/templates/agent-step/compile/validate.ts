@@ -19,6 +19,10 @@ import {
 } from "../controls/contract.js";
 import { reservedControlNames } from "../controls/registry.js";
 import { channelsOf, type StateSchemaLike } from "./state-schema.js";
+import { toJsonSchema } from "@langchain/core/utils/json_schema";
+import { AGENT_STEP_SLOT_META } from "../state.js";
+import { resolveActionAsks } from "./asks.js";
+import { captureFieldsOf, objectShapeOf, fieldKindOf } from "../capture.js";
 
 export interface ValidatableOptions {
   config: {
@@ -31,9 +35,14 @@ export interface ValidatableOptions {
   verifiers: Record<string, unknown>;
   handoff?: {
     modelRequestSchema?: z.ZodType<HandoffRequest>;
+    offTopic?: { mode?: string };
+    resolveClosingMessage?: unknown;
+    delegateFailureMessage?: unknown;
   };
   abortPolicy?: AbortPolicy<string>;
-  ladders?: import("../controls/note-refusal.js").LadderRegistry;
+  /** Host reply categories for the standing-ask contract — model-facing prose,
+   *  so the reference lint below covers it. */
+  askContract?: { categories?: readonly string[] };
   onErrorThreshold?: unknown;
 }
 
@@ -45,7 +54,10 @@ export interface ValidatableOptions {
 function requiredManagedChannels(opts: ValidatableOptions): string[] {
   const required = new Set<string>();
   for (const action of Object.values(opts.config.actions)) {
-    if (action.asks && Object.keys(action.asks).length > 0) {
+    // A row-site ask records the dictation slot, and so does the DERIVED
+    // bounce re-ask of any action that collects a caller value.
+    const rowsAsk = Object.values(action.verdicts ?? {}).some((row) => row.ask);
+    if (rowsAsk || captureFieldsOf(action.paramsSchema).length > 0) {
       required.add("awaitingInput");
     }
     const c = action.controller;
@@ -73,10 +85,15 @@ function requiredManagedChannels(opts: ValidatableOptions): string[] {
   if (opts.handoff != null || opts.onErrorThreshold != null) {
     required.add("errorCount");
   }
-  // The once-latch record (the ladders): without this channel the runner's
-  // write is silently discarded, so a free use never spends and the
-  // escalation NEVER fires.
-  if (Object.keys(opts.ladders ?? {}).length > 0) {
+  // The escalation latch: without this channel the runner's write is silently
+  // discarded, so a free explanation never spends and the escalation NEVER
+  // fires. Needed whenever escalation is reachable at all — the handoff opts
+  // in `note_refusal`, and any caller capture can bounce.
+  // Escalation ends in a handoff, so the latch is only ever written when one is
+  // configured (`note_refusal` is injected then, and the capture bounce climbs
+  // only then). Without a handoff there is nothing to escalate to and nothing
+  // to record.
+  if (opts.handoff != null) {
     required.add("spentLadders");
   }
   return [...required];
@@ -100,7 +117,6 @@ export function validateConfig(opts: ValidatableOptions): void {
         `\`agentStepZodShape\` (Zod) into the host state schema.`,
     );
   }
-  const ladders = opts.ladders ?? {};
   const configuredHandoffSchema = opts.handoff?.modelRequestSchema as unknown;
   if (
     configuredHandoffSchema !== undefined &&
@@ -112,6 +128,26 @@ export function validateConfig(opts: ValidatableOptions): void {
   ) {
     throw new Error("agent-step: handoff.modelRequestSchema must be a Zod schema.");
   }
+  // Caller-audible handoff text is HOST-RENDERED from state, without engine or
+  // model-prose fallbacks — so the renderers must exist at construction.
+  if (opts.handoff) {
+    if (typeof opts.handoff.resolveClosingMessage !== "function") {
+      throw new Error(
+        "agent-step: handoff.resolveClosingMessage is required — the closing for " +
+          "completed/abandon is host-rendered from state (the engine never speaks " +
+          "`context` or a library default).",
+      );
+    }
+    if (
+      opts.handoff.offTopic?.mode === "delegate" &&
+      typeof opts.handoff.delegateFailureMessage !== "function"
+    ) {
+      throw new Error(
+        "agent-step: handoff.delegateFailureMessage is required in delegate mode — " +
+          "a failed delegate run speaks this host-rendered fallback.",
+      );
+    }
+  }
   const actionNames = Object.keys(config.actions);
   // Shared construction (compile/activation.ts); conservativeLifecycle keeps
   // the reserved-name set independent of the lifecycle analysis below.
@@ -119,7 +155,6 @@ export function validateConfig(opts: ValidatableOptions): void {
     actions: config.actions as Record<string, import("../types.js").ActionDef<string>>,
     handoff: opts.handoff as ActivationInputs<string>["handoff"],
     abortPolicy: opts.abortPolicy,
-    ladders: opts.ladders,
     conservativeLifecycle: true,
   });
   const repeatableConfirmationActions = activation.repeatableConfirmationActions;
@@ -242,6 +277,49 @@ export function validateConfig(opts: ValidatableOptions): void {
     }
   }
 
+  // ── Reference lint on HOST model-facing prose ──────────────────────────────
+  //
+  // The measured contract categories ROUTE the model
+  // by naming actions in prose ('call "abort_pending_input", routing kind words
+  // to "collect_full_name"'). Those names are strings inside strings: nothing
+  // tied them to the action registry, so renaming or removing an action left
+  // prose that instructs the model to call something that no longer exists —
+  // and the model's call then bounces as `unknown_action` on a turn the prose
+  // was written to make smooth.
+  //
+  // Convention (held by every host string today): an ACTION is written in
+  // DOUBLE QUOTES; wire fields (`read_back`, `standing_ask`, `invalid_params`)
+  // are written bare or in backticks and are deliberately NOT linted — they
+  // are not actions, and the engine owns them. Only host-supplied prose is
+  // linted; engine frames carry `"{action}"` placeholders, which never match.
+  const callableNames = new Set<string>([...actionNames, ...reservedControlNames(activation)]);
+  const QUOTED_SNAKE = /"([a-z][a-z0-9]*(?:_[a-z0-9]+)+)"/g;
+  const lintProse = (text: unknown, where: string): void => {
+    if (typeof text !== "string") return;
+    for (const [, token] of text.matchAll(QUOTED_SNAKE)) {
+      if (!callableNames.has(token)) {
+        throw new Error(
+          `agent-step: ${where} names "${token}" in double quotes, which is not a declared action or control — ` +
+            "model-facing prose may only route to something callable (write wire fields in backticks instead).",
+        );
+      }
+    }
+  };
+
+  for (const category of opts.askContract?.categories ?? []) {
+    lintProse(category, "askContract category");
+  }
+  for (const a of actionNames) {
+    const spec = config.actions[a]?.controller?.requiresConfirmation;
+    const categories =
+      typeof spec === "object" && spec !== null
+        ? (spec as { replyContract?: { categories?: unknown[] } }).replyContract?.categories
+        : undefined;
+    for (const category of categories ?? []) {
+      lintProse(category, `action "${a}" replyContract category`);
+    }
+  }
+
   for (const a of actionNames) {
     const action = config.actions[a];
     // Selectors and executors are registered 1:1 under the action name.
@@ -297,8 +375,16 @@ export function validateConfig(opts: ValidatableOptions): void {
       }
     }
     // Declared verdict rows (`ActionDef.verdicts`): the summary is required
-    // by type; backendFailure marks a code that must exist statically; a
-    // row's ask must not double-declare a key `asks` already owns.
+    // by type; backendFailure marks a code that must exist statically.
+    // Rows are the action's whole result space: an executor returns
+    // `{ verdict }` and the runner composes the body from the named row, so an
+    // action with NO rows cannot answer a single call — every invocation would
+    // fail as `executor_error` at runtime. Fail at construction instead.
+    if (Object.keys(action.verdicts ?? {}).length === 0) {
+      throw new Error(
+        `agent-step: action "${a}" declares no verdict rows — every executor result names a row, so a row-less action can never answer a call.`,
+      );
+    }
     for (const [code, row] of Object.entries(action.verdicts ?? {})) {
       if (typeof code !== "string" || code.trim().length === 0) {
         throw new Error(`agent-step: action "${a}" has a verdicts entry with an empty code.`);
@@ -309,97 +395,200 @@ export function validateConfig(opts: ValidatableOptions): void {
         );
       }
     }
-    // Standing asks: every mapped target must exist, and the named capture
-    // param must be a declared field of the target's params schema — a typo
-    // here would synthesize calls the target cannot parse.
-    for (const [code, ask] of Object.entries(action.asks ?? {})) {
-      if (typeof code !== "string" || code.trim().length === 0) {
-        throw new Error(`agent-step: action "${a}" has an asks entry with an empty code.`);
-      }
-      const target = config.actions[ask.action];
-      if (!target) {
-        throw new Error(
-          `agent-step: action "${a}" asks["${code}"] targets unknown action "${ask.action}".`,
-        );
-      }
-      if (ask.expects !== "digits" && ask.expects !== "text") {
-        throw new Error(
-          `agent-step: action "${a}" asks["${code}"] has invalid expects "${String(ask.expects)}".`,
-        );
-      }
-      const shape = (target.paramsSchema as { shape?: Record<string, unknown> }).shape;
-      if (shape && !(ask.param in shape)) {
-        throw new Error(
-          `agent-step: action "${a}" asks["${code}"] names param "${ask.param}" which is not declared on "${ask.action}".`,
-        );
-      }
-    }
-  }
-  if (actionNames.length === 0) {
-    throw new Error("agent-step: at least one action must be defined.");
-  }
+    // Row-site standing asks: resolved through the SAME code path the compiler
+    // uses (compile/asks.ts), so a config that validates cannot then fail to
+    // compile — and every rule the resolver enforces (target exists, target has
+    // a capture field, the sole-capture default resolves, the named param is a
+    // capture and not a judgement, no ask on a terminal row) is checked exactly
+    // once, in one place.
+    resolveActionAsks(a, action, config.actions);
 
-
-  // Capture-bounce bounds (ActionDef.captureBounces): the engine's only defence
-  // against an unbounded re-ask loop on a malformed capture. Validated here so
-  // a typo'd ladder name fails at construction rather than on the Nth bounce of
-  // a live call.
-  for (const [name, action] of Object.entries(opts.config.actions)) {
-    const policy = (action as { captureBounces?: { max?: unknown; ladder?: unknown } })
-      .captureBounces;
-    if (policy === undefined) continue;
-    if (!Number.isInteger(policy.max) || (policy.max as number) < 1) {
+    // The caller-capture hard rule, enforced at CONSTRUCTION instead of by a
+    // per-host test: a value-shape keyword in the model-facing JSON Schema
+    // stops being a verdict the tool returns and becomes a precondition for
+    // EMITTING the call — the model counts digits itself, withholds the call
+    // or pads a digit to satisfy the pattern (measured live 2026-07-31).
+    // Shape rules belong in refinements, which are invisible here. Every
+    // domain action is checked (the incident field predated the kind
+    // registry, so the check cannot be limited to registered captures);
+    // `minItems`/`maxItems` bound arrays the MODEL constructs and `enum`
+    // enumerates closed values, so they stay legal.
+    const offending = findShapeKeyword(toJsonSchema(action.paramsSchema as never));
+    if (offending) {
       throw new Error(
-        `agent-step: action "${name}" needs captureBounces.max as an integer ≥ 1.`,
-      );
-    }
-    if (typeof policy.ladder !== "string" || !(policy.ladder in ladders)) {
-      throw new Error(
-        `agent-step: action "${name}" has captureBounces.ladder "${String(
-          policy.ladder,
-        )}" which is not a configured ladder.`,
+        `agent-step: action "${a}" exposes JSON-Schema keyword "${offending.keyword}" at ` +
+          `${offending.path} in its model-facing params schema. Express value-shape rules as ` +
+          "zod REFINEMENTS (callerDigits / callerTextParam / superRefine) so the tool judges " +
+          "the capture and the model never pre-judges the call.",
       );
     }
   }
 
-  if (Object.keys(ladders).length > 0 && opts.handoff == null) {
-    throw new Error(
-      "agent-step: ladders require handoff — every ladder escalates into one.",
-    );
-  }
-  for (const [name, ladder] of Object.entries(ladders)) {
-    if (name.trim().length === 0) {
-      throw new Error("agent-step: ladder names must be non-empty.");
-    }
-    if (ladder.description.trim().length === 0) {
-      throw new Error(
-        `agent-step: ladder "${name}" is missing a non-empty description.`,
-      );
-    }
-    if (ladder.instruction.trim().length === 0) {
-      throw new Error(
-        `agent-step: ladder "${name}" is missing a non-empty instruction.`,
-      );
-    }
-    if (
-      ladder.maxFreeUses !== undefined &&
-      (!Number.isInteger(ladder.maxFreeUses) || ladder.maxFreeUses < 1)
-    ) {
-      throw new Error(
-        `agent-step: ladder "${name}" needs maxFreeUses ≥ 1 when set.`,
-      );
-    }
-    // Deliberately the LIBRARY contract, not the host's model schema: an
-    // escalation route is engine-only by design — a host may (and should)
-    // remove it from the model-requestable routes entirely, so the engine
-    // holds the only path to it.
-    const parsed = handoffParamsSchema.safeParse(ladder.onExhaust);
-    if (!parsed.success) {
-      throw new Error(
-        `agent-step: ladder "${name}" has an invalid onExhaust: ${parsed.error.issues
-          .map((issue) => issue.message)
-          .join("; ")}`,
-      );
+  // ─── Config-level invalidation table: every named slot must be a real host
+  //     channel (a typo'd name silently never fires — or worse, never clears),
+  //     and no library-managed slot may be watched or nulled through it. ───── //
+  const invalidations = (config as { invalidations?: Record<string, string[]> }).invalidations ?? {};
+  const librarySlots = new Set(Object.keys(AGENT_STEP_SLOT_META));
+  for (const [watched, dependents] of Object.entries(invalidations)) {
+    for (const slot of [watched, ...dependents]) {
+      if (librarySlots.has(slot)) {
+        throw new Error(
+          `agent-step: invalidations names library-managed slot "${slot}" — library slots ` +
+            "transition through effects and the run pipeline, never through invalidation.",
+        );
+      }
+      if (!(slot in channels)) {
+        throw new Error(
+          `agent-step: invalidations names "${slot}", which is not a channel of the state ` +
+            "schema — the write would be silently dropped.",
+        );
+      }
     }
   }
+
+  // ─── `bounceCapture`: only meaningful with SEVERAL captures,
+  //     and it must name one of them — a typo would silently disable the
+  //     bounce re-ask it exists to restore. ────────────────────────────────── //
+  for (const [name, action] of Object.entries(config.actions)) {
+    if (action.bounceCapture === undefined) continue;
+    const captures = captureFieldsOf(action.paramsSchema).map((f) => f.name);
+    if (!captures.includes(action.bounceCapture)) {
+      throw new Error(
+        `agent-step: action "${name}" bounceCapture "${action.bounceCapture}" is not one of ` +
+          `its capture fields (${captures.join(", ") || "none"}).`,
+      );
+    }
+    if (captures.length < 2) {
+      throw new Error(
+        `agent-step: action "${name}" declares bounceCapture with a single capture field — ` +
+          "the bounce capture is derived there; omit it.",
+      );
+    }
+  }
+
+  // ─── State-satisfied inputs (`ActionDef.satisfies`): every declared fact is
+  //     machine-checkable BY DESIGN — paths against the state schema, mode
+  //     against the gate, the else row against the declared verdicts. ─────── //
+  for (const [name, action] of Object.entries(config.actions)) {
+    const spec = action.satisfies;
+    if (!spec) continue;
+    const paths = Object.entries(spec.values ?? {});
+    if (paths.length === 0) {
+      throw new Error(
+        `agent-step: action "${name}" declares satisfies with no values — ` +
+          "name at least one state path to satisfy from.",
+      );
+    }
+    for (const [key, path] of paths) {
+      const root = String(path).split(".")[0];
+      if (librarySlots.has(root)) {
+        throw new Error(
+          `agent-step: action "${name}" satisfies.values["${key}"] reads library-managed ` +
+            `slot "${root}" — satisfied inputs come from host/channel state only.`,
+        );
+      }
+      if (!(root in channels)) {
+        throw new Error(
+          `agent-step: action "${name}" satisfies.values["${key}"] names "${path}", whose ` +
+            `root "${root}" is not a channel of the state schema — it could never resolve.`,
+        );
+      }
+      // A bundle key that names one of the action's own params must name a
+      // CAPTURE field: satisfying a judged/relay param from state would let
+      // state impersonate a model classification.
+      const shape = objectShapeOf(action.paramsSchema);
+      const field = shape?.[key];
+      if (field) {
+        const kind = fieldKindOf(field);
+        if (kind !== "digits" && kind !== "text") {
+          throw new Error(
+            `agent-step: action "${name}" satisfies.values["${key}"] targets param "${key}", ` +
+              "which is not a caller-capture field — only captures can be satisfied from state.",
+          );
+        }
+      }
+    }
+    const gated = action.controller?.requiresConfirmation != null;
+    if (spec.mode === "consent") {
+      if (!gated) {
+        throw new Error(
+          `agent-step: action "${name}" declares satisfies mode "consent" but is not ` +
+            "confirmation-gated — the consent question rides the confirmation gate; the " +
+            "engine never synthesizes one.",
+        );
+      }
+      if (typeof spec.ask !== "function") {
+        throw new Error(
+          `agent-step: action "${name}" satisfies mode "consent" requires \`ask\` — the ` +
+            "rendered reuse-consent question the caller answers.",
+        );
+      }
+      if (!spec.elseVerdict || !(action.verdicts ?? {})[spec.elseVerdict]) {
+        throw new Error(
+          `agent-step: action "${name}" satisfies mode "consent" requires \`elseVerdict\` ` +
+            "naming a declared verdict row — the business answer when nothing usable is carried.",
+        );
+      }
+      // Consent resolves PARTIALLY: capture-field keys are required, the rest
+      // are optional riders. Without at least one capture key the rider rule
+      // would let an EMPTY bundle resolve — a consent question offering
+      // nothing the action can act on.
+      const captureNames = new Set(captureFieldsOf(action.paramsSchema).map((f) => f.name));
+      if (!paths.some(([key]) => captureNames.has(key))) {
+        throw new Error(
+          `agent-step: action "${name}" satisfies mode "consent" declares no values key ` +
+            "naming one of the action's own capture fields — every key would be an optional " +
+            "rider and an empty bundle could resolve; the consent must offer the action's point.",
+        );
+      }
+    } else {
+      if (gated) {
+        throw new Error(
+          `agent-step: action "${name}" declares satisfies mode "silent" but is ` +
+            "confirmation-gated — a silent skip of a confirmation gate is not representable; " +
+            'use mode "consent".',
+        );
+      }
+      if (spec.ask || spec.elseVerdict) {
+        throw new Error(
+          `agent-step: action "${name}" satisfies mode "silent" declares ` +
+            `${spec.ask ? "`ask`" : "`elseVerdict`"} — a silent source asks nothing, and an ` +
+            "empty call with nothing carried reaches the executor, which owns that answer.",
+        );
+      }
+    }
+  }
+}
+
+/** Walk a composed JSON Schema for value-shape keywords. Keys under a
+ *  `properties` map are PROPERTY NAMES, not keywords — a param named
+ *  "format" is legal — so that level recurses without keyword-checking its
+ *  keys. */
+const SHAPE_KEYWORDS = new Set(["pattern", "minLength", "maxLength", "format"]);
+
+function findShapeKeyword(
+  node: unknown,
+  path = "$",
+): { keyword: string; path: string } | null {
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const hit = findShapeKeyword(node[i], `${path}[${i}]`);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (node === null || typeof node !== "object") return null;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === "properties" && value !== null && typeof value === "object") {
+      for (const [prop, sub] of Object.entries(value as Record<string, unknown>)) {
+        const hit = findShapeKeyword(sub, `${path}.properties.${prop}`);
+        if (hit) return hit;
+      }
+      continue;
+    }
+    if (SHAPE_KEYWORDS.has(key)) return { keyword: key, path };
+    const hit = findShapeKeyword(value, `${path}.${key}`);
+    if (hit) return hit;
+  }
+  return null;
 }

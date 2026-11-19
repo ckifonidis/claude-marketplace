@@ -26,7 +26,8 @@ import type { PagedCache } from "./paginate.js";
  *    `attempts_left` on each `match_mismatch` and aborts the flow on
  *    exhaustion. Semantically: "customer must provide the value AGAIN."
  *  - `dictation`: a step's verdict asked the customer for a fresh value (the
- *    plainest input kind — declared per verdict via `ActionDef.asks`, applied
+ *    plainest input kind — declared ON the verdict row via `VerdictDef.ask`
+ *    (or DERIVED from the bouncing action's capture field), applied
  *    by the batch finalizer from the batch's FINAL entry, and made visible to
  *    the model on that entry as `standing_ask` + `ask_contract`). Unlike the
  *    three gates it does NOT lock the surface: it is the record of the
@@ -51,6 +52,11 @@ const GATE_AWAITING_MEMBERS = [
      *  value like a person's name). Descriptive: kind-specific behavior (e.g.
      *  per-kind contracts) keys on it. */
     expects: z.enum(["digits", "text"]),
+    /** The HOST-RENDERED ask bytes, stored at record time when the row's ask
+     *  declares a `render` — so `repeat_pending_question` can re-present the
+     *  standing question byte-exact instead of failing as ineligible (the
+     *  measured 2026-08-15 stray call). Absent for model-composed asks. */
+    ask_text: z.string().optional(),
     flow_ref: z.string().optional(),
   }),
   z.object({
@@ -163,12 +169,14 @@ export interface LibraryManagedSlots {
   awaitingInput?: AwaitingInput | null;
   currentFlow?: CurrentFlow | null;
   pagedRead?: PagedCache<unknown> | null;
-  /** Per-ladder free-use counts — ladder name → uses so far. Carries every
-   *  once-latch: the `note_refusal` ladders (journey-engine G7) AND the
-   *  `deflect_aside` damper under the reserved key `"deflect_aside"`. When a ladder's count reaches its
-   *  configured `maxFreeUses`, the next `note_refusal` escalates atomically
-   *  into the ladder's configured handoff. Task-scoped — a task-ending
-   *  handback clears it; an `off_topic` roundtrip does not. */
+  /** The UNIVERSAL bounded-patience latch (interaction/escalation.ts): two
+   *  fixed keys, `bounce` (consecutive unusable captures) and `escalation`
+   *  (free in-place explanations spent). Nothing is named or configured, so
+   *  nothing can be shared by accident. Both keys RESET ON PROGRESS — any step
+   *  that reaches its executor clears them, so friction is measured
+   *  consecutively rather than cumulatively. Task-scoped on top of that: a
+   *  task-ending handback clears it; an `off_topic` roundtrip does not. The
+   *  name is historical (it held a per-ladder free-use map through 3.x). */
   spentLadders?: Record<string, number> | null;
   handoff?: HandoffRequest | null;
   /** Consecutive backend-failure counter. The runner increments it on each

@@ -22,8 +22,7 @@
 
 import type { ControllerHooks, StepResult } from "../types.js";
 import type { AwaitingInput, LibraryManagedSlots } from "../state.js";
-import type { SystemMessages } from "../messages.js";
-import { formatMessage } from "../messages.js";
+import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
 import {
   clearInteractionPatch,
   setAwaitingMatchPatch,
@@ -38,7 +37,6 @@ export function refuseMatchNotPending(
   actionName: string,
   controller: ControllerHooks | undefined,
   batchStartAwaiting: AwaitingInput | null,
-  msgs: SystemMessages,
 ): StepResult | null {
   if (!controller?.requiresMatch) return null;
   const gated =
@@ -46,11 +44,15 @@ export function refuseMatchNotPending(
     batchStartAwaiting.kind === "match" &&
     batchStartAwaiting.for_action === actionName;
   if (gated) return null;
-  const summary = formatMessage(msgs.match_not_pending, {
+  return {
     action: actionName,
-    capturer: controller.requiresMatch.capturer,
-  });
-  return { action: actionName, ok: false, summary, error: "match_not_pending" };
+    ok: false,
+    instruction: formatMessage(ENGINE_TEXT.match_not_pending, {
+      action: actionName,
+      capturer: controller.requiresMatch.capturer,
+    }),
+    error: "match_not_pending",
+  };
 }
 
 /** Outcome of the mismatch lifecycle on an `ok:false` consumer step. */
@@ -59,8 +61,9 @@ export interface MatchMismatchOutcome<T> {
   /** Fields merged over the already-pushed step entry (decremented counter,
    *  or the exhaustion re-shape). */
   entryPatch: Record<string, unknown>;
-  /** True when attempts ran out — the entry's summary changed and the caller
-   *  must refresh `lastSummary`. */
+  /** True when attempts ran out — the entry's text changed register (the
+   *  engine's exhaustion instruction replaced the row's summary) and the
+   *  caller must refresh its last-text tracking. */
   exhausted: boolean;
 }
 
@@ -72,7 +75,6 @@ export function matchMismatchLifecycle<T extends LibraryManagedSlots>(
   controller: ControllerHooks | undefined,
   resultBody: object,
   liveAwaiting: AwaitingInput | null,
-  msgs: SystemMessages
 ): MatchMismatchOutcome<T> | null {
   if (!controller?.requiresMatch) return null;
   if ((resultBody as { verdict?: string }).verdict !== "match_mismatch") return null;
@@ -86,7 +88,12 @@ export function matchMismatchLifecycle<T extends LibraryManagedSlots>(
     return {
       patch: clearInteractionPatch<T>(),
       entryPatch: {
-        summary: formatMessage(msgs.match_attempts_exhausted, { action: actionName }),
+        // The engine's exhaustion instruction REPLACES the row's caller
+        // summary (serialization drops the explicit undefined).
+        summary: undefined,
+        instruction: formatMessage(ENGINE_TEXT.match_attempts_exhausted, {
+          action: actionName,
+        }),
         error: "match_attempts_exhausted",
         verdict: "match_attempts_exhausted",
         attempts_left: 0,

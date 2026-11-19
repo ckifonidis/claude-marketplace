@@ -170,7 +170,8 @@ Rules:
 - The row's `ok` mirrors `verdict === "ok"` *here by choice*: a failed verification should stop the batch because downstream steps gate on the slot this would populate. `ok` is the runner's batch-continuation control, not a success signal (contrast Pattern 1) — set it `false` only when the batch should not continue.
 - Speaker-change / cross-entity guards live INSIDE the verification executor, not in the runner.
 - Pin everything later actions might need (mobile for SCA, taxNumber for re-identification on mutations) in the state slot. Re-prompting later costs a turn.
-- Recoverable misses that re-ask a caller value pair naturally with a standing ask: declare `asks: { name_mismatch: { action: "verify_customer", param: "...", expects: "digits" } }` on the action so the engine records the standing question (see `agent-step-api.md` `<standing_asks>`).
+- Recoverable misses that re-ask a caller value pair naturally with a standing ask: declare `ask: "self"` on the row (`name_mismatch: { ok: false, summary: …, body: {…}, ask: "self" }`) so the engine records the standing question (see `agent-step-api.md` `<standing_asks>`). The re-ask after an unparseable capture is derived — never declared.
+- When the identifier may already be in state (carried by the channel, or implied by an authenticated session), declare `satisfies` on the action instead of branching by hand: an EMPTY call is then answered from state and the executor receives the resolved bundle as its third argument (`agent-step-api.md` `<satisfies>`).
 </pattern_2_verification_executor>
 
 <pattern_3_mutation_executor>

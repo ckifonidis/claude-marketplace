@@ -25,8 +25,8 @@
 import type { z } from "zod";
 import type { StepResult } from "../types.js";
 import type { HandoffRequest, LibraryManagedSlots } from "../state.js";
-import type { SystemMessages } from "../messages.js";
 import type { BatchState } from "../run/batch-state.js";
+import type { EngineTolerances } from "../tolerances.js";
 
 /** Optional host policy for the built-in `abort_pending_input` control.
  *
@@ -93,32 +93,31 @@ export interface ControlActivation {
   /** `null` preserves the legacy permissive abort mechanics. */
   abortPolicy: ResolvedAbortPolicy | null;
   /** Confirm-gated domain actions which opted into exact stored read-back
-   *  repetition. Non-empty activates `repeat_pending_question` (which also
-   *  activates when any bounded choice has a `renderRequest`); the control
+   *  repetition. Non-empty activates `repeat_pending_question`; the control
    *  still verifies that the current gate belongs to one of these actions
-   *  and actually carries a rendered read-back. */
+   *  and actually carries a rendered read-back. (A standing dictation with
+   *  stored `ask_text` is also served once active — a safety net for a stray
+   *  call, never named in the describe.) */
   repeatableConfirmationActions: readonly string[];
-  /** Configured escalation ladders (the `note_refusal` control, requires
-   *  handoff): engine-owned "once" counters whose exhaustion escalates
-   *  atomically into the ladder's configured handoff. */
-  ladders: import("./note-refusal.js").LadderRegistry;
-  laddersEnabled: boolean;
 }
 
 /** Runtime context a control's `execute` receives. Narrow on purpose: a
  *  control transitions library state through `state.apply` and composes its
- *  result entry — nothing else. */
+ *  result entry — nothing else. Engine text comes straight from ENGINE_TEXT
+ *  (engine-text.ts), so no message catalog is threaded here. */
 export interface ControlRunContext<T extends LibraryManagedSlots> {
-  msgs: SystemMessages;
   activation: ControlActivation;
+  /** The plan's resolved engine tolerances (../tolerances.ts) — the bounds a
+   *  counting control compares against. */
+  tolerances: EngineTolerances;
   /** Stable identity of the current caller turn, when one exists. */
   currentCallerTurnId: string | undefined;
   state: BatchState<T>;
 }
 
 /** What a control's execution produced. The run loop pushes `entry`, takes
- *  `entry.summary` as the batch's running summary, and short-circuits the
- *  batch when `failed` is true. */
+ *  its `instruction` (or host `summary`) as the batch's running last-text,
+ *  and short-circuits the batch when `failed` is true. */
 export interface ControlOutcome {
   entry: StepResult;
   failed: boolean;
@@ -132,7 +131,7 @@ export interface ExclusivityGroup {
   name: string;
   memberNames: readonly string[];
   errorCode: string;
-  summary(foundAction: string, msgs: SystemMessages): string;
+  instruction(foundAction: string): string;
 }
 
 export interface ControlAction {

@@ -15,8 +15,8 @@ export const dataLoaded: Verifier<State> = {
     //   Object.keys(s?.accounts ?? {}).length > 0,
     false,
   denial: {
-    summary:
-      "No data loaded yet — fetch the relevant records before analysing.",
+    instruction:
+      "No data is loaded yet — fetch the relevant records first, then analyse.",
     error: "no_data_loaded",
   },
 };

@@ -12,7 +12,7 @@ src/tools/<name>/
 ├── index.ts                                 # wire-up: buildAgentStepTool({...})
 ├── actions/
 │   ├── <action_1>/
-│   │   ├── action.ts                        # the DECLARATION: schema, description, verdict rows, asks, controller
+│   │   ├── action.ts                        # the DECLARATION: schema, description, verdict rows (+ their asks), controller
 │   │   ├── stateSelector.ts                 # exports getSlice + Slice — projects state to this action's slice
 │   │   └── executor.ts                      # exports the executor function (receives the slice, names verdicts)
 │   ├── <action_2>/
@@ -42,7 +42,7 @@ src/tools/<name>/
 
 ## actions/<action_name>/action.ts
 - The action's DECLARATION, beside the executor that names its verdicts: `export const <actionCamel>Action: ActionDef<PrereqName, State> = { ... }`.
-- Carries: `summary`, `description` (the SEMANTIC LEAD only — the engine composes the gate marker and mechanics; never restate the handshake or enumerate verdicts), `paramsSchema`, `prereqs`, `verdicts` (the declared rows — static summaries/doctrine/state writes/effects), optional `asks` / `captureBounces` / `controller` / `invalidatesOnChange` / `pageable`.
+- Carries: `summary`, `description` (the SEMANTIC LEAD only — the engine composes the gate marker and mechanics; never restate the handshake or enumerate verdicts), `paramsSchema`, `prereqs`, `verdicts` (the declared rows — static summaries/doctrine/state writes/effects, and the standing `ask` an outcome leaves behind), optional `controller` / `satisfies` / `bounceCapture` / `pageable`. Params are declared with the library's capture builders so each carries a field kind. (Downstream-slot invalidation is NOT per action — it is the config-level `invalidations` table in `config.ts`.)
 - MUST NOT import `./executor.js`: executors pull backend/env, and the config → prompt chain has to stay env-free.
 
 ## config.ts
@@ -53,7 +53,7 @@ src/tools/<name>/
 - The place where `agent-step/index.js` is consumed for wire-up.
 - Imports every state selector from `actions/<name>/stateSelector.js` and every executor from `actions/<name>/executor.js`.
 - Imports every verifier from `verifiers/<name>.js`.
-- Builds `selectors` (with `satisfies SelectorRegistry<State, ActionName>`) and `executors` (`ExecutorRegistry<State, typeof selectors>`), both **keyed by the exact action name**, plus `verifiers`, then calls `buildAgentStepTool({ config, stateSchema, selectors, executors, verifiers, ... })` — passing the project's single Zod `AgentStateSchema` as `stateSchema`, plus the optional features (`handoff`, `ladders`, `abortPolicy`, `messages`).
+- Builds `selectors` (with `satisfies SelectorRegistry<State, ActionName>`) and `executors` (`ExecutorRegistry<State, typeof selectors>`), both **keyed by the exact action name**, plus `verifiers`, then calls `buildAgentStepTool({ config, stateSchema, selectors, executors, verifiers, ... })` — passing the project's single Zod `AgentStateSchema` as `stateSchema`, plus the optional features (`handoff`, `abortPolicy`, `askContract`, `getCallerTurnId`).
 - Exports the tool as `export const <name>Tool = ...`.
 
 ## actions/<action_name>/stateSelector.ts
@@ -80,10 +80,10 @@ src/tools/<name>/
   ```ts
   export const customerVerified: Verifier<State> = {
     check: (s) => s?.verifiedCustomer != null,
-    denial: { summary: "Customer is not verified in this session.", error: "customer_not_verified" },
+    denial: { instruction: 'The customer is not verified in this session. Run "verify_customer" first.', error: "customer_not_verified" },
   };
   ```
-- Predicate AND denial body co-located. No reference to config.
+- Predicate AND denial body co-located. No reference to config. The denial's `instruction` is model-facing doctrine (what the model does next), never a caller sentence.
 
 ## backend/env.ts
 - Per-tool env constants. Read `process.env`; throw at module load if required vars are missing.
@@ -159,7 +159,7 @@ Four `../`s back to `src/state.ts` and `src/agent-step/index.js` from inside `ac
 For a worked example of each file, read the bundled templates in this order:
 
 1. `templates/names.ts.template`              — the types-only name leaf
-2. `templates/action.ts.template`             — the per-action declaration (schema, rows, asks, controller)
+2. `templates/action.ts.template`             — the per-action declaration (schema, rows with their asks, controller)
 3. `templates/config.ts.template`             — the assembler
 4. `templates/tool-index.ts.template`         — the wire-up
 5. `templates/verifier.ts.template`           — verifier record shape

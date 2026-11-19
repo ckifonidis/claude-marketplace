@@ -32,8 +32,8 @@ If the tool has a multi-turn flow (OTP-gated activation, double-entry PIN, etc.)
 
 | name | predicate | denial |
 |------|-----------|--------|
-| {{prereqName_1}} | `state.X != null` | `{ summary: "...", error: "X_not_verified" }` |
-| {{prereqName_2}} | `state.Y != null && state.Z[state.Y] != null` | `{ summary: "...", error: "Y_not_verified" }` |
+| {{prereqName_1}} | `state.X != null` | `{ instruction: "...", error: "X_not_verified" }` |
+| {{prereqName_2}} | `state.Y != null && state.Z[state.Y] != null` | `{ instruction: "...", error: "Y_not_verified" }` |
 
 ## State slot additions (src/state.ts)
 

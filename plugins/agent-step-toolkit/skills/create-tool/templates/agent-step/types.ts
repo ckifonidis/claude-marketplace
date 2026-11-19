@@ -97,6 +97,13 @@ export interface VerdictDef<T = unknown> {
    *  (e.g. the terminal handoff that must never fork from the outcome
    *  written in `stateUpdate`). */
   effects?: ExecutorEffect[];
+  /** The standing ask this outcome leaves behind: what the caller now owes and
+   *  which action their answer becomes ({@link RowAsk}). Omit when the outcome
+   *  owes nothing — including deliberately, for the judgement turns where an
+   *  ask measurably misroutes the model's classification (an identity yes/no,
+   *  a choice between kinds). A row that omits it and whose action OWNED the
+   *  standing ask has serviced it: the runner clears the record. */
+  ask?: RowAsk;
   /** Marks this verdict's `body.error` code as a backend failure for the
    *  auto-handoff counter — derives `backendFailureCodes`, so the hand-kept
    *  list in the host wiring goes away. Requires `body.error` to be a
@@ -140,6 +147,11 @@ export type SelectorRegistry<T, ActionName extends string> = Record<ActionName, 
 export type Executor<Slice, T> = (
   params: unknown,
   state: Slice,
+  /** The resolved state-satisfied bundle ({@link SatisfiedSource}) when this
+   *  call was an EMPTY one answered from state (`ActionDef.satisfies`);
+   *  absent on dictated calls. Executors that never declare `satisfies`
+   *  simply ignore it. */
+  source?: SatisfiedSource,
 ) => Promise<DeclaredExecutorResult<T>>;
 
 /** The executor registry, keyed 1:1 by action name. Each entry's `state` param
@@ -155,63 +167,113 @@ export type ExecutorRegistry<
 
 /** Self-contained prereq: the predicate that tests state plus the denial body
  *  the runner emits when the predicate is false. The key in the registry is
- *  the prereq's name (used in `ActionDef.prereqs`). */
+ *  the prereq's name (used in `ActionDef.prereqs`).
+ *
+ *  The denial's `instruction` is MODEL-FACING host doctrine (static English —
+ *  "run verify_customer first"), emitted on the refused entry's `instruction`
+ *  field: it tells the model what to do, never the caller what to hear. */
 export interface Verifier<T> {
   check: (state: T) => boolean;
-  denial: { summary: string; error: string };
+  denial: { instruction: string; error: string };
 }
 export type VerifierRegistry<T> = Record<string, Verifier<T>>;
 
-/** One verdict's standing ask: which action the requested value feeds, on
- *  which param, and whether the value is deterministic digit content. Declared
- *  per verdict in {@link ActionDef.asks}; the batch finalizer turns the
- *  batch's FINAL entry into the library `awaitingInput` `dictation` record. */
-export interface DictationAsk {
-  /** Target action the customer's value will be sent to. Must exist. */
-  action: string;
-  /** The target action's param carrying the capture (e.g. `spokenDigits`). */
-  param: string;
-  /** `digits` → a purely digit-bearing caller turn may be intercepted
-   *  deterministically; `text` → standing-question record only. */
-  expects: "digits" | "text";
-  /** Render the caller-audible ask itself (language/lexicon live in state, so
-   *  the host supplies the function — the same division as
-   *  `ConfirmationOpts.readBack`). A non-empty return rides the final entry as
-   *  `ask_text` beside `standing_ask`, and the ask contract directs the model
-   *  to speak it exactly — engine-rendered bytes are how fixed sentences stay
-   *  verbatim (a model asked to speak a catalog line "verbatim" from prompt
-   *  memory measurably decorates it). Omit for asks whose wording the model
-   *  may own (e.g. the shortened re-ask after a bounce). */
-  render?: (state: unknown) => string | undefined;
+/** Host extension of the engine's standing-ask contract frame
+ *  (`BuildAgentStepToolOptions.askContract`): the measured domain reply
+ *  categories only the host knows, spliced verbatim — in declaration order —
+ *  between the engine's repeat-is-still-the-value clause and its closing
+ *  re-ask-style clause. Each category is one complete sentence ending in a
+ *  period. See compile/ask-contract.ts for the frame. */
+export interface AskContractSpec {
+  categories: readonly string[];
 }
 
-/** Bound on CONSECUTIVE malformed captures for one action — the runner's
- *  `invalid_params` bounce ({@link ActionDef.captureBounces}).
+/** A row-site standing ask: the value the caller owes once this outcome is
+ *  spoken, and which action their answer becomes. Declared on the verdict row
+ *  (`VerdictDef.ask`) — see compile/asks.ts for why the parallel map is gone.
  *
- *  The bounce is deliberately cheap: no confirmation attempt is spent, no
- *  verdict is produced, no executor runs. That is what keeps a caller-capture
- *  shape rule out of the model's JSON Schema — but it also means NOTHING in
- *  the engine counts it, so a caller who keeps mis-supplying a value is
- *  re-asked forever (live incident 2026-08-19: seven identical AFM bounces in
- *  105 seconds with no exit, while a well-formed AFM the backend cannot
- *  resolve is terminal on the FIRST miss). This policy closes that asymmetry.
+ *  `"self"` is the common case: re-ask this same action's own capture. The
+ *  object form names a DIFFERENT action, which is how one step chains to the
+ *  next ("the name was accepted; now the digits are owed").
  *
- *  Past `max` consecutive bounces the engine CLIMBS the named escalation
- *  ladder instead of bouncing plainly: the ladder's free use returns its
- *  instruction (explain/suggest once and re-ask in the SAME turn) and the use
- *  after that applies its `onExhaust` handoff atomically. Counts live in the
- *  task-scoped `spentLadders` latch under `capture:<action>` and RESET on any
- *  capture for that action that parses, so only a consecutive run escalates.
+ *  Deliberately NOT declared here: `param` (defaults to the target's sole
+ *  capture field) and `expects` (derived from that field's kind — capture.ts
+ *  registers it). Both were hand-copied per ask and could disagree with the
+ *  field they described. */
+export type RowAsk =
+  | "self"
+  | {
+      /** Target action the customer's value will be sent to. Must exist. */
+      action: string;
+      /** Only when the target declares MORE THAN ONE capture field; otherwise
+       *  the sole one is used. */
+      param?: string;
+      /** Render the caller-audible ask itself (language/lexicon live in state,
+       *  so the host supplies the function — the same division as
+       *  `ConfirmationOpts.readBack`). A non-empty return rides the final entry
+       *  as `ask_text` beside `standing_ask`, and the ask contract directs the
+       *  model to speak it exactly — engine-rendered bytes are how fixed
+       *  sentences stay verbatim (a model asked to speak a catalog line
+       *  "verbatim" from prompt memory measurably decorates it). Omit for asks
+       *  whose wording the model may own (e.g. the shortened re-ask after a
+       *  bounce, which is measured to work better in the model's own words). */
+      render?: (state: unknown) => string | undefined;
+    };
+
+/** State-satisfied inputs (`ActionDef.satisfies`): the declaration that an
+ *  action's required input may already exist in state — carried from earlier
+ *  in the call by the channel, or asserted by the channel itself — so an
+ *  EMPTY call (no capture field supplied) can be answered from state instead
+ *  of re-asking the caller.
  *
- *  Model-invisible by design: nothing about the bound reaches the schema, and
- *  the bounce summary stays count-free — a count in a capture message
- *  measurably makes the model pad digits to satisfy it. */
-export interface CaptureBouncePolicy {
-  /** Plain bounces tolerated before the ladder is climbed. Integer ≥ 1. */
-  max: number;
-  /** Which configured escalation ladder an exhausted capture enters. Must name
-   *  a ladder in the config's `ladders` registry (validated at construction). */
-  ladder: string;
+ *  The engine owns the whole mechanic: a dictated capture always wins (a call
+ *  WITH its capture field never consults this); an empty call resolves
+ *  `values` from state and either executes directly (`mode: "silent"`),
+ *  renders the reuse-consent question onto the existing confirmation gate
+ *  (`mode: "consent"` — the caller's yes executes with the resolved values,
+ *  which ride state → executor and never reach the model), or answers through
+ *  the declared `elseVerdict` row when nothing usable is carried. The host
+ *  declares only the business facts: which slots, ask-or-not, and what the
+ *  caller hears.
+ *
+ *  MODE IS GATE-BOUND BY CONSTRUCTION: `consent` requires the action to be
+ *  confirmation-gated (the consent rides that gate — the engine never
+ *  synthesizes one), and `silent` requires it NOT to be (a silent skip of a
+ *  consent-purpose gate must be unrepresentable). */
+export interface SatisfiesSpec {
+  /** Bundle name → dotted state path (e.g. `{ spokenDigits:
+   *  "collected_identity.afm" }`). Availability is MODE-DEPENDENT: under
+   *  `consent`, a key matching one of the action's own CAPTURE fields is
+   *  REQUIRED (at least one such key must be declared) and every other key is
+   *  an optional RIDER, skipped when absent — the rendered question offers
+   *  what actually resolved, and the ordinary ask flow collects the rest;
+   *  under `silent`, ALL keys must resolve — the bundle's completeness is the
+   *  predicate. A capture-field key is validated through that field's schema
+   *  (the same refinement a dictated value passes), so a malformed carried
+   *  value makes the source unavailable instead of opening a gate over
+   *  garbage; other names are presence-checked only and handed to the
+   *  executor as-is. */
+  values: Record<string, string>;
+  /** `silent` — the empty call executes immediately with the resolved values.
+   *  `consent` — the empty call proposes on the action's confirmation gate,
+   *  with `ask` rendered as the gate's `read_back`. */
+  mode: "silent" | "consent";
+  /** The caller-audible reuse-consent question (host catalogs — same division
+   *  as `ConfirmationOpts.readBack`). Required iff `mode: "consent"`. */
+  ask?: (state: unknown) => string;
+  /** The declared verdict row that answers an empty call when nothing usable
+   *  is carried — the business "nothing to reuse" outcome (its row typically
+   *  carries the ask for the value). Required iff `mode: "consent"`; a silent
+   *  action's empty call reaches its executor, which owns that answer. */
+  elseVerdict?: string;
+}
+
+/** The resolved bundle a satisfied call hands the executor (third argument):
+ *  the values named by `SatisfiesSpec.values`, capture-field entries already
+ *  normalized through their field schema. Absent when the call was dictated
+ *  or nothing resolved. */
+export interface SatisfiedSource {
+  values: Record<string, unknown>;
 }
 
 export interface ActionDef<PrereqName extends string, T = unknown> {
@@ -227,25 +289,6 @@ export interface ActionDef<PrereqName extends string, T = unknown> {
   summary?: string;
   paramsSchema: z.ZodTypeAny;
   prereqs: PrereqName[];
-  /** Downstream-slot invalidation map. Keys are state slot names this action
-   *  may write; values are the slot names to reset to `null` when the watched
-   *  slot's value CHANGES between pre-step and post-step state (after the
-   *  executor's `stateUpdate` has been folded in). Used to express "if X is
-   *  re-collected with a different value, anything derived from X is stale."
-   *
-   *  Change rule: invalidation fires only when the pre-step value was non-null
-   *  AND the written value is not deep-VALUE-equal to it (canonicalized JSON
-   *  compare — reference identity never counts, so an executor writing a
-   *  fresh-but-equal object does not fire). First-time set (null → value)
-   *  does NOT fire — there was nothing downstream to invalidate.
-   *
-   *  Invalidated slots are written as `null` regardless of their schema type.
-   *  CAUTION: the `null` must survive the HOST's reducer for that slot —
-   *  list only replace-on-write slots as invalidation targets. A record-merge
-   *  reducer (`{...prev, ...(next ?? {})}`) swallows the `null` at the graph
-   *  boundary, so the slot resurrects on the next turn even though the
-   *  in-batch view saw it cleared. */
-  invalidatesOnChange?: Record<string, string[]>;
   /** Opt this read into uniform pagination. `true` self-paginates (executor
    *  returns the FULL set in `resultBody.items`; the runner slices + caches it
    *  in `pagedRead`, skipping the executor on a same-query re-page); `"delegate"`
@@ -256,32 +299,32 @@ export interface ActionDef<PrereqName extends string, T = unknown> {
    *  totalPages, hasMore, items, fromCache }` envelope. Requires a `z.object`
    *  params schema. Omit for non-list reads. */
   pageable?: PageableSpec;
+  /** Opt this action into state-satisfied inputs ({@link SatisfiesSpec}): an
+   *  EMPTY call (no capture field supplied) may be answered from values the
+   *  state already carries — silently, or behind a rendered reuse-consent
+   *  question — instead of asking the caller to dictate them again. A dictated
+   *  capture always bypasses this entirely. Omit for actions whose inputs only
+   *  ever come from the caller's own words. */
+  satisfies?: SatisfiesSpec;
+  /** The capture a malformed-capture bounce (`invalid_params`) leaves the
+   *  caller owing, for an action that declares SEVERAL capture fields. With
+   *  exactly one capture it is derived and must be omitted; with several and
+   *  no declaration the engine will not guess, so the bounce records no
+   *  standing ask and its escalation names no owed action. Must name one of
+   *  the action's own capture fields — checked at construction. */
+  bounceCapture?: string;
   /** Optional library-coordinated lifecycle hooks: confirmation gating, OTP
    *  issue/consume, flow open/close, double-entry capture/consume, and
    *  batch-isolation flags. Omit for plain reads and collection steps that
    *  don't participate in any controller-managed lifecycle. */
   controller?: ControllerHooks;
-  /** Standing asks, keyed by the verdict-or-error code THIS action's results
-   *  carry (`resultBody.verdict`, else the entry's `error` — runner-raised
-   *  codes like `invalid_params` are legal keys). When the batch's FINAL entry
-   *  carries a listed code, the finalizer records the mapped ask as the
-   *  library `awaitingInput` `dictation` state — the engine-owned "current
-   *  question" the caller now owes an answer to. A final entry from this
-   *  action whose code is NOT listed clears a dictation that was standing for
-   *  this same action (the ask was serviced); it never disturbs a
-   *  confirmation/OTP/match gate. Non-locking by design. */
-  asks?: Record<string, DictationAsk>;
   /** Declared verdict rows ({@link VerdictDef}), keyed by the code the
    *  executor returns ({@link DeclaredExecutorResult}). The rows ARE the
    *  action's result space: an executor returning a verdict with no row here
-   *  fails loudly as `executor_error`. Each row's `ask` merges into `asks` at
-   *  construction (duplicates fail); rows with `backendFailure` derive
-   *  `backendFailureCodes`. */
+   *  fails loudly as `executor_error`. A row's `ask` becomes the standing-ask
+   *  record when that row is the batch's final entry; rows with
+   *  `backendFailure` derive `backendFailureCodes`. */
   verdicts?: Record<string, VerdictDef<T>>;
-  /** Bound the runner's `invalid_params` bounce for this action's captures —
-   *  see {@link CaptureBouncePolicy}. Requires `ladders`; omit for actions
-   *  whose params the caller does not dictate. */
-  captureBounces?: CaptureBouncePolicy;
 }
 
 /** Per-mutation opt-in for state-driven confirmation gating. Truthy form
@@ -348,7 +391,7 @@ export interface ConfirmationOpts {
   refuseProposal?: (
     params: Record<string, unknown>,
     state: unknown,
-  ) => ({ summary: string; error: string } & Record<string, unknown>) | null | undefined;
+  ) => { verdict: string; data?: Record<string, unknown> } | null | undefined;
   /** Replace the runner's generic `reply_contract` on THIS action's proposal
    *  bodies with an action-specific one. The contract is the COMPLETE
    *  classification of the caller's next reply while the gate pends — a
@@ -476,8 +519,36 @@ export interface AgentStepConfig<
 > {
   tool: { name: string; description: string };
   actions: Record<ActionName, ActionDef<PrereqName, T>>;
+  /** Downstream-slot invalidation map — ONE table for the whole config,
+   *  because staleness is a fact about the SLOTS, not about which action
+   *  happened to write them ("a different card selection makes the report
+   *  outcome stale" is true whoever re-binds the card). Keys are watched
+   *  state slot names; values are the slots reset to `null` whenever ANY
+   *  executor's `stateUpdate` CHANGES the watched slot. Declared per action
+   *  through 3.x, which made every new writer a copy site — three hand-kept
+   *  lists in the reference host, two of them byte-identical.
+   *
+   *  Change rule: invalidation fires only when the pre-step value was non-null
+   *  AND the written value is not deep-VALUE-equal to it (canonicalized JSON
+   *  compare — reference identity never counts, so an executor writing a
+   *  fresh-but-equal object does not fire). First-time set (null → value)
+   *  does NOT fire — there was nothing downstream to invalidate.
+   *
+   *  Invalidated slots are written as `null` regardless of their schema type.
+   *  CAUTION: the `null` must survive the HOST's reducer for that slot —
+   *  list only replace-on-write slots as invalidation targets. A record-merge
+   *  reducer (`{...prev, ...(next ?? {})}`) swallows the `null` at the graph
+   *  boundary, so the slot resurrects on the next turn even though the
+   *  in-batch view saw it cleared. */
+  invalidations?: Record<string, string[]>;
 }
 
+/** One result entry. Register is WIRE-VISIBLE (4.0.0): host caller-audible
+ *  bytes ride `summary` (the model relays them faithfully); engine directives
+ *  ride `instruction` (the model follows them, composing any caller line in
+ *  the session language). An entry carries one or the other, never both —
+ *  except a match-gate exhaustion, which strips the row's `summary` when the
+ *  engine's exhaustion instruction replaces it. */
 export interface StepResult {
   action: string;
   ok: boolean;
@@ -485,7 +556,12 @@ export interface StepResult {
 }
 
 export interface RunnerResultBody {
-  summary: string;
+  /** Mirrors the last entry's host caller-audible `summary`, when the batch
+   *  ended on one. */
+  summary?: string;
+  /** Mirrors the last entry's engine `instruction`, when the batch ended on
+   *  one (refusals, proposals, controls, the empty batch). */
+  instruction?: string;
   results: StepResult[];
   failed_at?: number;
 }

@@ -17,7 +17,6 @@ import type { State } from "./state.js";
 // {{Once the first tool exists, uncomment and adapt (see create-tool.md):}}
 // import { composeProtocolPrompt } from "./agent-step/index.js";
 // import { {{TOOL_NAME}}Config } from "./tools/{{TOOL_NAME}}/config.js";
-// import { {{TOOL_NAME}}Ladders } from "./tools/{{TOOL_NAME}}/contracts.js"; // if ladders configured
 // import { handoffSpec } from "./handoff-spec.js"; // if handoff configured
 
 function todayIso(): string {
@@ -26,8 +25,7 @@ function todayIso(): string {
 
 // {{Once the first tool exists:}}
 // const PROTOCOL_FRAGMENT = composeProtocolPrompt({
-//   config: {{TOOL_NAME}}Config,
-//   ladders: {{TOOL_NAME}}Ladders,      // omit if none
+//   config: {{TOOL_NAME}}Config,        // the composer reads each action's verdict rows + params
 //   handoff: handoffSpec,               // omit if none
 //   toolTurnRules: [
 //     // Domain tool-turn clauses spliced as the FIRST lettered clauses of the

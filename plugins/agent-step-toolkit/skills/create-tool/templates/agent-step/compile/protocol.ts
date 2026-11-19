@@ -21,18 +21,20 @@
  *  (config + registries + handoff presence), so hosts whose prompt module
  *  must stay import-light (no executors, no env) can call this with exactly
  *  what they already export. */
+import { captureFieldsOf } from "../capture.js";
+
 export interface ProtocolSurface {
   config: {
     tool: { name: string };
     actions: Record<
       string,
       {
-        asks?: Record<string, unknown>;
+        verdicts?: Record<string, { ask?: unknown } | undefined>;
+        paramsSchema?: unknown;
         controller?: { requiresConfirmation?: unknown };
       }
     >;
   };
-  ladders?: Record<string, unknown>;
   handoff?: unknown;
   /** Host-supplied DOMAIN tool-turn clauses, spliced as the FIRST lettered
    *  clauses of the TOOL TURN bullet — the measured position for capture
@@ -46,7 +48,14 @@ export function composeProtocolPrompt(surface: ProtocolSurface): string {
   const toolName = surface.config.tool.name;
   const actions = Object.values(surface.config.actions);
   const gates = actions.some((a) => a.controller?.requiresConfirmation);
-  const asks = actions.some((a) => a.asks && Object.keys(a.asks).length > 0);
+  // The standing-ask bullet appears when ANY outcome can leave the caller owing
+  // a value — a row-site ask, or the DERIVED bounce re-ask of an action that
+  // collects a caller capture at all.
+  const asks = actions.some(
+    (a) =>
+      Object.values(a.verdicts ?? {}).some((row) => row?.ask) ||
+      captureFieldsOf(a.paramsSchema).length > 0,
+  );
   const handoff = surface.handoff != null;
 
   const toolTurnClauses: string[] = [...(surface.toolTurnRules ?? [])];
@@ -94,7 +103,7 @@ export function composeProtocolPrompt(surface: ProtocolSurface): string {
 - **A TOOL TURN.** Whenever the caller's message supplies or confirms a value for the flow, that answer is input for the SYSTEM, never for you: call \`${toolName}\` with it before producing any text.${
       lettered.length > 0 ? " Specifically: " + lettered : ""
     } Never answer an answer with text alone, and never send a value the caller did not actually supply.
-- **A SPEAKING TURN.** What you say always comes from the CURRENT turn's latest tool result — a \`read_back\` spoken per READ-BACK below, a caller-audible \`summary\` relayed faithfully, or the ask that result's verdict instructs. When a result instructs a FOLLOW-UP action, make that call first — in this same turn — and speak from ITS result. If you are about to ask the caller for a value and no tool result instructed that ask, you have skipped a required tool call — make it instead. The only turns composed WITHOUT a tool result are those your instructions explicitly license.`,
+- **A SPEAKING TURN.** What you say always comes from the CURRENT turn's latest tool result — a \`read_back\` spoken per READ-BACK below, a caller-audible \`summary\` relayed faithfully, or what its \`instruction\` directs (any caller line it calls for, you compose in the session language). When a result instructs a FOLLOW-UP action, make that call first — in this same turn — and speak from ITS result. If you are about to ask the caller for a value and no tool result instructed that ask, you have skipped a required tool call — make it instead. The only turns composed WITHOUT a tool result are those your instructions explicitly license.`,
   );
 
   if (gates) {

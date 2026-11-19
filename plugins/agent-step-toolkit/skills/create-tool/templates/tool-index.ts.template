@@ -65,20 +65,25 @@ export const {{TOOL_NAME}}Tool = buildAgentStepTool({
   // Optional library features (see references/agent-step-api.md):
   //   handoff: <HandoffSpec>            — built-in `request_handoff` control + graph node
   //                                       (its `modelRequestSchema` opt narrows the model-facing
-  //                                       request_handoff params to exact reason/context pairs)
-  //   ladders: <LadderRegistry>         — engine-owned escalation ladders behind the
-  //                                       `note_refusal` control: the prompt's "once" rules
-  //                                       (explain a refusal once, deflect an aside once)
-  //                                       counted in the task-scoped `spentLadders` latch,
-  //                                       exhaustion escalating atomically into each ladder's
-  //                                       configured handoff. Requires `handoff`. Also the
-  //                                       escalation target for `captureBounces`.
+  //                                       request_handoff params to exact reason/context pairs).
+  //                                       Also switches on bounded patience: the `note_refusal`
+  //                                       control (kinds `declined_or_cannot` /
+  //                                       `unsupported_question` / `malicious_intent`) and the
+  //                                       capture-bounce escalation — nothing to declare, reset
+  //                                       on progress, ending in a handoff on a structural context
+  //                                       the spec's `resolveClosingMessage` maps to a closing.
+  //                                       Its NUMBERS are deployment-level tolerances the engine
+  //                                       reads from AGENT_STEP_* env at construction (see
+  //                                       .env.example) — never options here.
   //   abortPolicy: <AbortPolicy>        — narrow `abort_pending_input` to an engine-enforced
   //                                       in-domain transition (leads the batch, real target,
   //                                       declared followers); omit for legacy permissive abort
   //   getCallerTurnId: (state) => id    — stable caller-turn identity; REQUIRED if the
   //                                       host compacts/replaces messages and uses
   //                                       confirm gates
-  //   messages: <Partial<SystemMessages>> — override runner-emitted summaries/contracts
-  //                                       (localization; see messages.ts in the library)
+  //   askContract: { categories: [...] } — the host's measured reply categories, spliced into
+  //                                       the engine's standing-ask contract frame. This is
+  //                                       content EXTENSION: engine text itself (the
+  //                                       `instruction` on engine-raised results) has no
+  //                                       wording override — see engine-text.ts in the library
 });

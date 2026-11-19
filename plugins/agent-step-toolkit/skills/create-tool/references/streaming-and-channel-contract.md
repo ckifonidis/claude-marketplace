@@ -57,6 +57,14 @@ On a handoff turn the **final AI message** must carry:
 }
 ```
 
+`handoff_reason` is ROUTING METADATA, not prose to display or speak. With the library handoff
+(agent-step ≥ 4.0.0) it is the request's `context`: the caller's request for `off_topic`, a short note
+or host routing label for `completed` / `abandon`, and a STRUCTURAL CODE for the engine's own endings —
+`auto_handoff` (repeated backend failures), `agent-step:escalated` / `agent-step:escalated:<action>`
+(bounded patience ran out), `agent-step:malicious` (the misuse attempt that reaches the limit — by default the third — signalled as
+`completed`: nothing for a human queue — the channel ends the call). The spoken closing is always
+`success_message` / the message `content`, rendered by the host.
+
 `handoff_metadata` may carry **additional host-derived fields** (e.g. an identity the agent verified,
 forwarded so a call-scoped store keeps it for the rest of the call). With the library handoff these come
 from `HandoffSpec.resolveHandoffMetadata` (agent-step ≥ 2.3.0), which is merged FIRST so the two contract
@@ -169,9 +177,13 @@ service catalog and the prompt policy differ.
   second LLM pass): every non-delegate resolution emits the handback kwargs with the reason's
   signal — `off_topic` is a **SILENT** hand-back (agent-step ≥ 1.6.0): empty spoken content
   (`success_message: ""`), because a topic change is an agent-to-agent re-route the destination
-  agent narrates, not this one (`terminateMessage` is now only the delegate-FAILURE fallback);
-  `completed` / `abandon` (agent-step ≥ 1.4.0) speak the LLM-composed closing carried in the
-  request's `context`, and — since agent-step 2.2.0 — also CLEAR the task's state as they resolve:
+  agent narrates, not this one (a delegate FAILURE speaks the host-rendered
+  `delegateFailureMessage(state)`);
+  `completed` / `abandon` speak the HOST-RENDERED closing (`HandoffSpec.resolveClosingMessage` —
+  required and total since agent-step 4.0.0; the request's `context` is routing metadata and is
+  never spoken — for engine-decided endings it is a structural code: `auto_handoff`,
+  `agent-step:escalated[:<action>]`, `agent-step:malicious`), and — since agent-step 2.2.0 — also
+  CLEAR the task's state as they resolve:
   a middleware reuses ONE thread id for a whole call and never resets it on re-dispatch, so the
   thread outlives the task and the next task on it would otherwise inherit the finished one's
   pending gates and terminal outcome slots (`off_topic` clears nothing — a mid-task aside must

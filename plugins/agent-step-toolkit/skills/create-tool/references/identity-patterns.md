@@ -34,6 +34,17 @@ The caller already knows who the user is and passes identity in as run context. 
 - Alternative carrier: the run's configurable bag instead of state. That fits ordinary graph nodes, but agent-step executors only receive `(params, state)` — for them, the state-field route is simpler.
 </model_b_session_context>
 
+<model_c_carried>
+## In between — identity that MAY already be carried (agent-step ≥ 4.0.0)
+
+A collected-and-verified action whose input is sometimes already in state: an identifier the caller gave an earlier agent on the same call, or a pair of session fields that together mean "authenticated". Do not branch on it by hand (a probe module, a prompt flag saying "a value is carried", an executor branch per channel) — declare it on the verify action with `satisfies`:
+
+- **`mode: "consent"`** (the action is confirmation-gated) — an EMPTY call, with no capture supplied, proposes a rendered reuse-consent question on the action's own gate; the caller's yes executes with the carried value, which never reaches the model. Nothing usable carried → the declared `elseVerdict` row answers (typically the row that asks for the value).
+- **`mode: "silent"`** (ungated) — an empty call executes immediately when EVERY declared value resolves; the bundle's completeness is the predicate (the authenticated-session pair).
+
+A dictated value always wins, and a carried value that fails the capture's own refinement counts as nothing carried. The executor receives the resolved bundle as its third argument. See `agent-step-api.md` `<satisfies>`.
+</model_c_carried>
+
 <gotcha_defaults_are_not_values>
 ## Gotcha: a state default is not a value source
 
@@ -48,4 +59,5 @@ Consequence: per-run context (who the user is, which tenant, which channel) must
 - Mutations, or any proof-of-identity requirement → **Model A**.
 - Pre-authenticated, read-only, or identity-known-upfront → **Model B**.
 - Mixed: session context for the principal, collected verification for a *second* party the tool acts upon.
+- Collected, but the value may arrive with the call → **Model A + `satisfies`**.
 </choosing>

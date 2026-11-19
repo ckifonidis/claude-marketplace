@@ -1,7 +1,8 @@
 // FILE: src/agent-step/dictation.test.ts
 //
 // The `dictation` awaiting-input kind: the standing-ask lifecycle driven by
-// `ActionDef.asks` (finalize phase — the batch's FINAL entry decides) and the
+// row-site `VerdictDef.ask` (finalize phase — the batch's FINAL entry decides,
+// keyed by ROW rather than wire verdict) and the
 // non-locking admission semantics. (The caller-turn interception once tested
 // here was removed — owner decision 2026-08-14: the engine never fabricates
 // assistant turns.)
@@ -38,11 +39,9 @@ const selectors = {
   terminal_action: (state: S) => state,
 };
 
-const CAPTURE_ASK = {
-  action: "capture_value",
-  param: "spokenDigits",
-  expects: "digits",
-} as const;
+// Row-site: `param` and `expects` are DERIVED from capture_value's declared
+// capture field, so the fixture no longer restates them.
+const CAPTURE_ASK = { action: "capture_value" } as const;
 
 function makeOpts(): BuildAgentStepToolOptions<S, ActionName, never, typeof selectors> {
   const config = defineConfig<ActionName, never>({
@@ -52,9 +51,13 @@ function makeOpts(): BuildAgentStepToolOptions<S, ActionName, never, typeof sele
         description: "a step whose verdict asks the caller for a value",
         paramsSchema: z.object({}),
         prereqs: [],
-        asks: { need_value: CAPTURE_ASK },
         verdicts: {
-          need_value: { ok: false, summary: "need the value", body: { verdict: "need_value" } },
+          need_value: {
+            ok: false,
+            summary: "need the value",
+            body: { verdict: "need_value" },
+            ask: CAPTURE_ASK,
+          },
         },
       },
       capture_value: {
@@ -63,7 +66,8 @@ function makeOpts(): BuildAgentStepToolOptions<S, ActionName, never, typeof sele
           spokenDigits: callerDigits(/^\d{4}$/u, "not a usable capture"),
         }),
         prereqs: [],
-        asks: { invalid_params: CAPTURE_ASK },
+        // No `invalid_params` declaration: the engine derives the bounce
+        // re-ask from this action's own capture field.
         verdicts: {
           ok: { ok: true, summary: "captured", body: { verdict: "ok" } },
         },
@@ -81,16 +85,14 @@ function makeOpts(): BuildAgentStepToolOptions<S, ActionName, never, typeof sele
         paramsSchema: z.object({ value: z.string() }),
         prereqs: [],
         controller: { requiresConfirmation: true },
-        asks: { some_verdict: CAPTURE_ASK },
         verdicts: {
-          ok: { ok: true, summary: "changed", body: { verdict: "ok" } },
+          ok: { ok: true, summary: "changed", body: { verdict: "ok" }, ask: CAPTURE_ASK },
         },
       },
       terminal_action: {
         description: "a terminal step whose verdict ALSO declares an ask",
         paramsSchema: z.object({}),
         prereqs: [],
-        asks: { closed: CAPTURE_ASK },
         verdicts: {
           closed: {
             ok: false,
@@ -122,7 +124,7 @@ function makeOpts(): BuildAgentStepToolOptions<S, ActionName, never, typeof sele
     selectors,
     executors,
     verifiers: {},
-    handoff: { offTopic: { mode: "terminate" } } as never,
+    handoff: { offTopic: { mode: "terminate" }, resolveClosingMessage: () => "x" } as never,
   };
 }
 
@@ -138,7 +140,7 @@ const STANDING: AwaitingInput = {
   expects: "digits",
 };
 
-test("a final entry whose verdict is listed in asks records the dictation", async () => {
+test("a final entry whose ROW declares an ask records the dictation", async () => {
   const { body, committed } = await runSteps(makeOpts(), [{ action: "ask_source", params: {} }], baseState());
   assert.equal(body.results[0].verdict, "need_value");
   assert.deepEqual(committed.awaitingInput, STANDING);
@@ -156,9 +158,9 @@ test("a final entry whose verdict is listed in asks records the dictation", asyn
 test("an ask with render stamps the host-rendered ask_text beside standing_ask", async () => {
   const base = makeOpts();
   const cfg = base.config as unknown as {
-    actions: Record<string, { asks?: Record<string, Record<string, unknown>> }>;
+    actions: Record<string, { verdicts: Record<string, Record<string, unknown>> }>;
   };
-  cfg.actions.ask_source.asks!.need_value = {
+  cfg.actions.ask_source.verdicts.need_value.ask = {
     ...CAPTURE_ASK,
     render: () => "Exact host-rendered ask bytes?",
   };
@@ -170,7 +172,7 @@ test("an ask with render stamps the host-rendered ask_text beside standing_ask",
   });
 });
 
-test("servicing the standing ask clears it (unlisted verdict on the asked action)", async () => {
+test("servicing the standing ask clears it (a row that declares none, on the asked action)", async () => {
   const { body, committed } = await runSteps(
     makeOpts(),
     [{ action: "capture_value", params: { spokenDigits: "1234" } }],
@@ -180,7 +182,7 @@ test("servicing the standing ask clears it (unlisted verdict on the asked action
   assert.equal(committed.awaitingInput, null);
 });
 
-test("invalid_params on the asked action re-records the ask (runner-raised code is a legal key)", async () => {
+test("invalid_params re-records the ask, DERIVED from the capture field", async () => {
   const { body, committed } = await runSteps(
     makeOpts(),
     [{ action: "capture_value", params: { spokenDigits: "12" } }],
@@ -221,7 +223,7 @@ test("a live confirmation gate wins over asks (a proposal's ask never stomps the
   );
 });
 
-test("a terminal handoff skips the ask its own verdict declares", async () => {
+test("a terminal handoff leaves nothing owed", async () => {
   const { committed } = await runSteps(
     makeOpts(),
     [{ action: "terminal_action", params: {} }],
@@ -231,11 +233,9 @@ test("a terminal handoff skips the ask its own verdict declares", async () => {
   assert.ok(committed.handoff);
 });
 
-test("construction-time validation rejects an ask targeting an unknown action or param", () => {
+test("construction-time validation rejects a row-site ask that cannot resolve", () => {
   const opts = makeOpts();
-  const bad = structuredClone as unknown; // structuredClone can't copy zod schemas
-  void bad;
-  const withUnknownTarget = {
+  const withAsk = (ask: unknown) => ({
     ...opts,
     config: {
       ...opts.config,
@@ -243,24 +243,56 @@ test("construction-time validation rejects an ask targeting an unknown action or
         ...opts.config.actions,
         ask_source: {
           ...opts.config.actions.ask_source,
-          asks: { need_value: { action: "nope", param: "spokenDigits", expects: "digits" as const } },
+          verdicts: {
+            ...opts.config.actions.ask_source.verdicts,
+            need_value: {
+              ...opts.config.actions.ask_source.verdicts!.need_value,
+              ask,
+            },
+          },
         },
       },
     },
-  };
-  assert.throws(() => buildAgentStepTool(withUnknownTarget as never), /unknown action "nope"/);
-  const withUnknownParam = {
+  });
+
+  assert.throws(
+    () => buildAgentStepTool(withAsk({ action: "nope" }) as never),
+    /unknown action "nope"/,
+  );
+  // A typo'd param and a non-dictatable param are different mistakes with
+  // different messages (the judged-field case lives in declare-hardening).
+  assert.throws(
+    () => buildAgentStepTool(withAsk({ action: "capture_value", param: "nope" }) as never),
+    /not declared on "capture_value"/,
+  );
+  // An action with no capture field cannot be an ask target at all.
+  assert.throws(
+    () => buildAgentStepTool(withAsk({ action: "other_read" }) as never),
+    /declares no caller-capture field/,
+  );
+  // An ask on a row that hands the conversation back is a contradiction: the
+  // finalizer skips the whole lifecycle once a handoff is set, so the ask
+  // could never be applied.
+  const onTerminalRow = {
     ...opts,
     config: {
       ...opts.config,
       actions: {
         ...opts.config.actions,
-        ask_source: {
-          ...opts.config.actions.ask_source,
-          asks: { need_value: { action: "capture_value", param: "nope", expects: "digits" as const } },
+        terminal_action: {
+          ...opts.config.actions.terminal_action,
+          verdicts: {
+            closed: {
+              ...opts.config.actions.terminal_action.verdicts!.closed,
+              ask: { action: "capture_value" },
+            },
+          },
         },
       },
     },
   };
-  assert.throws(() => buildAgentStepTool(withUnknownParam as never), /not declared on "capture_value"/);
+  assert.throws(
+    () => buildAgentStepTool(onTerminalRow as never),
+    /declares an ask AND a terminal handoff/,
+  );
 });

@@ -29,6 +29,16 @@ export const HANDOFF_ACTION = "request_handoff";
  *  library-managed slot already claims that name.) */
 export const HANDOFF_NODE = "resolve_handoff";
 
+/** The STRUCTURAL context the runner writes when the consecutive
+ *  backend-failure threshold auto-arms a handoff (run/finalize.ts). It is a
+ *  routing CODE, never caller-audible prose: the host's
+ *  `resolveClosingMessage` matches it (`request.context ===
+ *  AUTO_HANDOFF_CONTEXT`) to render the technical-escalation closing from
+ *  state. This replaces the 1.x–3.x sentinel design, where the context WAS the
+ *  closing sentence and hosts detected it by byte-equality against a
+ *  locale-file entry that had to stay identical across languages. */
+export const AUTO_HANDOFF_CONTEXT = "auto_handoff";
+
 /** Base/default params schema for `request_handoff`, and the trusted schema
  * for the handoff state/effect contract. A host may narrow only the model
  * actuator with `HandoffSpec.modelRequestSchema`; internal effects stay here. */
@@ -44,9 +54,12 @@ export const HANDBACK_SIGNALS = {
   abandon: "abandon",
 } as const satisfies Record<HandoffRequest["reason"], string>;
 
-/** LLM-facing mechanics attached to the `request_handoff` schema variant. */
+/** LLM-facing mechanics attached to the `request_handoff` schema variant.
+ *  `context` is described truthfully as routing metadata for completed/abandon:
+ *  the platform composes the spoken closing (`resolveClosingMessage` is
+ *  required and total), so model-authored context is never spoken. */
 export const HANDOFF_ACTION_DESCRIPTION =
-  "Hand the conversation back instead of answering. Reasons: \"off_topic\" — the customer's request is outside this agent's scope (an operation this agent does not perform, a product it does not serve, or an unrelated question beyond a greeting); `context` carries the customer's request for the receiving agent, verbatim or tightly summarized, in the customer's language. \"completed\" — the delegated task is wrapped up; `context` carries the closing line to speak (it may reference what was done), in the customer's language. \"abandon\" — the customer gave up or declined to continue; `context` carries the acknowledgement line to speak, in the customer's language. MUST be the only step in the batch; has no prereqs (works even before any data is loaded). After it succeeds, produce NO answer text — the platform delivers the handoff response.";
+  "Hand the conversation back instead of answering. Reasons: \"off_topic\" — the customer's request is outside this agent's scope (an operation this agent does not perform, a product it does not serve, or an unrelated question beyond a greeting); `context` carries the customer's request for the receiving agent, verbatim or tightly summarized, in the customer's language. \"completed\" — the delegated task is wrapped up; `context` carries a short note of what was done (routing metadata — the platform composes the spoken closing). \"abandon\" — the customer gave up or declined to continue; `context` carries a short note of why (routing metadata — the platform composes the spoken closing). MUST be the only step in the batch; has no prereqs (works even before any data is loaded). After it succeeds, produce NO answer text — the platform delivers the handoff response.";
 
 /** Delegate target: another LangGraph deployment (one graph per deployment)
  *  reachable over the Platform API. */
@@ -87,13 +100,11 @@ export interface HandoffSpec<T> {
    *  delegate to another LangGraph deployment and pass its answer through. */
   offTopic: HandoffOffTopicSpec;
   /** Override the LLM-facing description attached to the auto-injected
-   *  `request_handoff` schema variant. The default
-   *  (`HANDOFF_ACTION_DESCRIPTION`) tells the model its `context` is the
-   *  closing line that gets SPOKEN for completed/abandon — which is wrong for
-   *  a host whose `resolveClosingMessage` overrides every closing from state.
-   *  Such hosts must describe `context` truthfully here (e.g. "routing
-   *  metadata for the receiving system; the platform composes the spoken
-   *  closing"), or the schema contradicts the host prompt. */
+   *  `request_handoff` schema variant — e.g. for a host whose
+   *  `modelRequestSchema` narrows the routes to exact reason/context pairs
+   *  and wants the description to enumerate them. The default
+   *  (`HANDOFF_ACTION_DESCRIPTION`) already describes `context` truthfully as
+   *  routing metadata. */
   actionDescription?: string;
   /** Optional narrower schema for the MODEL-FACING `request_handoff` params.
    * It is used both to generate the wire schema and to parse that control at
@@ -103,17 +114,21 @@ export interface HandoffSpec<T> {
    * This does not replace `HandoffRequestSchema`: the library-managed state
    * slot and trusted executor/config effects retain the base schema. */
   modelRequestSchema?: z.ZodType<HandoffRequest>;
-  /** The fixed envelope content for off_topic terminate mode — also the
-   *  fallback when a delegate run fails. This is what the customer
-   *  sees/hears. (completed / abandon don't use it: they speak the
-   *  LLM-composed closing carried in the request's `context`.) */
-  terminateMessage: string;
-  /** Override the closing line for completed / abandon signals based on
-   *  actual operation outcomes. When provided and returns a non-undefined
-   *  string, that string replaces the LLM-composed `request.context` for
-   *  those signals. Return `undefined` to fall through to `request.context`.
-   *  Never called for `off_topic` (that always uses `terminateMessage`). */
-  resolveClosingMessage?: (state: T, request: HandoffRequest) => string | undefined;
+  /** The caller-audible fallback when a DELEGATE run fails mid-handoff —
+   *  rendered from state (session language lives there). Required when
+   *  `offTopic.mode === "delegate"` (validated at construction); never used in
+   *  terminate mode, where `off_topic` resolves SILENTLY (the orchestrator's
+   *  destination agent owns the caller-facing reply). */
+  delegateFailureMessage?: (state: T) => string;
+  /** Render the caller-audible closing line for `completed` / `abandon`
+   *  handbacks from state — REQUIRED and TOTAL: the return type is `string`,
+   *  so the host's table must end in an unconditional row. The engine never
+   *  falls back to `request.context` (model prose) or any library default:
+   *  nothing the engine or the model authors is ever spoken. `request.context`
+   *  stays routing metadata (`handoff_reason`); the runner's auto-handoff
+   *  arrives with `context === AUTO_HANDOFF_CONTEXT` for the host to match.
+   *  Never called for `off_topic` (a silent re-route). */
+  resolveClosingMessage: (state: T, request: HandoffRequest) => string;
   /** Decide the handback SIGNAL from state instead of taking the model's word
    *  for it. Consulted only for a terminate-mode `completed` / `abandon` — never
    *  for `off_topic` (a re-route is not a task ending) and never for a
@@ -188,9 +203,9 @@ export interface HandoffSpec<T> {
    *  the handback. The library does not log: report failures inside the hook.
    *
    *  Exists because the outcome is known in one place only — this node — while
-   *  the engine-decided endings (an exhausted ladder, the auto-handoff) run no
-   *  host executor at all. Without the hook a host can reach those endings only
-   *  by wrapping this node, or by smuggling I/O into the pure `resolve*`
+   *  the engine-decided endings (an exhausted escalation, the auto-handoff) run
+   *  no host executor at all. Without the hook a host can reach those endings
+   *  only by wrapping this node, or by smuggling I/O into the pure `resolve*`
    *  functions above. */
   onHandback?: (state: T, request: HandoffRequest) => void | Promise<void>;
   /** Build the delegate run's input from host state + the handoff request.

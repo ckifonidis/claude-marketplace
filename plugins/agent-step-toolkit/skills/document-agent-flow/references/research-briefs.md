@@ -67,7 +67,10 @@ Audit the agent at <repo>. It vendors agent-step <version> (src/agent-step/VERSI
    - flows: open, close, mutex, what ends them;
    - batching: does a batch stop on a business conflict returned as success? can step N use step N-1's
      result?
-   - invalidation: what `invalidatesOnChange` clears and when;
+   - invalidation: which slots are cleared when which slot changes, and where that is declared (the
+     config-level `invalidations` table from 4.0.0; a per-action option before it);
+   - asks and patience: what the caller owes after each outcome, and what bounds repeated unusable
+     answers (4.0.0: row asks and universal bounded patience; 3.x: an asks map and named ladders);
    - an action carrying two gates at once.
 5. For each step of <ladder draft>, which action(s) implement it today and what is missing.
 <evidence rules>

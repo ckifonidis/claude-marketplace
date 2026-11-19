@@ -23,11 +23,21 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
     "{{ACTION_LLM_DESCRIPTION}}",
   paramsSchema: z.object({
     // {{ACTION_PARAMS}}
-    // Caller-dictated digit params use the library capture builders
-    // (`callerDigits`, `digitGroupsParam`, `digitCandidatesParam`); free-text
-    // captures use `callerTextParam`; exact-words relay fields use
-    // `relayParam`. XOR over optional selectors: `.superRefine(exactlyOneOf(
-    // ["a", "b"], message))`. See agent-step-api.md <caller_digit_capture>.
+    // Every param declares WHAT IT IS through a library builder, which
+    // registers a machine-readable field kind the engine reads:
+    //   digits — `callerDigits`, `digitGroupsParam`, `digitCandidatesParam`
+    //   text   — `callerTextParam`
+    //   judged — `judgedEnum(values, describe)`, `judgedFlag(describe)`: the
+    //            model's classification of what the caller meant
+    //   relay  — `relayParam(describe)`: the caller's exact words, passed on
+    // Only `digits` / `text` are caller CAPTURES — the only params a standing
+    // ask may target. Use the builder's result unchanged (a later
+    // `.optional()` / `.describe()` makes a new schema and loses the kind).
+    // Value-shape rules are REFINEMENTS: a `.regex()` / `.min()` / `.max()` /
+    // `.email()` on a model-facing string surfaces as a JSON-Schema keyword
+    // and FAILS CONSTRUCTION. XOR over optional selectors:
+    // `.superRefine(exactlyOneOf(["a", "b"], message))`.
+    // See agent-step-api.md <caller_digit_capture>.
   }),
   prereqs: [{{ACTION_PREREQS}}],
 
@@ -39,7 +49,11 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
   // composed IN DECLARATION ORDER after `summary`; a function field receives
   // `data`; `summary` may be a `(state, data) => string` renderer for
   // language-keyed catalogs. A verdict with no row fails loudly as
-  // `executor_error`.
+  // `executor_error`; an action with NO rows fails construction.
+  //
+  // REGISTER: a row's `summary` is CALLER-AUDIBLE host text the model relays
+  // faithfully. What the model should DO about the outcome is model-facing
+  // doctrine and rides a `body` field (e.g. `reason`).
   verdicts: {
     ok: {
       ok: true,
@@ -61,6 +75,23 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
       // Mark a backend failure so the auto-handoff counter sees this code
       // (requires body.error to be a static string):
       // backendFailure: true,
+      //
+      // STANDING ASK — declare it ON the row whose outcome asks the question.
+      // When this row is the batch's FINAL entry, the engine records the ask
+      // as the `dictation` awaiting-input state and stamps `standing_ask` +
+      // `ask_contract` (and `ask_text` when `render` returns bytes) on that
+      // entry. Non-locking: it records the standing question; capturing the
+      // answer stays the model's job.
+      //   ask: "self",                         // re-ask THIS action's capture
+      //   ask: { action: "{{NEXT_ACTION}}" },  // the answer feeds another action
+      //   ask: { action: "{{NEXT_ACTION}}", param: "{{CAPTURE_PARAM}}",   // only when the target has SEVERAL captures
+      //          render: (state) => "{{EXACT_ASK_SENTENCE}}" },           // engine-rendered bytes, spoken verbatim
+      // `param` defaults to the target's sole capture field and digits-vs-text
+      // is derived from that field's kind. A row that declares NO ask and
+      // whose action owned the standing ask has serviced it (the record
+      // clears). The `invalid_params` re-ask is DERIVED from this action's own
+      // capture field — never declare it. A terminal row (one carrying a
+      // `request_handoff` effect) may not ask.
     },
     // A TERMINAL verdict arms its handoff atomically with the outcome write —
     // the two can never fork:
@@ -73,23 +104,30 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
     // },
   },
 
-  // ─── Standing asks (optional) — keyed by verdict-or-error code ────────── //
-  // When the batch's FINAL entry carries a listed code, the engine records
-  // the mapped ask as the `dictation` awaiting-input state and stamps
-  // `standing_ask` + `ask_contract` (and `ask_text` when `render` returns
-  // bytes) on that entry. Non-locking: it records the standing question;
-  // capturing the answer stays the model's job. Runner-raised codes like
-  // `invalid_params` are legal keys.
-  // asks: {
-  //   invalid_params: { action: "{{ACTION_NAME}}", param: "{{CAPTURE_PARAM}}", expects: "digits" },
-  // },
+  // ─── Bounced captures need NO declaration ─────────────────────────────── //
+  // A capture that fails its refinement bounces as `invalid_params` before
+  // any executor runs. With `handoff` configured the engine bounds it by
+  // itself, for every action alike — at the default tolerances (deployment-
+  // level AGENT_STEP_* env, never declared here): two consecutive bounces
+  // re-ask plainly, the next earns ONE in-place explanation, and the one after hands back
+  // `abandon` on the structural context `agent-step:escalated:{{ACTION_NAME}}`
+  // (map it to a closing in the handoff spec). Any call whose params parse
+  // resets the count. Only an action with SEVERAL capture fields declares
+  // which one a bounce leaves owed:
+  // bounceCapture: "{{CAPTURE_PARAM}}",
 
-  // ─── Capture-bounce bound (optional; requires `ladders` in index.ts) ──── //
-  // Consecutive `invalid_params` bounces counted by the engine under
-  // `spentLadders["capture:{{ACTION_NAME}}"]`, cleared by any successful
-  // parse, escalating through the named ladder when spent. `max: 2` is the
-  // measured knob — the model improvises past ~3 identical bounces.
-  // captureBounces: { max: 2, ladder: "{{LADDER_NAME}}" },
+  // ─── State-satisfied inputs (optional) ────────────────────────────────── //
+  // The action's input may already be in state (carried by the channel from
+  // earlier in the call, or asserted by an authenticated session). An EMPTY
+  // call — no capture field supplied — is then answered from state instead of
+  // re-asking; a dictated capture always wins. The resolved values reach the
+  // executor as its third argument and never reach the model.
+  // satisfies: {
+  //   values: { {{CAPTURE_PARAM}}: "{{STATE_SLOT}}.{{FIELD}}" },  // bundle name → dotted state path
+  //   mode: "consent",          // rides THIS action's confirmation gate; "silent" = ungated, executes at once
+  //   ask: (state) => "{{REUSE_CONSENT_QUESTION}}",   // consent only: the gate's read_back
+  //   elseVerdict: "{{NOTHING_CARRIED_VERDICT}}",     // consent only: the row answering when nothing usable is carried
+  // },
 
   // ─── Controller lifecycle (optional) ──────────────────────────────────── //
   controller: {
@@ -116,19 +154,17 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
     //                 owned, domain categories host-owned) replacing the
     //                 generic template. For gates whose reply taxonomy the
     //                 generic yes/correction contract cannot cover.
-    //   refuseProposal — (params, state) => result body | null: propose-time,
-    //                 STATE-aware refusal (no gate stored, no attempt spent).
+    //   refuseProposal — (params, state) => { verdict, data? } | null:
+    //                 propose-time, STATE-aware refusal answered through a
+    //                 DECLARED row (no gate stored, no attempt spent).
     // There is deliberately NO TTL — stale gates clear via
     // `abort_pending_input` or executor effects.
     requiresConfirmation: { maxAttempts: 3 },
   },
 
-  // ─── Downstream-slot invalidation (optional) ──────────────────────────── //
-  // Reset downstream slots when this action re-collects a watched slot with a
-  // DIFFERENT value (non-null → changed). Targets must accept `null`.
-  // invalidatesOnChange: {
-  //   {{WATCHED_SLOT}}: ["{{DOWNSTREAM_SLOT_A}}", "{{DOWNSTREAM_SLOT_B}}"],
-  // },
+  // Downstream-slot invalidation is NOT declared per action: staleness is a
+  // fact about the slots, whoever writes them. See `invalidations` in
+  // ../../config.ts.
 };
 
 // ─── Other lifecycle opts available on `controller` (use as needed) ──────── //
@@ -149,6 +185,7 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
 // Read pagination is a top-level ActionDef field (not a controller opt):
 //   pageable: true | "delegate" | { mode, pageSize, maxPageSize }
 // The runner injects `page`/`pageSize` and emits a uniform envelope. A
-// pageable action's paramsSchema MUST be a z.object. See executor-read-paginated.
+// pageable action's paramsSchema MUST be a PLAIN z.object (a refined schema
+// cannot be page-extended). See executor-read-paginated.
 //
 // See `references/agent-step-api.md` for the full lifecycle table.

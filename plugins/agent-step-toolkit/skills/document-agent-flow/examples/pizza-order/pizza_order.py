@@ -2,7 +2,7 @@
 
 Everything here is invented to exercise every feature of the generator — stage bands, a spine,
 a branch lane that rejoins it, a container with sub-steps and a cross-cutting sub-flow, back
-edges, self-loops, a side terminal, an optional step and a domain sheet. File paths in
+edges, self-loops, a side terminal, an optional step, a global exit and a domain sheet. File paths in
 `evidence` point into an imaginary `src/tools/pizza/` project.
 
     uvx --with openpyxl python3 ../../templates/flowdoc/build.py pizza_order.py --out out
@@ -18,9 +18,10 @@ RETRY_GRADED = (
     "(proposal, see Q1). Validation 4xx: no retry, name the field. Business refusal: no retry."
 )
 ITEM_ENGINE = (
-    "add_item{menuCode, size?, extras[]} · prereqs[orderTypeSet] · verdicts: "
-    "added✓→cart (a host slot, so an edit during the read-back cannot lose it) | unavailable✗ (summary names two alternatives) · "
-    "asks invalid_params→add_item.menuCode · captureBounces{max:2, ladder: menu_help}"
+    "add_item{item: text, size?: judged, extras[]} · prereqs[orderTypeSet] · verdicts: "
+    "added✓→cart (a host slot, so an edit during the read-back cannot lose it) | "
+    "unavailable✗ ask:self (summary names two alternatives) — an item the schema cannot use bounces "
+    "(invalid_params) and the caller owes it again: derived from the one capture field, nothing declared"
 )
 ACTIONS = "src/tools/pizza/actions"
 
@@ -46,7 +47,8 @@ STEPS = {
         "required": ["order type = delivery | pickup"],
         "completion": "Order type chosen.",
         "next": [{"to": "P1", "when": "type chosen"}],
-        "engine": "start_order{orderType} · no gate · verdicts: set✓→orderType — the journey lives in host slots; no flow is opened here",
+        "engine": "start_order{orderType: judged} · no gate · verdicts: set✓→orderType ask→identify_caller (the caller now "
+                  "owes the phone number) — the journey lives in host slots; no flow is opened here",
         "status": CHANGE, "status_note": ("Today add_item opens an `order` flow and keeps the cart in flow data "
                                           "(src/tools/pizza/actions/add_item/action.ts:14); an edit during the P4 read-back "
                                           "has to abort, which drops the flow and the cart with it."),
@@ -62,8 +64,9 @@ STEPS = {
             {"to": "P2B", "when": "pickup", "kind": BRANCH},
             {"to": "P1", "when": "number invalid → re-ask", "kind": FAIL},
         ],
-        "engine": "identify_caller{phone: digits} · prereqs[orderTypeSet] · asks invalid_params→identify_caller.phone:digits · "
-                  "captureBounces{max:2} · verdicts: known✓→customer | new✓→customer",
+        "engine": "identify_caller{phone: digits} · prereqs[orderTypeSet] · verdicts: known✓→customer | new✓→customer — "
+                  "no re-ask is declared: phone is the one capture field, so a number the schema rejects bounces "
+                  "(invalid_params) and the caller owes it again",
         "status": EXISTS,
     },
     "P2": {
@@ -71,15 +74,19 @@ STEPS = {
         "opens": "“Same address as last time — 12 Example Street?”",
         "required": ["street + number", "postcode"], "optional": ["floor / doorbell note"],
         "prefilled": ["last used address (from T1)"],
-        "completion": "Address complete and inside a delivery zone.",
+        "completion": "The caller confirms the address — the saved one, or the one just dictated — and it is inside a delivery zone.",
         "triggers": ["T2"],
         "next": [
             {"to": "P3", "when": "in zone"},
             {"to": "P2", "when": "out of zone → offer pickup", "kind": FAIL},
         ],
-        "engine": "set_address{street, postcode} · invalidatesOnChange{address:[quote]} · verdicts: in_zone✓→address | "
-                  "out_of_zone✗ (summary offers pickup)",
-        "status": CHANGE, "status_note": "Zone check exists but is called by the model after the fact; move it into set_address.",
+        "engine": "set_address{street: text, postcode: digits} · requiresConfirmation{readBack} · "
+                  "satisfies{street: customer.lastAddress.street, postcode: customer.lastAddress.postcode, mode: consent, "
+                  "elseVerdict: no_saved_address} · bounceCapture: postcode · verdicts: in_zone✓→address | "
+                  "out_of_zone✗ (summary offers pickup) | no_saved_address✗ ask→set_address.street · "
+                  "config: invalidations{address:[quote]}",
+        "status": CHANGE, "status_note": ("Zone check exists but is called by the model after the fact; move it into set_address. "
+                                          "The saved address is offered by prompt prose today; declare it as satisfies."),
     },
     "P2B": {
         "stage": "B", "title": "Pick the store", "sub": "nearest open stores",
@@ -109,7 +116,7 @@ STEPS = {
         "required": ["the caller's question"],
         "completion": "Question answered from the menu data, never from memory.",
         "next": [{"to": "P3", "when": "answered → back where the caller was"}],
-        "engine": "ask_menu{question} · no gate · verdicts: answered✓ | unknown✓ (summary says so plainly)",
+        "engine": "ask_menu{question: relay} · no gate · verdicts: answered✓ | unknown✓ (summary says so plainly)",
         "status": TBD, "open": ["Q3"],
     },
     "P4": {
@@ -137,7 +144,7 @@ STEPS = {
             {"to": "P6", "when": "card", "kind": BRANCH, "triggers": ["T5"]},
         ],
         "triggers": ["T5"],
-        "engine": "choose_payment{method} · card: startsFlow payment · issuesOtp{consumer_action: confirm_payment} · "
+        "engine": "choose_payment{method: judged} · card: startsFlow payment · issuesOtp{consumer_action: confirm_payment} · "
                   "verdicts: cash✓→payment | card✓ fx:otp_issued — the only flow in this agent spans the payment code",
         "status": NEW,
     },
@@ -224,13 +231,14 @@ OPEN = [
 FLOW = {
     "meta": {
         "slug": "pizza-order",
-        "engine_version": "3.1.0",
+        "engine_version": "4.0.0",
         "title": "Pizza order — phone agent step ladder",
         "subtitle": ("A synthetic example. A box is a step: it gathers until its completeness check passes. ⚡ chips are "
                      "the API calls fired when it closes, in order. Click any box for the details."),
         "intro": "The ladder a phone agent walks to take one pizza order, from greeting to delivery.",
         "source_of_truth": "the product owner's call walkthrough (synthetic).",
         "branch_label": "pickup / card branch",
+        "global_exits": ["an answer the tool still cannot use after two tries and one explanation → handed back (abandon)"],
         "rebuild": "uvx --with openpyxl python3 ../../templates/flowdoc/build.py pizza_order.py --out out",
     },
     "stages": [
@@ -254,12 +262,17 @@ FLOW = {
             ("Trigger chain", "One closing action per step; its executor runs the chain in order and names one verdict row."),
             ("Read-back before placing", "`requiresConfirmation{maxAttempts:3, readBack}` on `place_order`."),
             ("Payment code", "A short `payment` flow: `choose_payment` starts it and `issuesOtp`; `confirm_payment` `requiresOtp` and ends it."),
-            ("Re-ask a bad phone number", "`asks` + `captureBounces`, escalating through a ladder."),
+            ("What the caller owes next", "A row ask: `start_order`'s `set` row asks for the phone number (`ask→identify_caller`); `add_item`'s `unavailable` row asks for another item (`ask:self`)."),
+            ("Re-ask a bad phone number", "Nothing declared. `phone` is a `digits` capture, so a number the schema rejects bounces (`invalid_params`) and the re-ask is derived from the field."),
+            ("“Try again, then get a person”", "Nothing declared either: the engine's bounded patience. By default two unusable answers in a row bounce plainly, the next earns one explanation, the one after hands back `abandon` on `agent-step:escalated:<action>`. The counters reset as soon as an answer is accepted."),
+            ("The caller will not give the number", "The `note_refusal` control with kind `declined_or_cannot`: the model only names the kind. The engine has it explain once why the number is needed; a second refusal hands back `abandon`."),
+            ("“Same address as last time?”", "`satisfies` in `consent` mode on `set_address`: an empty call offers the saved address on the action's confirmation gate, a dictated address always wins, and a new customer gets the `no_saved_address` row with its ask."),
         ],
         "facts": [
             "A batch stops only on a ✗ verdict row, so a quote whose price changed must be a ✗ row — otherwise the order would be placed at the old price.",
-            "An address edit after the quote must void the quote: `invalidatesOnChange{address:[quote]}`.",
+            "An address edit after the quote must void the quote. Invalidation is one table on the config, not an option of `set_address`: `invalidations{address:[quote]}` nulls `quote` whenever any action's write changes `address`.",
             "While the read-back is pending, only `place_order`, `abort_pending_input`, the handoff or the repeat control may run — and abort clears the gate AND any open flow. An edit therefore aborts and re-enters P3; it is safe only because the cart is a host slot, not flow data.",
+            "Everything the caller hears is rendered by the host from state: a row's `summary`, the read-back, the handoff closing. The engine's own text is a model-facing `instruction`, never spoken. So `resolveClosingMessage` has a row for each ending the engine decides: `auto_handoff` (the TECH terminal), `agent-step:escalated:<action>` and `agent-step:malicious`.",
         ],
     },
     "decisions": [

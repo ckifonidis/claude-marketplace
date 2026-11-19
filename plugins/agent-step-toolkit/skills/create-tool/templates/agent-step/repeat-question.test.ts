@@ -18,6 +18,7 @@ import {
   type LibraryManagedSlots,
 } from "./state.js";
 import type { ExecutorRegistry } from "./types.js";
+import { callerTextParam } from "./capture.js";
 
 interface S extends LibraryManagedSlots {
   messages?: unknown[];
@@ -129,7 +130,7 @@ function makeOpts(repeatEnabled = true): {
       verifiers: {},
       handoff: {
         offTopic: { mode: "terminate" },
-        terminateMessage: "bye",
+        resolveClosingMessage: (_s: unknown, r: { context: string }) => r.context,
       },
     },
     calls,
@@ -425,8 +426,131 @@ test("AwaitingInputSchema accepts only a nonempty persisted confirmation read_ba
   assert.equal(AwaitingInputSchema.safeParse(eligibleGate("turn", "")).success, false);
 });
 
+// ─── Repeat at a STANDING ASK — the safety net for a stray call ────────────
+// The 2026-08-15 finding: the model called repeat_pending_question at the AFM
+// standing ask, hit the ineligibility ERROR, and the guards around that turn
+// re-tipped. The record now stores the host-rendered ask bytes, so a stray
+// call is SERVED byte-exact instead of erroring. The describe still tells the
+// model not to call here — this is disobedience handling, not a route.
 
+const ASK_TEXT = "Πείτε μου τον αριθμό του φορολογικού σας μητρώου.";
 
+function makeAskOpts(withRender: boolean) {
+  const config = defineConfig<"gated" | "ask_source" | "capture_value", never>({
+    tool: { name: "repeat_ask_test_tool", description: "repeat-at-ask test tool" },
+    actions: {
+      // A repeatable gate exists ONLY to activate the control.
+      gated: {
+        description: "confirm-gated change",
+        paramsSchema: z.object({ value: z.string() }),
+        prereqs: [],
+        controller: {
+          requiresConfirmation: {
+            maxAttempts: 3,
+            repeatReadBack: true,
+            readBack: () => "gated read back?",
+            replyContract: {
+              subject: "this question",
+              subjectNoun: "question",
+              executesLabel: "the change",
+              categories: ["Anything unclear → make no call and re-ask."],
+            },
+          },
+        },
+        verdicts: { ok: { ok: true, summary: "changed", body: { verdict: "ok" } } },
+      },
+      ask_source: {
+        description: "asks for the value",
+        paramsSchema: z.object({}),
+        prereqs: [],
+        verdicts: {
+          need_value: {
+            ok: false,
+            summary: "need it",
+            body: { verdict: "need_value" },
+            ask: withRender
+              ? { action: "capture_value", render: () => ASK_TEXT }
+              : { action: "capture_value" },
+          },
+        },
+      },
+      capture_value: {
+        description: "receives the value",
+        paramsSchema: z.object({
+          value: callerTextParam({
+            min: 1,
+            max: 100,
+            shortMessage: "too short",
+            longMessage: "too long",
+            describe: "the value, as spoken",
+          }),
+        }),
+        prereqs: [],
+        verdicts: { ok: { ok: true, summary: "captured", body: { verdict: "ok" } } },
+      },
+    },
+  });
+  return {
+    config,
+    stateSchema,
+    selectors: {
+      gated: (s: S) => s,
+      ask_source: (s: S) => s,
+      capture_value: (s: S) => s,
+    },
+    executors: {
+      gated: async () => ({ verdict: "ok" }),
+      ask_source: async () => ({ verdict: "need_value" }),
+      capture_value: async () => ({ verdict: "ok" }),
+    },
+    verifiers: {},
+  } as unknown as BuildAgentStepToolOptions<
+    S,
+    "gated" | "ask_source" | "capture_value",
+    never,
+    Record<string, (s: S) => unknown>
+  >;
+}
 
+test("a standing ask with stored ask_text is served by repeat — byte-exact, record untouched", async () => {
+  const opts = makeAskOpts(true);
+  const s0: S = { messages: [human("turn-1")] } as S;
+  const r1 = await runSteps(opts as never, [{ action: "ask_source", params: {} }], s0);
+  const record = (r1.committed as { awaitingInput?: AwaitingInput | null }).awaitingInput;
+  assert.equal(record?.kind, "dictation");
+  assert.equal((record as { ask_text?: string }).ask_text, ASK_TEXT);
 
+  const s1: S = { ...s0, ...(r1.committed as Partial<S>), messages: [human("turn-2")] } as S;
+  const r2 = await runSteps(
+    opts as never,
+    [{ action: REPEAT_PENDING_QUESTION_ACTION, params: {} }],
+    s1,
+  );
+  const entry = r2.body.results[0] as Record<string, unknown>;
+  assert.equal(entry.ok, true);
+  assert.equal(entry.read_back, ASK_TEXT);
+  assert.equal(typeof entry.read_back_directive, "string");
+  assert.equal(entry.ask_repeated, true);
+  // Non-locking record: the repeat neither clears nor rewrites it.
+  assert.ok(!("awaitingInput" in (r2.committed as Record<string, unknown>)));
+});
+
+test("a standing ask WITHOUT stored bytes stays ineligible for repeat", async () => {
+  const opts = makeAskOpts(false);
+  const s0: S = { messages: [human("turn-1")] } as S;
+  const r1 = await runSteps(opts as never, [{ action: "ask_source", params: {} }], s0);
+  const record = (r1.committed as { awaitingInput?: AwaitingInput | null }).awaitingInput;
+  assert.equal(record?.kind, "dictation");
+  assert.equal((record as { ask_text?: string }).ask_text, undefined);
+
+  const s1: S = { ...s0, ...(r1.committed as Partial<S>), messages: [human("turn-2")] } as S;
+  const r2 = await runSteps(
+    opts as never,
+    [{ action: REPEAT_PENDING_QUESTION_ACTION, params: {} }],
+    s1,
+  );
+  const entry = r2.body.results[0] as Record<string, unknown>;
+  assert.equal(entry.ok, false);
+  assert.equal(entry.error, "repeat_confirmation_not_available");
+});
 

@@ -16,7 +16,6 @@ import type { ControlActivation, AbortPolicy } from "../controls/contract.js";
 import { resolveAbortPolicy } from "../controls/contract.js";
 import { handoffParamsSchema } from "../handoff/contract.js";
 import { repeatReadBackEnabled } from "../interaction/confirmation.js";
-import type { LadderRegistry } from "../controls/note-refusal.js";
 
 /** Any action opted into a library-managed gate or flow lifecycle. */
 export function hasAnyLifecycleOpt(
@@ -48,7 +47,6 @@ export interface ActivationInputs<ActionName extends string> {
     | null
     | undefined;
   abortPolicy: AbortPolicy<ActionName> | undefined;
-  ladders: LadderRegistry | undefined;
   /** validate.ts runs before the lifecycle analysis and passes `true` so the
    *  reserved-name set is computed conservatively; plan.ts omits it and gets
    *  the real derivation. */
@@ -58,7 +56,6 @@ export interface ActivationInputs<ActionName extends string> {
 export function buildControlActivation<ActionName extends string>(
   inputs: ActivationInputs<ActionName>,
 ): ControlActivation {
-  const ladders = inputs.ladders ?? {};
   return {
     hasLifecycleOpts:
       inputs.conservativeLifecycle === true || hasAnyLifecycleOpt(inputs.actions),
@@ -72,7 +69,5 @@ export function buildControlActivation<ActionName extends string>(
         repeatReadBackEnabled(action.controller?.requiresConfirmation),
       )
       .map(([name]) => name),
-    ladders,
-    laddersEnabled: Object.keys(ladders).length > 0,
   };
 }

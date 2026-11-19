@@ -67,9 +67,10 @@ async function runCompiled<T extends LibraryManagedSlots>(
 
   const refusal = admitBatch(plan, userSteps, st.view, currentCallerTurnId);
   if (refusal) {
+    // Admission refusals are engine directives — instruction register.
     return {
       body: {
-        summary: refusal.entry.summary as string,
+        instruction: refusal.entry.instruction as string,
         results: [refusal.entry],
         failed_at: 0,
       },
@@ -96,7 +97,23 @@ export async function runSteps<
   userSteps: { action: string; params: unknown }[],
   initialState: T,
 ): Promise<RunResult<T>> {
+  validateOnce(opts);
   return runCompiled(compilePlan(opts), userSteps, initialState);
+}
+
+/** Configs already validated in this process. `runSteps` is the seam every
+ *  test harness uses, and it used to skip `validateConfig` entirely — so a
+ *  mistake the validator exists to catch (an ask to a param that is not a caller
+ *  capture, a row-site ask on a terminal row, a missing state channel) surfaced only
+ *  when the real tool was built, i.e. at `npm run dev` rather than in the
+ *  suite that exercises the wiring. Validation is idempotent and pure, so
+ *  running it once per opts identity costs nothing on the hot path. */
+const VALIDATED = new WeakSet<object>();
+
+function validateOnce(opts: object): void {
+  if (VALIDATED.has(opts)) return;
+  validateConfig(opts as never);
+  VALIDATED.add(opts);
 }
 
 /** Public entry point. Validates the wiring at construction time, compiles the
@@ -111,7 +128,7 @@ export function buildAgentStepTool<
   PrereqName extends string,
   Selectors extends Record<ActionName, Selector<T>>,
 >(opts: BuildAgentStepToolOptions<T, ActionName, PrereqName, Selectors>) {
-  validateConfig(opts as never);
+  validateOnce(opts);
   const plan = compilePlan(opts);
   const InputSchema = buildStepSchema(plan);
   // The tool is bound with the JSON-SCHEMA rendering of the input schema, not
@@ -156,9 +173,28 @@ export function buildAgentStepTool<
       // to this tool call id. The state annotation's `messages` reducer
       // appends; we never merge intermediate ToolMessages from individual
       // steps because there's only one tool call from LangGraph's POV.
+      //
+      // `_debug` never reaches the model: raw Zod issues and executor throw
+      // text are stripped from the serialized content and carried on the
+      // ToolMessage's `artifact` instead (trace-visible, model-invisible). A
+      // refinement message carrying a number measurably re-leaks the
+      // digit-count pathology when it rides the content, so the strip is the
+      // library's barrier, not a host convention. `runSteps` (the test seam)
+      // still returns the body WITH `_debug`.
+      const debug: string[] = [];
+      const wireResults = body.results.map((entry) => {
+        if (entry._debug === undefined) return entry;
+        const { _debug, ...rest } = entry;
+        debug.push(String(_debug));
+        return rest;
+      });
       const update: Record<string, unknown> = { ...committed };
       update.messages = [
-        new ToolMessage({ content: JSON.stringify(body), tool_call_id: toolCallId }),
+        new ToolMessage({
+          content: JSON.stringify({ ...body, results: wireResults }),
+          tool_call_id: toolCallId,
+          ...(debug.length > 0 ? { artifact: { debug } } : {}),
+        }),
       ];
       return new Command({ update });
     },

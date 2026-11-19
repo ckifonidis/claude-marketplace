@@ -21,19 +21,20 @@ The embedded runner. Replaced byte-for-byte from the new source; never hand-merg
 the library is a TREE (five phase-module subdirectories) — replace recursively, not per-file.
 
 Top level (`skills/create-tool/templates/agent-step/`):
-- `types.ts` — the authoring contracts (`VerdictDef` / `DeclaredExecutorResult` / `ExecutorEffect`, `ActionDef` (verdicts/asks/captureBounces), `ControllerHooks`, `ConfirmationOpts` (+ `GateContractSpec`), `DictationAsk`, registries)
+- `types.ts` — the authoring contracts (`VerdictDef` (incl. the row `ask`: `RowAsk`) / `DeclaredExecutorResult` / `ExecutorEffect`, `ActionDef` (verdicts/satisfies/bounceCapture), `AgentStepConfig` (+ config-level `invalidations`), `ControllerHooks`, `ConfirmationOpts` (+ `GateContractSpec`), `AskContractSpec`, `SatisfiesSpec` / `SatisfiedSource`, registries)
 - `state.ts` — the library-managed slot schemas + the slot table (`AGENT_STEP_SLOT_META`) + spreadable fragments (`agentStepZodShape`, `agentStepStateSpec`) and derived views (`agentStepInternalSlotMask`, `agentStepTaskScopedSlots`, `agentStepRunnerOwnedSlots`)
 - `runner.ts` — the thin public entry points (`buildAgentStepTool`, `runSteps`)
-- `messages.ts` — runner-emitted system `summary` strings + model-facing wire contracts (neutral English defaults; host-overridable via `BuildAgentStepToolOptions.messages`)
-- `define-config.ts`, `index.ts` (the public surface), `paginate.ts`, `capture.ts` (caller capture primitives incl. text/relay/XOR builders)
-- Tests: `runner.test.ts`, `handoff.test.ts`, `hardening.test.ts`, `paginate.test.ts`, `capture.test.ts`, `capture-bounce.test.ts`, `repeat-question.test.ts`, `note-refusal.test.ts`, `dictation.test.ts`, `verdict-map.test.ts`, `action-describe.test.ts`, `gate-contract.test.ts`, `zod-state.test.ts` (isolation test: merger derived from a Zod state schema)
+- `engine-text.ts` — every string the engine emits to the model (`ENGINE_TEXT`): model-facing `instruction` text, engine-owned, NO host override (replaced `messages.ts` / the `messages` option in 4.0.0)
+- `tolerances.ts` — the four engine tolerances: measured defaults, the `AGENT_STEP_*` environment variable names (`TOLERANCE_ENV`), `resolveTolerances`; the only module that reads the environment. Mirrored by `templates/project/env.example.template` (the commented variable block) and `agent-step-api.md` `<escalation>` (the Tolerances table)
+- `define-config.ts`, `index.ts` (the public surface), `paginate.ts`, `capture.ts` (param builders incl. text/judged/relay/XOR + the field-kind registry)
+- Tests: `runner.test.ts`, `handoff.test.ts`, `hardening.test.ts`, `declare-hardening.test.ts`, `paginate.test.ts`, `capture.test.ts`, `field-kinds.test.ts`, `repeat-question.test.ts`, `escalation.test.ts`, `tolerances.test.ts`, `satisfies.test.ts`, `engine-text.test.ts`, `dictation.test.ts`, `verdict-map.test.ts`, `action-describe.test.ts`, `gate-contract.test.ts`, `zod-state.test.ts` (isolation test: merger derived from a Zod state schema)
 - `VERSION` — rewrite to the new version string.
 
 Phase modules (internal layout; hosts import only from `index.ts`):
-- `compile/` — `validate.ts`, `plan.ts` (`BuildAgentStepToolOptions`), `activation.ts`, `schema.ts`, `describe.ts`, `action-describe.ts`, `gate-contract.ts`, `protocol.ts`, `state-schema.ts`
-- `run/` — `admission.ts`, `planning.ts`, `execution.ts` (verdict-row normalization), `finalize.ts` (standing-ask lifecycle), `batch-state.ts`, `value-equal.ts`
-- `interaction/` — `confirmation.ts`, `otp.ts`, `match.ts`, `flow.ts`, `dictation.ts`, `turn-identity.ts` (owns `resolveCallerTurnId`)
-- `controls/` — `contract.ts`, `registry.ts`, `abort.ts`, `request-handoff.ts`, `repeat-question.ts`, `note-refusal.ts` (+ `climbLadder`)
+- `compile/` — `validate.ts`, `plan.ts` (`BuildAgentStepToolOptions`), `activation.ts`, `schema.ts`, `describe.ts`, `action-describe.ts`, `gate-contract.ts`, `ask-contract.ts`, `asks.ts` (row-ask resolution), `protocol.ts`, `state-schema.ts`
+- `run/` — `admission.ts`, `planning.ts`, `execution.ts` (verdict-row normalization), `finalize.ts` (standing-ask lifecycle), `satisfies.ts` (state-satisfied inputs), `batch-state.ts`, `value-equal.ts`
+- `interaction/` — `confirmation.ts`, `otp.ts`, `match.ts`, `flow.ts`, `dictation.ts`, `escalation.ts` (bounded patience + the structural handoff contexts), `turn-identity.ts` (owns `resolveCallerTurnId`)
+- `controls/` — `contract.ts`, `registry.ts`, `abort.ts`, `request-handoff.ts`, `repeat-question.ts`, `note-refusal.ts` (the refusal kinds)
 - `handoff/` — `contract.ts`, `node.ts`, `delegate-client.ts`
 
 A source repo may carry an `UPSTREAM.md` (its own porting note) — do NOT copy it into the toolkit.
@@ -51,8 +52,8 @@ signatures and the wire-up, so any change to the executor signature, the registr
 `buildAgentStepTool`'s options ripples here.
 
 - `skills/create-tool/templates/names.ts.template` — the types-only ActionName/PrereqName leaf
-- `skills/create-tool/templates/action.ts.template` — the per-action declaration (schema, verdict rows, asks, captureBounces, controller); encodes `VerdictDef`/`DictationAsk`/`ConfirmationOpts` authoring
-- `skills/create-tool/templates/config.ts.template` — the assembler
+- `skills/create-tool/templates/action.ts.template` — the per-action declaration (schema with field kinds, verdict rows with their asks, satisfies/bounceCapture, controller); encodes `VerdictDef`/`RowAsk`/`SatisfiesSpec`/`ConfirmationOpts` authoring
+- `skills/create-tool/templates/config.ts.template` — the assembler + the config-level `invalidations` table
 - `skills/create-tool/templates/tool-index.ts.template`  — the `buildAgentStepTool({...})` call + registries
 - `skills/create-tool/templates/state-selector.ts.template` — the per-action `getSlice` + `Slice` shape
 - `skills/create-tool/templates/executor-read.ts.template`
@@ -64,6 +65,9 @@ signatures and the wire-up, so any change to the executor signature, the registr
 - `skills/create-tool/templates/tool-test-setup.ts.template` — wires `toolOpts` (config + registries) mirroring `index.ts`
 - `skills/create-tool/templates/tool-sandbox-test.ts.template` — calls `runSteps(toolOpts, steps, state)` directly, so it mirrors that public entry point's signature and the result-body shape it asserts on. (`prompt-input-test.ts.template` imports only from the shared harness, so the Tier-3 harness templates cover it.)
 - `skills/create-tool/templates/backend-env.ts.template`, `skills/create-tool/templates/backend-client.ts.template` (rarely — only if transport contract changes)
+- `skills/create-tool/templates/plan.md.template` — the per-tool plan the workflow fills before any file is written; its lifecycle-token table spells the controller opts (`startsFlow`, `requiresOtp`, `requiresMatch`, `soleStep`, …) and its Verifiers table spells the denial shape (`{ instruction, error }`), so a renamed controller opt or a changed `Verifier.denial` ripples here
+- `skills/create-tool/templates/prompt-input-test.ts.template` — covered by the Tier-3 harness templates (see above); listed so the tier matches the directory
+- `skills/create-tool/templates/findings.md.template`, `skills/create-tool/templates/tool-seed.json.template` — NOT library mirrors (the test-findings record and the sandbox seed); a library bump does not touch them
 
 **Touched by:** executor signature changes, registry shape/typing changes, new/removed
 `buildAgentStepTool` options, new per-action files (e.g. a new `stateSelector.ts` sibling means a
@@ -76,13 +80,17 @@ new template + a new import line in `tool-index.ts.template`).
 - `skills/create-tool/templates/project/package.json.template` — compare the new source project's `package.json` deps (`@langchain/*`, `zod`, `tsx`, `typescript`, etc.) and bump to match.
 - `skills/create-tool/templates/project/test-harness-sandbox.ts.template`, `…/test-harness-prompt-input.ts.template` — if `runSteps` / the harness helper surface changed.
 - `skills/create-tool/templates/project/prompt.ts.template`, `agent.ts.template`, `graph.ts.template` — only if the graph-wiring or prompt-structure contract changed.
+- `skills/create-tool/templates/project/cli.ts.template` — the streaming CLI; it declares its own `StepResult` / tool-envelope shapes to print the trace, so a change to the result body (e.g. `summary` vs `instruction`, a renamed envelope field) ripples here.
+- `skills/create-tool/templates/project/env.example.template` — the handoff variables the scaffold reads AND the commented `AGENT_STEP_*` tolerance block, which mirrors `tolerances.ts` (`TOLERANCE_ENV`, the defaults and ranges); update when an environment variable the library or the scaffold reads is added, renamed or removed.
+- `skills/create-tool/templates/project/test-harness-index.ts.template`, `tools-index.ts.template` — barrels; touched only if the harness surface or the tool-registration shape changes.
+- NOT library mirrors (a library bump does not touch them): `llm-env.ts.template`, `cli-env-init.ts.template`, `Dockerfile.template`, `build_and_push.sh.template`, `gitignore.template`, `langgraph.json.template`, `tsconfig.json.template`.
 
-**Touched by:** state-spec changes, dependency bumps, runner/harness API changes.
+**Touched by:** state-spec changes, dependency bumps, runner/harness API changes, result-body changes (the CLI), environment variables the library reads.
 </tier>
 
 <tier name="4_reference_docs">
 ## Tier 4 — Reference docs (hand-edit; these ARE the written contract)
-- `skills/create-tool/references/agent-step-api.md` — the canonical contract: runner signature, type listings (`Executor`, `ExecutorRegistry`, `Verifier`, `ActionDef`, `VerdictDef`, `DeclaredExecutorResult`, `ControllerHooks`, `GateContractSpec`, `DictationAsk`, lifecycle), the engine-composed model surface, construction-time checks. The highest-fidelity doc; update it for ANY public-surface change.
+- `skills/create-tool/references/agent-step-api.md` — the canonical contract: runner signature, type listings (`Executor`, `ExecutorRegistry`, `Verifier`, `ActionDef`, `VerdictDef`, `DeclaredExecutorResult`, `ControllerHooks`, `GateContractSpec`, `RowAsk`, `AskContractSpec`, `SatisfiesSpec`, lifecycle), the engine-composed model surface, construction-time checks. The highest-fidelity doc; update it for ANY public-surface change.
 - `skills/create-tool/references/tool-directory-layout.md` — canonical `src/tools/<name>/` layout, per-file responsibility, naming rules, file-creation order, imports convention. Update when files are added/removed per action or the signatures in the per-file notes change.
 - `skills/create-tool/references/executor-patterns.md` — read vs mutation executor shapes; update when the executor signature or state-update shape changes.
 - `skills/create-tool/references/state-and-prompt-integration.md` — how `src/state.ts` / `src/prompt.ts` / `src/tools/index.ts` are patched; update if state wiring changes.
@@ -97,6 +105,7 @@ new template + a new import line in `tool-index.ts.template`).
 ## Tier 5 — Workflows (hand-edit)
 - `skills/create-tool/workflows/create-tool.md` — file-creation order, the per-file write steps, the wiring instructions. Update if a new per-action file exists or wire-up changes.
 - `skills/create-tool/workflows/bootstrap-project.md` — the agent-step copy list (Step 5) and the file-list section; update if Tier 1 files were added/removed.
+- `skills/create-tool/workflows/port-project.md` — orchestration only: it reads the source project as a domain spec and delegates to the two workflows above, naming no library types. Update only if the bootstrap / create-tool steps it points at are renumbered or renamed.
 
 **Touched by:** new/removed per-action files, new library files, changed wire-up steps.
 </tier>

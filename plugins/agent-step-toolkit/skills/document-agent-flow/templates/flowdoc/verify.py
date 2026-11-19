@@ -5,9 +5,9 @@
 
 Checks (each prints PASS / FAIL / SKIP with the observed value; exit 1 on any FAIL):
   build        the spec validates and builds; a second build is byte-identical (deterministic layout)
-  validator    break tests: unknown node, unknown trigger, bad status, a removed engine term, an
-               `exists` claim without evidence, a trigger riding no edge, a missing or malformed
-               engine version — each must be refused
+  validator    break tests: unknown node, unknown trigger, bad status, a removed engine term (one
+               retired before 4.0.0, one retired by it), an `exists` claim without evidence, a
+               trigger riding no edge, a missing or malformed engine version — each must be refused
   layout       no two nodes overlap, everything sits on the canvas, every edge has a path, no edge
                passes through a box, every label and chip found a free spot
   xlsx         read back: sheet names, row counts, column A equals the step order
@@ -95,6 +95,8 @@ def check_validator(r: Report, flow: dict) -> None:
         "unknown trigger": (lambda f: f["steps"][first]["triggers"].append("__T_unknown__"), "unknown trigger"),
         "bad status": (lambda f: f["steps"][first].update(status="done-ish"), "bad status"),
         "retired engine term": (lambda f: f["steps"][first].update(engine="x · ExecutorResult"), "does not have"),
+        "engine term retired in 4.0.0": (lambda f: f["steps"][first].update(engine="x{y: digits} · asks invalid_params→x.y"),
+                                         "use a row ask"),
         "claim without evidence": (_strip_evidence, "needs 'evidence'"),
         "trigger on no edge": (_orphan_trigger, "rides no outcome"),
         "missing engine version": (lambda f: f["meta"].pop("engine_version", None), "missing 'engine_version'"),

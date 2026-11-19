@@ -18,8 +18,7 @@
 
 import type { ControllerHooks, StepResult } from "../types.js";
 import type { AwaitingInput } from "../state.js";
-import type { SystemMessages } from "../messages.js";
-import { formatMessage } from "../messages.js";
+import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
 
 /** Refusal for a `requiresOtp` action running with no OTP gate pending for it
  *  in the LIVE view, or `null` when the gate is satisfied. */
@@ -27,7 +26,6 @@ export function refuseOtpNotPending(
   actionName: string,
   controller: ControllerHooks | undefined,
   liveAwaiting: AwaitingInput | null,
-  msgs: SystemMessages,
 ): StepResult | null {
   if (!controller?.requiresOtp) return null;
   const gated =
@@ -35,8 +33,12 @@ export function refuseOtpNotPending(
     liveAwaiting.kind === "otp" &&
     liveAwaiting.for_action === actionName;
   if (gated) return null;
-  const summary = formatMessage(msgs.otp_not_pending, { action: actionName });
-  return { action: actionName, ok: false, summary, error: "otp_not_pending" };
+  return {
+    action: actionName,
+    ok: false,
+    instruction: formatMessage(ENGINE_TEXT.otp_not_pending, { action: actionName }),
+    error: "otp_not_pending",
+  };
 }
 
 /** Refusal for an `issuesOtp` action while a double-entry match is still
@@ -56,7 +58,6 @@ export function refuseOtpIssueWhileMatchPending(
   actionName: string,
   controller: ControllerHooks | undefined,
   liveAwaiting: AwaitingInput | null,
-  msgs: SystemMessages,
 ): StepResult | null {
   if (!controller?.issuesOtp) return null;
   if (!liveAwaiting || liveAwaiting.kind !== "match") return null;
@@ -67,9 +68,13 @@ export function refuseOtpIssueWhileMatchPending(
   // Refusing it would forbid the legitimate "confirming the value sends the
   // code" shape — one action that consumes the repeat AND issues.
   if (liveAwaiting.for_action === actionName) return null;
-  const summary = formatMessage(msgs.otp_blocked_match_pending, {
+  return {
     action: actionName,
-    match_action: liveAwaiting.for_action,
-  });
-  return { action: actionName, ok: false, summary, error: "otp_blocked_match_pending" };
+    ok: false,
+    instruction: formatMessage(ENGINE_TEXT.otp_blocked_match_pending, {
+      action: actionName,
+      match_action: liveAwaiting.for_action,
+    }),
+    error: "otp_blocked_match_pending",
+  };
 }

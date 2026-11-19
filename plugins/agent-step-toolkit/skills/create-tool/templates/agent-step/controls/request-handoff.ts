@@ -18,7 +18,7 @@ import {
 } from "../handoff/contract.js";
 import type { ControlAction, ControlOutcome, ControlRunContext } from "./contract.js";
 import { requestHandoffPatch } from "../run/batch-state.js";
-import { formatMessage } from "../messages.js";
+import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
 
 export const requestHandoffControl: ControlAction = {
   name: HANDOFF_ACTION,
@@ -39,7 +39,7 @@ export const requestHandoffControl: ControlAction = {
     params: unknown,
     ctx: ControlRunContext<T>,
   ): ControlOutcome {
-    const { state, msgs } = ctx;
+    const { state } = ctx;
     let request: HandoffRequest;
     try {
       // The host's narrower model schema is the authority for this actuator.
@@ -56,7 +56,9 @@ export const requestHandoffControl: ControlAction = {
       const entry: StepResult = {
         action: HANDOFF_ACTION,
         ok: false,
-        summary: msgs.invalid_params,
+        instruction: formatMessage(ENGINE_TEXT.control_invalid_params, {
+          action: HANDOFF_ACTION,
+        }),
         error: "invalid_params",
         _debug: `Invalid params for "${HANDOFF_ACTION}": ${message}`,
       };
@@ -65,11 +67,12 @@ export const requestHandoffControl: ControlAction = {
     state.apply(
       requestHandoffPatch<T>(request),
     );
-    const summary = formatMessage(msgs.handoff_requested, { reason: request.reason });
     const entry: StepResult = {
       action: HANDOFF_ACTION,
       ok: true,
-      summary,
+      instruction: formatMessage(ENGINE_TEXT.handoff_requested, {
+        reason: request.reason,
+      }),
       handoff_requested: true,
       reason: request.reason,
     };

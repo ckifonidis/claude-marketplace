@@ -6,6 +6,8 @@ This is the runner contract the new tool consumes. The library lives at `src/age
 Since 2.0.0 the library is laid out as phase modules — `compile/` (validate → normalize → model-facing schema/description/contract composers), `run/` (admission → planning → execution → finalize), `interaction/` (one policy module per gate kind), `controls/` (the library-owned model-facing actions), `handoff/` (contract + graph node + delegate transport). **Hosts import ONLY from `src/agent-step/index.js`** — the module layout is internal and free to move; everything a tool consumes is re-exported at the index.
 
 Since 3.0.0 the authoring model is **declarative**: every executor outcome is a declared verdict row (`ActionDef.verdicts`), executors return the row's code plus dynamic data (`DeclaredExecutorResult`), and the engine composes the wire body, the action descriptions, the gate reply contracts, and the protocol prompt fragment from the declarations. The model-facing English the engine composes is measured surface — hosts pin it in goldens; a library upgrade that moves a composed byte owes a re-measurement.
+
+Since 4.0.0 **every sentence has one owner, and the wire says which** (see the `registers` section): engine text is a model-facing `instruction` the engine owns outright — there is no wording override; caller-audible text is rendered by the host from state and rides `summary` / `read_back` / `ask_text`. Params declare what they are through the capture builders' field kinds, standing asks sit on the verdict row that asks, and bounded patience is universal — nothing is declared per action; its numbers are deployment-level tolerances with measured defaults and `AGENT_STEP_*` environment overrides (the `caller_digit_capture`, `standing_asks` and `escalation` sections).
 </overview>
 
 <runner_signature>
@@ -18,15 +20,17 @@ export const myTool = buildAgentStepTool({
   selectors,                       // SelectorRegistry<T, ActionName> — one per action
   executors,                       // ExecutorRegistry<T, typeof selectors>
   verifiers,                       // VerifierRegistry<T>
-  handoff: handoffSpec,            // OPTIONAL — opt into the built-in request_handoff (see <handoff>)
-  ladders: { ... },                // OPTIONAL (3.0.0) — engine-owned escalation ladders behind the
-                                   // note_refusal control; also the escalation target for
-                                   // captureBounces. Requires `handoff` (see <ladders>)
+  handoff: handoffSpec,            // OPTIONAL — opt into the built-in request_handoff (see <handoff>);
+                                   // also switches on bounded patience — the note_refusal control and
+                                   // the capture-bounce escalation (see <escalation>; its numbers are
+                                   // deployment-level AGENT_STEP_* tolerances, not options)
   abortPolicy: { ... },            // OPTIONAL (2.5.0) — narrow the built-in abort control to an
                                    // engine-enforced in-domain transition; omit for the legacy
                                    // permissive behaviour (see <conventions> §3)
   getCallerTurnId: (state) => id,  // OPTIONAL — stable caller-turn identity resolver (see <caller_turn_identity>)
-  messages: { ... },               // OPTIONAL — override the runner's own system summary strings (see <system_messages>)
+  askContract: { categories },     // OPTIONAL (4.0.0) — the host's reply categories spliced into the
+                                   // engine's standing-ask contract frame (see <standing_asks>). There
+                                   // is NO override for engine text itself (see <registers>)
   backendFailureCodes: [...],      // OPTIONAL — extra failure codes for the auto-handoff counter;
                                    // rows with `backendFailure: true` are derived automatically (see <auto_handoff>)
 });
@@ -46,6 +50,10 @@ Returns a LangChain `StructuredTool` ready to register in `src/tools/index.ts`.
 interface AgentStepConfig<ActionName extends string, PrereqName extends string, T = unknown> {
   tool: { name: string; description: string };
   actions: Record<ActionName, ActionDef<PrereqName, T>>;
+  invalidations?: Record<string, string[]>;
+                                   // (4.0.0) ONE downstream-invalidation table for the whole config:
+                                   // watched slot → slots reset to null when ANY executor's stateUpdate
+                                   // CHANGES it. See <invalidations>.
 }
 ```
 
@@ -55,7 +63,7 @@ interface AgentStepConfig<ActionName extends string, PrereqName extends string, 
 
 The third type param `T` is the host state — it types each row's static `stateUpdate` (`VerdictDef<T>`), so a typo'd slot fails compilation instead of silently dropping at the patch merger.
 
-There is **no top-level `mutations` map**. All per-action behavioural opts (confirmation / OTP / match / flow lifecycle, batch-shape flags) live inline on each action under `ActionDef.controller`. Downstream-slot invalidation lives inline under `ActionDef.invalidatesOnChange`.
+There is **no top-level `mutations` map**. All per-action behavioural opts (confirmation / OTP / match / flow lifecycle, batch-shape flags) live inline on each action under `ActionDef.controller`. Downstream-slot invalidation is the one config-level table, `invalidations` — staleness is a fact about the slots, not about which action wrote them.
 
 ## ActionDef
 
@@ -67,24 +75,23 @@ interface ActionDef<PrereqName extends string, T = unknown> {
   summary?: string;                // optional one-line label for the tool-level action index. Add one
                                    // when the action NAME isn't self-explanatory to the model. Omit it
                                    // and the index just lists the action name alone.
-  paramsSchema: z.ZodTypeAny;      // params the LLM must send
+  paramsSchema: z.ZodTypeAny;      // params the LLM must send. Declare each field with a capture
+                                   // builder so it carries a FIELD KIND (see <caller_digit_capture>);
+                                   // a value-shape keyword (pattern / minLength / maxLength / format)
+                                   // in the model-facing schema fails construction.
   prereqs: PrereqName[];           // state predicates checked before invoking executor
   verdicts?: Record<string, VerdictDef<T>>;
                                    // (3.0.0) declared verdict rows — the executor's RESULT SPACE.
                                    // Row keys are LOOKUP codes the executor names in its return;
-                                   // an undeclared verdict fails loudly. See <declared_verdicts>.
-  asks?: Record<string, DictationAsk>;
-                                   // (3.0.0) standing asks keyed by verdict-or-error code — when the
-                                   // batch's FINAL entry carries a listed code, the engine records the
-                                   // mapped ask as the `dictation` awaiting state. See <standing_asks>.
-  captureBounces?: CaptureBouncePolicy;
-                                   // (3.0.0) bound consecutive `invalid_params` bounces; escalate
-                                   // through a configured ladder when spent. See <ladders>.
-  invalidatesOnChange?: Record<string, string[]>;
-                                   // keys are slots this action may write; values are downstream
-                                   // slots to reset to null when the watched slot's value CHANGES
-                                   // (non-null → different value). First-time set / same-value
-                                   // writes do NOT fire. See <invalidates_on_change>.
+                                   // an undeclared verdict fails loudly, and an action with NO rows
+                                   // fails construction. A row's `ask` is the standing ask that
+                                   // outcome leaves behind. See <declared_verdicts>, <standing_asks>.
+  satisfies?: SatisfiesSpec;       // (4.0.0) state-satisfied inputs: an EMPTY call (no capture field
+                                   // supplied) may be answered from values state already carries.
+                                   // See <satisfies>.
+  bounceCapture?: string;          // (4.0.0) ONLY for an action with SEVERAL capture fields: the one
+                                   // a malformed-capture bounce leaves owed. Derived (and forbidden)
+                                   // with a single capture. See <escalation>.
   pageable?: PageableSpec;         // opt a LIST read into uniform pagination. See <pagination>.
   controller?: ControllerHooks;    // lifecycle hooks coordinated by the runner (confirmation /
                                    // OTP / match / flow / batch-isolation). Omit for plain reads.
@@ -103,9 +110,10 @@ effects.
 interface VerdictDef<T = unknown> {
   ok: boolean;                     // batch-continuation flag (StepResult.ok) for this verdict
   summary: string | ((state: unknown, data: Record<string, unknown>) => string);
-                                   // the body `summary` — static, or a renderer over the CURRENT
-                                   // state view (language-keyed catalogs; the readBack division)
-                                   // plus the executor's `data` (interpolated summaries)
+                                   // the body `summary` — CALLER-AUDIBLE host text the model relays
+                                   // faithfully. Static, or a renderer over the CURRENT state view
+                                   // (language-keyed catalogs; the readBack division) plus the
+                                   // executor's `data` (interpolated summaries)
   body?: Record<string, unknown | ((data: Record<string, unknown>) => unknown)>;
                                    // the remaining body fields, composed IN DECLARATION ORDER after
                                    // `summary` (declaration order IS wire order — a converted action
@@ -116,6 +124,9 @@ interface VerdictDef<T = unknown> {
   effects?: ExecutorEffect[];      // effects applied for this verdict, AHEAD of any executor-supplied
                                    // ones — e.g. the terminal handoff that must never fork from the
                                    // outcome written in stateUpdate.
+  ask?: RowAsk;                    // (4.0.0) the standing ask this outcome leaves behind: "self", or
+                                   // { action, param?, render? }. Omit when the outcome owes nothing.
+                                   // Not allowed on a terminal row. See <standing_asks>.
   backendFailure?: boolean;        // marks this row's `body.error` code as a backend failure for the
                                    // auto-handoff counter (derives backendFailureCodes). Requires
                                    // body.error to be a STATIC string (validated at construction).
@@ -134,7 +145,9 @@ interface DeclaredExecutorResult<T> {
 
 **Authoring rule:** STATIC doctrine strings live on the row (one authority); only genuinely
 branch-dependent values — diagnostics, a miss reason chosen at the decision site, an interpolated
-label — ride the executor's `data`. Several row keys may share one wire `verdict` (via `body.verdict`)
+label — ride the executor's `data`. Keep the two registers apart on the row: `summary` is what the
+caller may hear; what the model should DO about the outcome is doctrine and rides a `body` field
+(e.g. `reason`). Several row keys may share one wire `verdict` (via `body.verdict`)
 when their summaries differ. A terminal verdict declares its `request_handoff` effect ON THE ROW, so
 the handoff can never fork from the outcome `stateUpdate` writes.
 
@@ -195,11 +208,12 @@ interface ConfirmationOpts {
                                    // action's proposals with an engine-COMPOSED action-specific one.
                                    // See <gate_contracts>.
   refuseProposal?: (params: Record<string, unknown>, state: unknown)
-    => ({ summary: string; error: string } & Record<string, unknown>) | null | undefined;
+    => { verdict: string; data?: Record<string, unknown> } | null | undefined;
                                    // (2.5.0) propose-time, STATE-aware refusal. Runs on the
                                    // propose/re-propose path AFTER params parse and BEFORE anything
-                                   // commits: no gate stored, no attempt spent. Return a result body
-                                   // to refuse; null/undefined to proceed.
+                                   // commits: no gate stored, no attempt spent. (4.0.0) Return the
+                                   // DECLARED verdict row that answers (plus the `data` its function
+                                   // fields read) to refuse; null/undefined to proceed.
 }
 ```
 
@@ -220,7 +234,9 @@ must answer on a LATER turn.
 **`refuseProposal`** fills the lifecycle gap between the params schema (shape, no state access) and the
 executor (state, but runs only AFTER consent): a schema-valid, state-impossible proposal is answered
 immediately, storing nothing and burning nothing. Keep it a pure function of (params, state) and mirror
-the executor's own consumption rule so the two can never disagree.
+the executor's own consumption rule so the two can never disagree. The refusal is a ROW like every
+other outcome — the body, its register and its standing ask come from the declaration, not from a
+hand-built object.
 
 There is deliberately **no TTL**: the runner times nothing out. Stale gates clear via `abort_pending_input` or via backend signals the executor surfaces as `clear_awaiting_input` / `abort_flow` effects.
 
@@ -252,23 +268,24 @@ interface GateContractSpec {
 }
 ```
 
-Empty/omitted keeps the runner's generic template (`SystemMessages.confirm_reply_contract`). A
+Empty/omitted keeps the runner's generic template (`ENGINE_TEXT.confirm_reply_contract`). A
 non-empty spec is the SOLE authority for that action — the generic template is not concatenated, so
 declare every reply class you want handled, including the generic yes/correction ones (the frame's yes
-clause covers the yes).
+clause covers the yes). A snake_case name in double quotes inside a category must be a declared action
+or control — construction fails otherwise (write wire fields in backticks).
 
 ## Verifier
 
 ```ts
 interface Verifier<T> {
   check: (state: T) => boolean;
-  denial: { summary: string; error: string };
+  denial: { instruction: string; error: string };
 }
 ```
 
-Self-contained: the predicate AND the denial body live together in one file. The denial body is what appears in the result envelope when the prereq fails.
+Self-contained: the predicate AND the denial body live together in one file. The denial body is what appears in the result envelope when the prereq fails. Its `instruction` is **model-facing host doctrine** in English (`Run "verify_customer" first.`) — it tells the model what to do, never the caller what to hear, and rides the refused entry's `instruction` field (see `<registers>`).
 
-The `check` predicate is a snapshot of **journey progress** — "is the user identified?", "is an entity selected?" — not a record of step ordering. Gate on *where the user is*, never on *what ran first*. The companion mechanism for keeping that progress coherent when an upstream slot changes is `invalidatesOnChange` (see `<invalidates_on_change>` below).
+The `check` predicate is a snapshot of **journey progress** — "is the user identified?", "is an entity selected?" — not a record of step ordering. Gate on *where the user is*, never on *what ran first*. The companion mechanism for keeping that progress coherent when an upstream slot changes is the config-level `invalidations` table (see `<invalidations>` below).
 
 ## ExecutorEffect
 
@@ -318,7 +335,13 @@ The runner runs `selectors[action](view)` and hands the result to the executor a
 // its stateUpdate may patch any HOST-OWNED slot (the reducers merge them);
 // library-managed slots are rejected loudly — request those transitions via
 // `effects` (usually on the row).
-type Executor<Slice, T> = (params: unknown, state: Slice) => Promise<DeclaredExecutorResult<T>>;
+type Executor<Slice, T> = (
+  params: unknown,
+  state: Slice,
+  source?: SatisfiedSource,        // (4.0.0) the resolved state-satisfied bundle when this was an
+                                   // EMPTY call answered from state (ActionDef.satisfies); absent on
+                                   // dictated calls. Ignore it unless the action declares `satisfies`.
+) => Promise<DeclaredExecutorResult<T>>;
 
 // Keyed 1:1 by action name. Each entry's `state` param is derived from that
 // action's selector return (ReturnType<Selectors[K]>), so an executor whose
@@ -339,10 +362,13 @@ The runner's cursor for "what input does the customer owe right now". Discrimina
 ```ts
 type AwaitingInput =
   | { kind: "dictation";    for_action: string; param: string;
-      expects: "digits" | "text"; flow_ref?: string }
-                                              // (3.0.0) the STANDING ASK — a verdict asked the caller
-                                              // for a fresh value (ActionDef.asks). A record, not a
-                                              // gate: it does NOT lock the surface. See <standing_asks>.
+      expects: "digits" | "text"; ask_text?: string; flow_ref?: string }
+                                              // the STANDING ASK — a verdict row asked the caller for a
+                                              // fresh value (VerdictDef.ask), or a capture bounced. A
+                                              // record, not a gate: it does NOT lock the surface.
+                                              // `ask_text` holds the host-rendered ask bytes (when the
+                                              // row's ask declares `render`) so the repeat control can
+                                              // re-present them exactly. See <standing_asks>.
   | { kind: "confirmation"; for_action: string; params: object;
       attempts_left: number; max_attempts: number; flow_ref?: string;
       proposed_on_caller_turn_id?: string;    // the caller turn the proposal was stored on (or last
@@ -379,14 +405,15 @@ interface CurrentFlow {
 
 Starting a different flow while another is active fails with `error: "flow_already_active"`. Re-entering the SAME flow is idempotent — the executor runs (e.g. to re-issue an OTP), and its `merge_flow_data` effect shallow-merges into the existing `currentFlow.data` (no reset).
 
-## spentLadders (library-managed) — 3.0.0
+## spentLadders (library-managed)
 
-Per-ladder free-use counts: `Record<string, number> | null`, ladder name → uses so far. Carries every
-once-latch — the configured `note_refusal` ladders AND the per-action capture-bounce counters (under
-the reserved key shape `"capture:<action>"`). When a ladder's count reaches its configured
-`maxFreeUses` (or a capture policy's `max`), the next use escalates atomically into the configured
-handoff. Task-scoped: a task-ending handback clears it; an `off_topic` roundtrip does not — a spent
-explanation stays spent when the same task resumes. The runner is the only writer.
+The bounded-patience latch: `Record<string, number> | null` with three FIXED keys — `bounce`
+(consecutive unusable captures), `escalation` (free in-place explanations spent) and `malicious`
+(misuse attempts). Nothing is named or configured. `bounce` and `escalation` RESET ON PROGRESS — any
+call whose params parse clears them — so friction is counted consecutively; `malicious` is cumulative.
+Task-scoped on top of that: a task-ending handback clears the slot; an `off_topic` roundtrip does not.
+The runner is the only writer. (The slot name is historical: through 3.x it held a per-ladder
+free-use map.) See `<escalation>`.
 
 ## PagedCache (library-managed)
 
@@ -412,14 +439,21 @@ the derived views are computed and key-locked at compile time:
 
 ## HandoffRequest (library-managed)
 
-The pending channel-handoff request, written by the built-in `request_handoff` action (only available when the tool opted in via `BuildAgentStepToolOptions.handoff`), by a `request_handoff` **effect** (on a verdict row or an executor return), or by the engine itself (ladder exhaustion, auto-handoff) — never through `stateUpdate`, which throws. Resolved — then cleared — by the host graph's `createHandoffNode(spec)` node. `null` otherwise; rides `agentStepZodShape` like the other slots. Once set, handoff is **monotonic**: the step's remaining interaction lifecycle is skipped and the batch ends after the current step. See `<handoff>`.
+The pending channel-handoff request, written by the built-in `request_handoff` action (only available when the tool opted in via `BuildAgentStepToolOptions.handoff`), by a `request_handoff` **effect** (on a verdict row or an executor return), or by the engine itself (an exhausted escalation, the third misuse attempt, the auto-handoff) — never through `stateUpdate`, which throws. Resolved — then cleared — by the host graph's `createHandoffNode(spec)` node. `null` otherwise; rides `agentStepZodShape` like the other slots. Once set, handoff is **monotonic**: the step's remaining interaction lifecycle is skipped and the batch ends after the current step. See `<handoff>`.
 
 ```ts
 interface HandoffRequest {
   reason: "off_topic" | "completed" | "abandon";
-  context: string;  // per-reason, never empty, always in the customer's language:
-                    // off_topic → the customer's request (verbatim or tightly summarized);
-                    // completed / abandon → the closing line the node speaks
+  context: string;  // per-reason, never empty. ROUTING METADATA — never spoken:
+                    // off_topic → the customer's request (verbatim or tightly summarized, in
+                    //   their language) for the receiving agent;
+                    // completed / abandon → a short note of what was done / why, or a host
+                    //   routing label; the HOST renders the spoken closing from state
+                    //   (HandoffSpec.resolveClosingMessage).
+                    // Engine-decided endings carry STRUCTURAL codes: AUTO_HANDOFF_CONTEXT
+                    //   ("auto_handoff"), escalationContext(action)
+                    //   ("agent-step:escalated[:<action>]"), MALICIOUS_CONTEXT
+                    //   ("agent-step:malicious").
 }
 ```
 
@@ -455,8 +489,8 @@ it themselves:
 
 ```ts
 const PROTOCOL_FRAGMENT = composeProtocolPrompt({
-  config: myConfig,               // tool name + actions (asks/gate presence read from it)
-  ladders: myLadders,             // omit if none
+  config: myConfig,               // tool name + actions — gate presence, row asks and capture
+                                  // fields are read from each action's declaration
   handoff: handoffSpec,           // omit if none
   toolTurnRules: [ /* host DOMAIN tool-turn clauses — e.g. the digit-capture hard rule.
                       Spliced as the FIRST lettered clauses of the TOOL TURN bullet — the
@@ -469,23 +503,73 @@ const PROTOCOL_FRAGMENT = composeProtocolPrompt({
 module can call it with exactly what it already exports. Sentence ownership is exclusive (one
 authority): the tool DESCRIPTION keeps its per-action/control one-liners, RESULT BODIES keep the
 per-turn contracts/directives/asks, and the fragment keeps the turn/speech protocol.
+
+**The standing-ask contract** (`compile/ask-contract.ts`, exported as `composeAskContract`): the
+`ask_contract` riding every entry that records a standing ask — an engine frame around the host's
+`askContract.categories`. See `<standing_asks>`.
 </composed_surface>
 
-<standing_asks>
-## Standing asks / dictation (3.0.0)
+<registers>
+## Registers — who owns each sentence (4.0.0)
 
-The plainest input kind — "the customer owes a fresh value" — declared per verdict via
-`ActionDef.asks`, applied by the batch finalizer, and made visible to the model on the final entry.
-Unlike the three gates it does NOT lock the surface: it is the engine's record of the standing
-question; capturing the answer remains the MODEL's job (deterministic caller-turn interception was
-built, measured live, and removed — the engine must never fabricate assistant turns).
+Every string on the wire has exactly one owner, and the FIELD it rides says which:
+
+| Field | Owner | What the model does with it |
+|---|---|---|
+| `summary` (a verdict row's), `read_back`, `ask_text` | the HOST, rendered from state (`VerdictDef.summary`, `ConfirmationOpts.readBack`, a row ask's `render`) | relays the bytes faithfully — this is what the caller hears |
+| `instruction` | the ENGINE (`engine-text.ts`) — or host model-facing doctrine on a prereq denial (`Verifier.denial.instruction`) | FOLLOWS it, composing any caller line it calls for in the session language. Never spoken verbatim |
+| `reply_contract`, `ask_contract`, `read_back_directive` | engine frame + host content through a structured seam (`GateContractSpec`, `AskContractSpec`, `readBackDirective`) | classifies the caller's next reply / frames the read-back |
+| handoff closing | the HOST (`HandoffSpec.resolveClosingMessage`) | nothing — the platform delivers it; the model produces no text |
+
+A result entry carries `summary` OR `instruction`, never both (one exception: a match-gate exhaustion
+strips the row's `summary` when the engine's exhaustion instruction replaces it). Engine-raised
+entries — admission refusals, prereq denials, proposals, control results, `invalid_params`,
+`executor_error`, the empty batch — carry `instruction`. The batch body mirrors its last entry:
 
 ```ts
-interface DictationAsk {
-  action: string;                  // target action the customer's value feeds (must exist)
-  param: string;                   // the target's param carrying the capture (must be declared on it)
-  expects: "digits" | "text";      // what was asked for (descriptive; kind-specific behavior keys on it)
-  render?: (state: unknown) => string | undefined;
+interface RunnerResultBody {
+  summary?: string;       // the batch ended on a host caller-audible summary
+  instruction?: string;   // the batch ended on an engine directive
+  results: StepResult[];
+  failed_at?: number;
+}
+```
+
+**There is no wording override.** The 1.x–3.x `messages` option (`SystemMessages`) is gone: engine
+text is English instruction and needs no localization, because it is never spoken. `ENGINE_TEXT`,
+`formatMessage` and `EngineTextKey` are exported for goldens and tests only. If a caller must hear
+specific words on some path, a host renderer over state produces them (a row `summary`, a row ask's
+`render`, the closing table). Hosts EXTEND engine frames through the structured seams above — content
+extension, never wording replacement.
+
+Engine text on capture paths is count-free by construction (no numerals, no "digit"/"attempt"): a count
+in a capture message measurably makes the model pad digits. Keep host refinement messages count-free
+for the same reason.
+
+`_debug` (raw Zod issues, executor throw text) never reaches the model: `buildAgentStepTool` strips it
+from the `ToolMessage` content and carries it on the message's `artifact` (`{ debug: string[] }`) —
+trace-visible, model-invisible. `runSteps` (the test seam) still returns it on the body.
+</registers>
+
+<standing_asks>
+## Standing asks / dictation
+
+The plainest input kind — "the customer owes a fresh value" — declared ON the verdict row whose
+outcome asks the question (`VerdictDef.ask`), applied by the batch finalizer, and made visible to the
+model on the final entry. Unlike the three gates it does NOT lock the surface: it is the engine's
+record of the standing question; capturing the answer remains the MODEL's job (deterministic
+caller-turn interception was built, measured live, and removed — the engine must never fabricate
+assistant turns).
+
+```ts
+type RowAsk =
+  | "self"                         // re-ask THIS action's own capture — the common case
+  | {
+      action: string;              // target action the customer's value feeds (must exist) — how one
+                                   // step chains to the next ("the name was accepted; now the digits")
+      param?: string;              // ONLY when the target declares SEVERAL capture fields; otherwise
+                                   // the sole one is used
+      render?: (state: unknown) => string | undefined;
                                    // render the caller-audible ask ITSELF (language/lexicon live in
                                    // state — the readBack division). A non-empty return rides the
                                    // final entry as `ask_text`, and the ask contract directs the model
@@ -493,73 +577,149 @@ interface DictationAsk {
                                    // sentences stay verbatim (a model reciting a catalog line from
                                    // prompt memory measurably decorates it; measured 2/8 prompt-side
                                    // vs 8/8 on the wire). Omit for asks whose wording the model may own.
+    };
+```
+
+```ts
+verdicts: {
+  not_a_name:     { ok: false, summary: …, body: { verdict: "not_a_name" }, ask: "self" },
+  ask_for_digits: { ok: false, summary: …, body: { verdict: "ask_for_digits" },
+                    ask: { action: "verify_card" } },
 }
 ```
+
+What is deliberately NOT declared: `param` (defaults to the target's sole capture field) and
+`expects` (derived from that field's kind — see `<caller_digit_capture>`). An ask's target must
+declare a caller-CAPTURE field (`digits` / `text`); a judged or relayed param cannot be dictated, and
+construction says so.
 
 Lifecycle — the batch's FINAL entry decides (`ok:false` short-circuits, so the last entry is exactly
 what the model relays):
 
-- Final entry's verdict-or-error code is listed in the acting action's `asks` → the mapped ask becomes
-  `awaitingInput = { kind: "dictation", for_action, param, expects }`, and the entry is stamped with
-  `standing_ask: { action, param }`, `ask_contract` (the `standing_ask_contract` system message), and
-  `ask_text` when `render` returned bytes.
-- Final entry from the SAME action with an unlisted code → a dictation standing for that action was
-  serviced; it clears. A dictation for a DIFFERENT action stands (the caller still owes the value).
+- Final entry came from a ROW that declares `ask` → the resolved ask becomes
+  `awaitingInput = { kind: "dictation", for_action, param, expects, ask_text? }`, and the entry is
+  stamped with `standing_ask: { action, param }`, `ask_contract`, and `ask_text` when `render`
+  returned bytes.
+- Final entry came from a ROW with no `ask` → a dictation standing for THAT action was serviced; it
+  clears. A dictation for a DIFFERENT action stands (the caller still owes the value).
+- Final entry was RAISED BY THE RUNNER (a denial, a lockdown refusal, a cached page) → never a
+  servicing; the record stands. The one that implies an ask is the capture bounce: an
+  `invalid_params` entry re-asks the bouncing action's own capture field, **derived** — never
+  declared. (An action with several capture fields names the owed one with `bounceCapture`; without
+  it the bounce records no ask.)
 - A live GATE always outranks an ask: a confirmation/OTP/match set or left standing by the batch IS
-  the standing question; asks never stomp it. Skipped entirely on a handoff.
+  the standing question; asks never stomp it. Skipped entirely on a handoff — which is why a row
+  carrying a `request_handoff` effect may not declare an ask (construction fails).
 
-Keys are verdict-or-error codes as the wire carries them (`resultBody.verdict`, else the entry's
-`error`) — runner-raised codes like `invalid_params` are legal keys, which is how "every recoverable
-digit miss re-asks digits for this action" is declared once.
-</standing_asks>
-
-<ladders>
-## Escalation ladders + note_refusal + captureBounces (3.0.0)
-
-Engine-owned "once" counters. The prompt's once-rules — explain a refusal once, deflect an aside once,
-suggest the lookup once — used to make the model count from conversation history; they become
-configured ladders whose state lives in the task-scoped `spentLadders` latch. The model keeps only the
-semantic classification; the engine owns first-versus-repeat.
+**The ask contract.** `ask_contract` is composed once (`composeAskContract`): the engine owns the
+frame — the owes-value lead with the `ask_text` exactness rule, the supply clause (`{action}` /
+`{param}` routing), the repeat-is-still-the-value clause, and the closing re-ask-style clause — and
+the host owns the measured domain reply categories in between:
 
 ```ts
-// BuildAgentStepToolOptions.ladders: LadderRegistry — requires `handoff`.
-type LadderRegistry = Record<string, EscalationLadder>;
-
-interface EscalationLadder {
-  description: string;             // one-line semantic condition, shown in the control's schema index
-  instruction: string;             // model-facing instruction returned on a FREE use (rides the
-                                   // result as its summary — e.g. "decline in ONE short sentence and
-                                   // re-ask your pending question in the SAME turn")
-  onExhaust: HandoffRequest;       // the handoff applied ATOMICALLY when the free uses are spent.
-                                   // Validated against the LIBRARY schema, not the host's
-                                   // modelRequestSchema — an escalation route is engine-only by
-                                   // design (remove it from the model-requestable routes and the
-                                   // engine holds the only path to it).
-  maxFreeUses?: number;            // free in-place uses before escalation. Default 1.
-}
+buildAgentStepTool({
+  …,
+  askContract: {
+    categories: [
+      // complete sentences, joined verbatim in order. A snake_case name in double quotes must be a
+      // declared action or control (construction lints it); write wire fields in backticks.
+      'If they ask to cancel instead, call "abort_pending_input".',
+    ],
+  },
+});
 ```
 
-A non-empty registry injects the sole-step **`note_refusal`** control (`NOTE_REFUSAL_ACTION`; the name
-becomes reserved). Params: `{ ladder: <configured name> }` (a Zod enum over the registry). The control:
+Omit `askContract` to keep the generic frame. An empty `categories` array is an error.
 
-- **Free use:** counts the latch (`spentLadders[name]++`), touches nothing else — every pending
-  gate/flow survives — and returns the ladder's `instruction` as the summary (`refusal_noted: true`).
-  The standing ask/gate the caller stepped away from is exactly what the model must return to.
-- **Uses spent:** escalates ATOMICALLY into `onExhaust` (the same slot transition `request_handoff`
-  performs) — no window where the model must issue a second call, and no model-selectable route. The
-  result carries `ladder_exhausted: true, handoff_requested: true`.
-- A refusal while a gate/choice pends is classified by THAT interaction's reply contract, never by the
-  ladder (`allowedDuringGateLockdown: false`).
+**Repeating an ask.** When the row's ask declares `render`, the rendered bytes are stored on the
+dictation record (`ask_text`), and the `repeat_pending_question` control re-presents them exactly
+(`ask_repeated: true`, `read_back` = the stored ask) instead of refusing as ineligible.
+</standing_asks>
 
-The host prompt teaches only the semantic classification (declined/unavailable vs a question your
-instructions answer vs a cancellation); the control's composed description carries the ladder index.
+<escalation>
+## Bounded patience — capture bounces + note_refusal (4.0.0)
 
-**`ActionDef.captureBounces`** rides the same latch: `{ max, ladder }` counts CONSECUTIVE
-`invalid_params` bounces of that action under `spentLadders["capture:<action>"]`, cleared by any parse
-that succeeds; when the count reaches `max`, the bounce escalates through the named ladder (which must
-exist in the registry — validated at construction). `max: 2` is the measured knob — the model
-improvises past ~3 identical bounces, and the escalation must fire before that.
-</ladders>
+One latch, nothing to declare. The engine counts how long a caller has gone without delivering what the
+flow needs, and ends in a handoff when patience runs out. It is active whenever `handoff` is
+configured (escalation ends in a handoff, so without one there is nothing to escalate to — a capture
+bounce then simply re-asks, unbounded). The model decides ONE thing: the semantic class of the
+caller's turn. First-versus-repeat is the engine's, and it stays model-invisible.
+
+**The two consecutive counters** (`spentLadders.bounce`, `spentLadders.escalation`) — both reset on
+PROGRESS, i.e. by any call whose params parse:
+
+| Event | What the engine does |
+|---|---|
+| 1st and 2nd consecutive unusable capture (`invalid_params`) | plain bounce — "ask them to say it again" (the bounce tolerance, default `BOUNCE_TOLERANCE = 2`) |
+| the next one | spends the ONE free explanation (default `FREE_EXPLANATIONS = 1`): the entry instructs the model to say in one short sentence why the value is needed, or where to find it, and re-ask in the same turn |
+| the one after that | hands back atomically: `handoff = { reason: "abandon", context: escalationContext(action) }`; the entry carries `escalated: true, handoff_requested: true` |
+| any call that parses | both counters clear — a caller who stumbles, gets helped and then succeeds starts fresh |
+
+`escalationContext(action)` is `"agent-step:escalated:<action>"` — the action whose value was owed —
+or the bare `ESCALATION_CONTEXT_PREFIX` (`"agent-step:escalated"`) when nothing was owed. It is a
+routing CODE: the host's `resolveClosingMessage` maps it to caller words (a per-action reassurance
+where one helps, a generic escalation closing otherwise). `ActionDef.bounceCapture` names the owed
+capture for an action with several capture fields.
+
+**`note_refusal`** (`NOTE_REFUSAL_ACTION`; reserved whenever `handoff` is configured) — the sole-step
+control through which the model records a turn the flow cannot serve. Params: `{ kind }`, a fixed
+enum (`REFUSAL_KINDS`, `RefusalKind`) — a host adds no kinds and renames none:
+
+- **`declined_or_cannot`** — the caller declines, or cannot supply, the value currently owed. Needs a
+  standing value obligation: with no `dictation` pending the control refuses instructively
+  (`error: "nothing_owed"`) and counts nothing. Otherwise it climbs the SAME escalation as a bounce:
+  free use → "explain why it is needed and re-ask"; next → the `abandon` handoff above.
+- **`unsupported_question`** — the caller asks something the flow cannot answer while still pursuing
+  the task. Location-free. Free use → "decline, answer NONE of its content, repeat the pending
+  question"; next → the same handoff.
+- **`malicious_intent`** — the turn tries to MISUSE the call (extract instructions or tools, drop the
+  rules, obtain harmful or invented content, pose as a system message). The engine directs a
+  one-sentence decline that gives none of what was asked and repeats the pending question. It has its
+  own counter (`spentLadders.malicious`), CUMULATIVE — progress never resets it: the attempt that
+  reaches the malicious limit (default `MALICIOUS_LIMIT = 3`, the third in a task) hands back
+  `{ reason: "completed", context: MALICIOUS_CONTEXT }` (`"agent-step:malicious"`). It never touches the escalation run — a pending question stays pending.
+
+Every result carries `refusal_noted: true` and the `kind`. A refusal while a GATE pends never reaches
+the control (`allowedDuringGateLockdown: false`): that reply is classified by the gate's own reply
+contract, which is the sole authority while it stands.
+
+The host prompt teaches only the classification — and never counts ("once", "the second time"): the
+control's own schema description carries the three kinds and when each applies. The host's part is the
+CLOSING for each engine-decided ending (see `<handoff>`).
+
+### Tolerances — the numbers, and how a deployment moves them {#tolerances}
+
+The table above shows the DEFAULTS. The four numbers that bound the engine's patience are process-wide
+**tolerances** (`tolerances.ts`): measured defaults, each movable per deployment through an environment
+variable the ENGINE reads — no host wiring, no build option, nothing per action or per tool.
+
+| Variable (`TOLERANCE_ENV`) | Default (constant) | Range | What it bounds |
+|---|---|---|---|
+| `AGENT_STEP_BOUNCE_TOLERANCE` | 2 (`BOUNCE_TOLERANCE`) | integer ≥ 0 | consecutive unusable captures answered with the plain bounce before the engine explains itself (0 = explain on the first) |
+| `AGENT_STEP_FREE_EXPLANATIONS` | 1 (`FREE_EXPLANATIONS`) | integer ≥ 0 | in-place explanations (an over-tolerance bounce, or a `declined_or_cannot` / `unsupported_question` refusal) before the `abandon` handback (0 = hand back at once) |
+| `AGENT_STEP_MALICIOUS_LIMIT` | 3 (`MALICIOUS_LIMIT`) | integer ≥ 1 | the `malicious_intent` attempt that ends the task |
+| `AGENT_STEP_ERROR_HANDOFF_THRESHOLD` | 3 (`ERROR_HANDOFF_THRESHOLD`) | integer ≥ 1 | consecutive backend-failure batches before the automatic handoff (see `<auto_handoff>`) |
+
+- **Read once, at construction.** `buildAgentStepTool` resolves the tolerances when the tool is built and
+  closes over them (`CompiledPlan.tolerances`): a running process never changes its bounds
+  mid-conversation, and a changed variable takes effect on the next start. (`runSteps`, the test seam,
+  compiles per call and so re-reads per call.)
+- **Fails loudly.** Unset or blank means the default. A value that is set but is not a plain base-10
+  integer within range throws at construction — `agent-step: AGENT_STEP_… must be an integer >= N (got
+  "…")` — so a typo stops the boot instead of silently changing a bound.
+- **One explicit override.** `BuildAgentStepToolOptions.errorHandoffThreshold` wins over its variable —
+  a host that pins the threshold in code keeps it (the variable is still validated). The other three
+  have NO option on purpose: they are a property of the deployment, not of a tool.
+- **Model-invisible.** No engine text carries a count, so moving a tolerance moves no model-facing byte
+  (descriptions, contracts, the protocol fragment, every `instruction`): goldens hold. What moves is
+  behaviour — the defaults are MEASURED (three plain bounces was seen to make the model improvise on the
+  third identical failure), so a deployment that moves them owes its own live measurement, and a very
+  large value effectively switches that bound off.
+- **Inspectable.** `resolveTolerances(env?, { errorHandoffThreshold? })` is exported (with
+  `DEFAULT_TOLERANCES`, `TOLERANCE_ENV`, `EngineTolerances`) so a host can log the effective values at
+  boot or assert them in a test. Per-action budgets — a confirmation's or a match's `maxAttempts` —
+  are configuration and are NOT tolerances.
+</escalation>
 
 <conventions>
 ## 1. Selector + executor keyed by the exact action name
@@ -595,7 +755,7 @@ agent-step: action "verify_card" lists prereq "customerVerified" but verifiers["
 
 ## 3. Reserved action names
 
-`abort_pending_input` is ALWAYS reserved — the library auto-injects it into the tool schema whenever ANY action declares one of: `requiresConfirmation`, `requiresOtp`, `issuesOtp`, `startsFlow`, `endsFlow`, `requiresFlow`, `requiresMatch`, `startsMatchFor`. `request_handoff` is reserved ONLY when `BuildAgentStepToolOptions.handoff` is provided (see `<handoff>`) — a tool that does NOT opt in may define its own action under that name (the orchestrator/scaffold handoff mechanism does exactly that). `note_refusal` (3.0.0) is reserved ONLY when `ladders` is non-empty (see `<ladders>`) — sole-step (`note_refusal_must_be_sole_step`: the turn answers a refusal, not a value; on the exhausted path the step escalates into a handoff, which abandons the turn). `repeat_pending_question` (renamed from `repeat_pending_confirmation` in 3.0.0) is reserved ONLY when at least one action sets `ConfirmationOpts.repeatReadBack` — sole-step (`repeat_confirmation_must_be_sole_step`: a recap is a read-only turn boundary; domain work in the same batch could turn the caller's clarification into consent; the group name keeps the historical "confirmation" vocabulary deliberately — byte-pinned engine codes). These library-owned actions are **controls** (`controls/` in the library): each carries its own activation, schema variant, description line, lockdown allowances, and execution — the run pipeline dispatches them instead of an executor. Declaring a reserved name throws:
+`abort_pending_input` is ALWAYS reserved — the library auto-injects it into the tool schema whenever ANY action declares one of: `requiresConfirmation`, `requiresOtp`, `issuesOtp`, `startsFlow`, `endsFlow`, `requiresFlow`, `requiresMatch`, `startsMatchFor`. `request_handoff` is reserved ONLY when `BuildAgentStepToolOptions.handoff` is provided (see `<handoff>`) — a tool that does NOT opt in may define its own action under that name (the orchestrator/scaffold handoff mechanism does exactly that). `note_refusal` is reserved under the same condition as `request_handoff` — whenever `handoff` is provided (see `<escalation>`) — sole-step (`note_refusal_must_be_sole_step`: the turn answers a refusal, not a value; on the exhausted path the step escalates into a handoff, which abandons the turn). `repeat_pending_question` (renamed from `repeat_pending_confirmation` in 3.0.0) is reserved ONLY when at least one action sets `ConfirmationOpts.repeatReadBack` — sole-step (`repeat_confirmation_must_be_sole_step`: a recap is a read-only turn boundary; domain work in the same batch could turn the caller's clarification into consent; the group name keeps the historical "confirmation" vocabulary deliberately — byte-pinned engine codes). These library-owned actions are **controls** (`controls/` in the library): each carries its own activation, schema variant, description line, lockdown allowances, and execution — the run pipeline dispatches them instead of an executor. Declaring a reserved name throws:
 
 ```
 agent-step: "<name>" is a reserved action name auto-injected by the library; remove it from config.actions.
@@ -640,7 +800,8 @@ Lifecycle opts are declared inline as `ActionDef.controller`, so there is no sep
 ## 6. Tool layout: declaration beside executor
 
 Row-based actions declare beside their executors — `src/tools/<name>/actions/<action>/action.ts`
-(schema + description + rows + asks + controller), with `config.ts` a slim assembler and `names.ts` a
+(schema + description + rows with their asks + controller), with `config.ts` a slim assembler (plus
+the config-level `invalidations` table) and `names.ts` a
 types-only leaf (`ActionName`/`PrereqName`) so the declaration ↔ config import graph stays acyclic.
 See `tool-directory-layout.md`.
 </conventions>
@@ -656,7 +817,7 @@ When the LLM calls the tool with `[step1, step2, step3]`:
    a. **Unknown action** — hallucinated/typo'd names get a structured refusal.
    b. **Gate lockdown** — a pending confirmation/OTP/match admits only its target action / abort / handoff / the repeat control (+ the capturer, for match; + a same-flow issuer, for otp; see lockdown table above).
    c. **Flow mutex** — first step `startsFlow=X` while `currentFlow.name=Y` (≠X) → refuse `flow_already_active`.
-   d. **Control exclusivity** — sole-step control families (handoff, repeat, ladder), in registry-group order.
+   d. **Control exclusivity** — sole-step control families (handoff, repeat, refusal), in registry-group order.
    e. **Abort policy** — the optional host source/follower allow-lists.
    f. **soleStep / soleOnExecute** — per-action batch-shape refusal (computed off batch-start pending so the LLM-natural `[verify, mutate]` batch can propose).
 4. **Plan expansion** (`run/planning.ts`) — tag each user step with its confirmation mode (`propose` | `rePropose` | `execute` | `sameTurnLocked` | `exhausted`) based on pending state at batch-start. Frozen before any executor runs (same-batch-bypass safety). Planning is **abort-aware**: confirm steps AFTER an `abort_pending_input` in the same batch plan against NO pending — they propose fresh instead of executing against the gate the batch just cleared.
@@ -664,10 +825,10 @@ When the LLM calls the tool with `[step1, step2, step3]`:
    a. Control steps (`abort_pending_input`, `request_handoff`, `repeat_pending_question`, `note_refusal`) dispatch to their `ControlAction` implementation, not an executor.
    b. Library-managed prereqs (`requiresFlow`, then `requiresOtp` / `requiresMatch`) → refuse if not gated.
    c. User-declared prereqs (verifiers) → refuse with denial body.
-   d. Validate params via `paramsSchema.parse` — an `invalid_params` bounce also feeds the action's `captureBounces` counter when declared (escalating through the named ladder when spent).
-   e. Run the action's selector against the running `view` to build the slice, then call the executor: `executors[action](params, selectors[action](view))`. The declared return is normalized through the named verdict row (summary rendered over the current view; body composed in declaration order; `resultExtras` appended; row stateUpdate/effects merged UNDER the executor's). An undeclared verdict — or a thrown executor — is caught, marked `ok:false` (`error: "executor_error"`), and short-circuits; earlier steps' commits are preserved.
-   f. Apply the outputs in this order: `stateUpdate` (host slots only — library slots throw) → `request_handoff` effect (terminal; skips the rest) → `startsFlow` + `merge_flow_data` → auto-clear of `requiresOtp`/`requiresMatch` on ok → `otp_issued` → `startsMatchFor` → `endsFlow` → `clear_awaiting_input` / `abort_flow`. (Consume BEFORE issue: one action may both consume a match and issue an OTP, and `awaitingInput` is a single replace-on-write slot — issuing first would have the consume wipe the freshly opened gate.) On ok:false + `verdict:"match_mismatch"`, decrement match attempts (or abort flow on exhaustion). **Handoff monotonicity:** once the `handoff` slot is set (control, row effect, or executor effect), the remaining interaction lifecycle is skipped and the batch ends after the current step, whatever `ok` was.
-6. **Finalize** (`run/finalize.ts`) — build the result body, apply the **standing-ask lifecycle** (the final entry sets/clears the `dictation` record and is stamped `standing_ask` / `ask_text` / `ask_contract` — see `<standing_asks>`), apply the error-counter/auto-handoff policy, and emit a single `ToolMessage` whose content is the JSON-stringified `RunnerResultBody = { summary, results, failed_at? }`.
+   d. Validate params via `paramsSchema.parse` — a failure is the `invalid_params` bounce, which also counts toward bounded patience when `handoff` is configured (see `<escalation>`); a successful parse is PROGRESS and resets those counters. For an action declaring `satisfies`, an EMPTY call resolves its state-satisfied bundle here (see `<satisfies>`).
+   e. Run the action's selector against the running `view` to build the slice, then call the executor: `executors[action](params, selectors[action](view), source?)`. The declared return is normalized through the named verdict row (summary rendered over the current view; body composed in declaration order; `resultExtras` appended; row stateUpdate/effects merged UNDER the executor's). An undeclared verdict — or a thrown executor — is caught, marked `ok:false` (`error: "executor_error"`), and short-circuits; earlier steps' commits are preserved.
+   f. Apply the outputs in this order: the `invalidations` cascade (BEFORE the stateUpdate, so the executor's own re-writes of downstream slots win over the nulls) → `stateUpdate` (host slots only — library slots throw) → `request_handoff` effect (terminal; skips the rest) → `startsFlow` + `merge_flow_data` → auto-clear of `requiresOtp`/`requiresMatch` on ok → `otp_issued` → `startsMatchFor` → `endsFlow` → `clear_awaiting_input` / `abort_flow`. (Consume BEFORE issue: one action may both consume a match and issue an OTP, and `awaitingInput` is a single replace-on-write slot — issuing first would have the consume wipe the freshly opened gate.) On ok:false + `verdict:"match_mismatch"`, decrement match attempts (or abort flow on exhaustion). **Handoff monotonicity:** once the `handoff` slot is set (control, row effect, or executor effect), the remaining interaction lifecycle is skipped and the batch ends after the current step, whatever `ok` was.
+6. **Finalize** (`run/finalize.ts`) — build the result body, apply the **standing-ask lifecycle** (the final entry sets/clears the `dictation` record and is stamped `standing_ask` / `ask_text` / `ask_contract` — see `<standing_asks>`), apply the error-counter/auto-handoff policy, and emit a single `ToolMessage` whose content is the JSON-stringified `RunnerResultBody = { summary? | instruction?, results, failed_at? }` (`_debug` stripped onto the message `artifact` — see `<registers>`).
 
 **Cumulative commit on partial failure:** state patches from successful earlier steps DO commit even if a later step fails. Example: `[verify_customer (ok), verify_card (fail)]` → `verifiedCustomer` persists for the next turn.
 
@@ -683,8 +844,8 @@ The runner switches the mutation action into a five-mode state machine. Detected
 
 ### First call (no pending, or pending action ≠ this action) → **propose mode**
 - Parse params with the action's **effective schema** (the declared `paramsSchema`, page-extended for `pageable` actions) and store them **PARSED** — schema normalization (`z.preprocess`, coercion) is applied before storage: `awaitingInput = { kind: "confirmation", for_action, params, attempts_left: maxAttempts, max_attempts, proposed_on_caller_turn_id? }`. The proposal is stamped with the current caller-turn identity when one exists (see `<caller_turn_identity>`).
-- A failed parse returns `{ ok: false, error: "invalid_params" }` with the overridable `invalid_params` system-message summary and the raw Zod detail in `_debug` (nothing is stored; the action's `captureBounces` counter, when declared, counts the bounce).
-- Return `{ ok: true, summary, needs_confirmation: true, proposed_params, attempts_left }`, plus:
+- A failed parse returns `{ ok: false, error: "invalid_params" }` with the engine's count-free `invalid_params` instruction and the raw Zod detail in `_debug` (nothing is stored; the bounce counts toward bounded patience — `<escalation>`).
+- Return `{ ok: true, instruction, needs_confirmation: true, proposed_params, attempts_left }`, plus:
   - **`read_back`** when the action declares `ConfirmationOpts.readBack` and it renders non-empty for these parsed params. Absent — not empty — when it renders nothing.
   - **`read_back_directive`** when `readBackDirective` renders non-empty (how to frame the bytes).
   - **`reply_contract`** — the complete classification of the caller's next reply: the composed action-specific contract when the action declares `replyContract`, else the generic `confirm_reply_contract` template. The gate turn reacts to THIS, not prompt memory.
@@ -702,9 +863,9 @@ The runner switches the mutation action into a five-mode state machine. Detected
 
 ### Re-call with **genuinely different params** (or params that fail to parse) → **rePropose mode**
 - Update `awaitingInput.params` to the newly parsed params, decrement `attempts_left`.
-- If the re-call's params fail to parse: the step fails with `invalid_params` (summary = the overridable system message, raw Zod detail in `_debug`) and the pending proposal is left **unchanged** — no decrement, the prior proposal still stands.
+- If the re-call's params fail to parse: the step fails with `invalid_params` (the engine instruction; raw Zod detail in `_debug`) and the pending proposal is left **unchanged** — no decrement, the prior proposal still stands.
 - If `attempts_left > 0`: return new `needs_confirmation` envelope with decremented `attempts_left` — including a fresh `read_back` rendered from the CORRECTED params, so the caller hears what actually replaced the old value.
-- If `attempts_left === 0`: return `{ ok: false, summary, error: "confirmation_attempts_exhausted" }` and clear pending.
+- If `attempts_left === 0`: return `{ ok: false, instruction, error: "confirmation_attempts_exhausted" }` and clear pending.
 
 ### The repeat control (`repeat_pending_question`)
 When an action opts into `repeatReadBack`, a "pardon?" / channel-check turn has a legal move that is
@@ -714,6 +875,10 @@ from mutable state, no params/attempts change, and the gate is not consumed. It 
 gate's presentation-turn provenance: the repeated recap is now the question the caller must answer on
 a LATER turn. Misdirected calls (no pending gate, gate not opted in, no stored rendering) fail closed
 and change nothing.
+
+The same control serves a standing ASK (4.0.0): when the pending `dictation` record carries `ask_text`
+(the row's ask declared `render`), it returns those stored bytes as `read_back` with `ask_repeated:
+true` — the caller hears the exact question again, and nothing else changes.
 
 ### Lockdown
 If `awaitingInput.kind === "confirmation"` and `lockdown: true` (default), the batch MUST start with either:
@@ -725,32 +890,35 @@ Anything else → `{ ok: false, error: "pending_confirmation_locked", awaiting: 
 
 ### abort_pending_input
 Library auto-injects this action into the schema whenever ANY lifecycle opt is declared. It is library-handled (no executor needed):
-- If `awaitingInput` or `currentFlow` is set → clear both; return `{ ok: true, summary: "Pending input and/or flow aborted.", aborted_awaiting?, aborted_flow? }`.
-- If nothing is active → no-op; return `{ ok: true, summary: "Nothing to abort." }`.
+- If `awaitingInput` or `currentFlow` is set → clear both; return `{ ok: true, instruction, aborted_awaiting?, aborted_flow? }` (`ENGINE_TEXT.abort_done`: acknowledge the cancellation in one short sentence and continue).
+- If nothing is active → no-op; return `{ ok: true, instruction }` (`ENGINE_TEXT.abort_nothing`).
 </confirmation_lifecycle>
 
-<invalidates_on_change>
-## Downstream-slot invalidation (`ActionDef.invalidatesOnChange`)
+<invalidations>
+## Downstream-slot invalidation (`AgentStepConfig.invalidations`)
 
-A per-action map declaring "if this action re-collects slot X with a *different* value, reset everything derived from X to `null`." Keys are slot names the action may write; values are the downstream slots to clear.
+ONE table for the whole config, declaring "if slot X is re-collected with a *different* value, reset everything derived from X to `null`" — whichever action wrote it. Staleness is a fact about the SLOTS ("a different card selection makes the report outcome stale" is true whoever re-binds the card); through 3.x it was declared per action (`ActionDef.invalidatesOnChange`), which made every new writer a copy site. Keys are watched slot names; values are the downstream slots to clear.
 
 ```ts
-verify_customer: {
-  // …
-  invalidatesOnChange: {
+export const myConfig = defineConfig<ActionName, PrereqName, State>({
+  tool: { … },
+  actions: { … },
+  invalidations: {
     customerCode: ["cardVerified", "amountCollected", "reasoningCollected", /* … */],
   },
-},
+});
 ```
 
-Fire rule (evaluated after the executor's `stateUpdate` has been folded in):
+Every named slot must be a channel of the host state schema (a typo would silently never fire), and no library-managed slot may be watched or nulled through the table — both are checked at construction.
+
+Fire rule (evaluated for every executor `stateUpdate`, against the pre-step view):
 - Fires only when the watched slot's pre-step value was **non-null** AND the written value is not **deep-VALUE-equal** to it (canonicalized-JSON compare — reference identity never counts, so an executor writing a fresh-but-value-equal object does NOT fire).
 - First-time set (`null → value`) does NOT fire — there was nothing downstream to invalidate yet.
 - Same-value writes (no real change) do NOT fire — including a fresh object with identical contents.
 - Slots set later in the same batch are NOT retro-cleared; an executor's own writes to a downstream slot win over the cascade.
 
 Invalidated slots are written as `null` regardless of their declared type, so any slot listed as a target must accept `null` as its "unset" sentinel. CAUTION: the `null` must also survive the HOST's reducer for that slot — list only **replace-on-write** slots as invalidation targets. A record-merge reducer (`{...prev, ...(next ?? {})}`) swallows the `null` at the graph boundary, so the slot resurrects on the next turn even though the in-batch view saw it cleared.
-</invalidates_on_change>
+</invalidations>
 
 <otp_lifecycle>
 ## OTP gate (when `issuesOtp` / `requiresOtp` are set)
@@ -830,27 +998,41 @@ The row's other composed fields (e.g. `summary`) are preserved on every page, in
 - **`pageable: "delegate"`** — **backend pages.** The executor reads the injected `page`/`pageSize`, returns that page as `items` plus `totalCount`; the runner just wraps it (no cache).
 - **`pageable: { mode, pageSize?, maxPageSize? }`** — same, with tuned sizes (defaults: `DEFAULT_PAGE_SIZE=10`, `MAX_PAGE_SIZE=50`).
 
-**Constraint:** a `pageable` action's `paramsSchema` MUST be a `z.object` (the runner merges `page`/`pageSize` in) — otherwise construction throws.
+**Constraint:** a `pageable` action's `paramsSchema` MUST be a PLAIN `z.object` (the runner extends it with `page`/`pageSize`) — otherwise construction throws. A refined object (`z.object({...}).superRefine(...)`, e.g. one carrying `exactlyOneOf`) is a `ZodEffects` and cannot be extended: keep a pageable action's params plain and move any cross-field rule into the executor.
 
 **Primitives** (exported from `index.ts`, for hand-rolled cases — the runner uses them internally): `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE`, `clampPageSize`, `querySignature`, `pageRows`, `buildPageEnvelope`, and types `PageEnvelope`, `PagedCache`, `PageableSpec`. Prefer the `pageable` opt over hand-rolling.
 </pagination>
 
 <caller_digit_capture>
-## Caller capture params (`callerDigits` / `digitGroupsParam` / `digitCandidatesParam` / `callerTextParam` / `relayParam` / `exactlyOneOf`)
+## Param builders and field kinds (`callerDigits` / `digitGroupsParam` / `digitCandidatesParam` / `callerTextParam` / `judgedEnum` / `judgedFlag` / `relayParam` / `exactlyOneOf`)
 
-Schema helpers for params that carry **caller-dictated values** (a tax number, a card-number tail, a spoken name). Unlike `paginate.ts` — whose primitives the runner itself uses — this module is **authoring-only**: nothing in the runner calls it. It lives in the library because each rule below is a consequence of a runner contract, so a host that hand-rolls the field re-derives (or misses) them one live failure at a time:
+Schema helpers for a tool's params. Each builder registers a machine-readable **field kind** for the schema it returns (`FieldKind`), so the engine can ASK what a param is instead of inferring it:
 
-- **Shape rules are refinements, never `.regex()` / `.min()` / `.max()`.** A `.regex()` becomes a `pattern` keyword in the model-facing JSON Schema (and `.min`/`.max` become `minLength`/`maxLength`), turning the tool's validation into a precondition the model must satisfy before it may call. The model then counts digits itself — unreliable on grouped STT captures — and either **withholds the call** (answers the caller instead; a valid capture never reaches the tool) or **pads an invented digit** to satisfy the pattern. The builders keep the wire type plain; the runner's propose-path parse bounces a bad shape as recoverable `invalid_params` — before any read-back, without spending a confirmation attempt.
-- **Refinement messages carry no digit count.** Issue text rides the StepResult's `_debug` back to the model; "must be exactly 9 digits" re-introduces through the error path the very constraint the refinement keeps out of the schema. Say WHAT failed ("not a usable capture"), never HOW MANY DIGITS.
+| Kind | Builders | What the param is | Ask target? |
+|---|---|---|---|
+| `digits` | `callerDigits`, `digitGroupsParam`, `digitCandidatesParam` | a caller-DICTATED digit value the model transcribes | yes |
+| `text` | `callerTextParam` | a caller-DICTATED text value the model transcribes | yes |
+| `judged` | `judgedEnum`, `judgedFlag` | the model's CLASSIFICATION of what the caller meant — never transcribed, never read back | no |
+| `relay` | `relayParam` | the caller's exact words passed through for the SYSTEM to classify | no |
+
+`digits` and `text` are the **capture fields**. What the kind buys, all enforced at construction: a standing ask may only target a capture ("you cannot dictate a judgement"); an ask may omit `param` when its target declares exactly one capture; digits-vs-text is derived, never hand-copied; the `invalid_params` bounce re-ask and the escalation's owed action come from the bouncing action's capture; `satisfies` may only satisfy a capture. A param declared with plain zod has NO kind — the library never guesses — so it cannot be an ask target. Registration is identity-based: pass a builder's result on UNCHANGED (a wrapper appending `.optional()` or `.describe()` afterwards returns a new schema object and loses the kind). Introspection helpers are exported for host tests: `fieldKindOf`, `fieldMetaOf`, `captureFieldsOf`, `objectShapeOf`.
+
+The capture rules below are each a consequence of a runner contract, so a host that hand-rolls the field re-derives (or misses) them one live failure at a time:
+
+- **Shape rules are refinements, never `.regex()` / `.min()` / `.max()`.** A `.regex()` becomes a `pattern` keyword in the model-facing JSON Schema (and `.min`/`.max` become `minLength`/`maxLength`), turning the tool's validation into a precondition the model must satisfy before it may call. The model then counts digits itself — unreliable on grouped STT captures — and either **withholds the call** (answers the caller instead; a valid capture never reaches the tool) or **pads an invented digit** to satisfy the pattern. The builders keep the wire type plain; the runner's propose-path parse bounces a bad shape as recoverable `invalid_params` — before any read-back, without spending a confirmation attempt. **Since 4.0.0 this is enforced at construction** for EVERY domain action: a `pattern`, `minLength`, `maxLength` or `format` keyword anywhere in a model-facing params schema throws (`exposes JSON-Schema keyword …`). `minItems`/`maxItems` (arrays the model constructs) and `enum` (closed values) stay legal.
+- **Refinement messages carry no digit count.** "must be exactly 9 digits" re-introduces through the error path the very constraint the refinement keeps out of the schema. Since 4.0.0 the issue text no longer reaches the model at all (`_debug` rides the `ToolMessage` artifact — `<registers>`), but it is still read in traces and by `runSteps` tests; keep it count-free. Say WHAT failed ("not a usable capture"), never HOW MANY DIGITS.
 - **Representation flips must not read as drift.** The confirmation gate compares schema-PARSED params, so `["7070"]` ≡ `"7070"` and separator variants must normalize identically — the separator strip and the singleton-array collapse live in the preprocess, before the compare.
 - **The declared type is the honest wire union.** A field that accepts digit GROUPS carries the array branch in its TYPE — a preprocess is invisible to the model's schema, and with a bare string type a group-array call bounces as a raw schema error instead of the runner's voice-safe `invalid_params`.
 
 The builders (each takes a **required** `describe` — the library ships NO model-facing wording; field text is live prompt surface, owned and QA-gated per host):
 
-- **`digitGroupsParam({ shape, message, describe })`** — the "transcription field": the model transcribes one array entry per **spoken digit group** («δεκαεπτά, είκοσι ένα, πενήντα δύο, δύο, ογδόντα δύο» → `["17","21","52","2","82"]`) or a single string; the JOIN happens in the preprocess, never in the model (models regroup, drop repeated groups, and lose the zero of round tens). `shape` validates the JOINED value. Omission stays `undefined` — the host's channel for "consume a carried/collected value".
+- **`callerDigits(shape, message)`** — the primitive: a caller-dictated digit string whose shape check is a refinement. Carries the `digits` kind itself, so a host composing its own preprocess/union around it still declares a capture.
+- **`digitGroupsParam({ shape, message, describe, normalize? })`** — the "transcription field": the model transcribes one array entry per **spoken digit group** («δεκαεπτά, είκοσι ένα, πενήντα δύο, δύο, ογδόντα δύο» → `["17","21","52","2","82"]`) or a single string; the JOIN happens in the preprocess, never in the model (models regroup, drop repeated groups, and lose the zero of round tens). `shape` validates the JOINED value. Omission stays `undefined` — the host's channel for "consume a carried/collected value" (see `<satisfies>`). `normalize` (4.0.0) is a per-group canonicaliser applied before the join — the default strips every non-digit; a capture that legitimately carries LETTERS (an alphanumeric document number) supplies its own. It may only strip separators and canonicalise what was spoken — never add, reorder or drop content — and should turn an unreadable token into a character outside `shape` so the capture bounces instead of silently shortening.
 - **`digitCandidatesParam({ shape, message, candidateMessage?, maxCandidates?, describe })`** — the ambiguous-reading field: a single digit string, or an array of EVERY plausible reading of one utterance («χίλια τρία» → `["1003","10003"]`) for the executor to try — the model never picks a reading itself.
 - **`callerTextParam({ min, max, shortMessage, longMessage, describe })`** (3.0.0) — a caller-dictated TEXT capture (a spoken name, a free-form answer): trim + bounded length as a REFINEMENT with count-free messages — the text analogue of `callerDigits`.
 - **`relayParam(describe)`** (3.0.0) — a relay-only transcription field: the caller's exact words, OPTIONAL, passed through for the SYSTEM to classify — the model never translates, normalizes, or invents them. Mechanically a described optional string; the builder NAMES the intent (stenographer field).
+- **`judgedEnum(values, describe)`** (4.0.0) — an OPTIONAL enum the model sets from its CLASSIFICATION of what the caller meant, in the system's own vocabulary (the caller never says the enum value). The `describe` must tell the model to OMIT the field when the caller's words do not clearly name one of the values — an unclear description is not a guess. Only safe where being wrong is a cheap, recoverable detour: nothing can validate a judgement.
+- **`judgedFlag(describe)`** (4.0.0) — an OPTIONAL boolean for a conversation-level fact the model concludes rather than transcribes. Same licence, same limits.
 - **`exactlyOneOf(fields, message)`** (3.0.0) — an exactly-one-of selector for a params object (XOR over optional fields) as a refinement, applied via `z.object({...}).superRefine(exactlyOneOf([...], msg))` — the model-facing JSON Schema stays a plain object, and a bad shape bounces as recoverable `invalid_params` on the propose path.
 
 **Description authoring (the part the host owns).** The proven register for `describe` — adapt, don't invent:
@@ -858,7 +1040,7 @@ The builders (each takes a **required** `describe` — the library ships NO mode
 - Keep the field **semantically neutral**: naming the domain entity ("the AFM") or its length ("nine digits") re-activates the model's world knowledge — the measured source of withheld calls and reshaped captures no prompt scrub fully suppresses.
 - Give 2–3 concrete renderings in the caller's language(s), e.g. `«10, 2, 22. 8078» → ["10","2","22","8078"]`.
 - If omission consumes a carried value, say exactly that ("Omit the field entirely to consume …") — omission semantics belong in the field text, not only the prompt.
-- Bound a capture's re-ask loop with `captureBounces` (see `<ladders>`) rather than prompt counting.
+- Never bound a capture's re-ask loop by prompt counting: the engine bounds it for every action (see `<escalation>`), and a count in the prompt is exactly what makes the model pad a capture.
 </caller_digit_capture>
 
 <handoff>
@@ -870,7 +1052,8 @@ Opt-in machinery for a SPECIALIZED agent's off-topic plays (see `streaming-and-c
 
 Pass `handoff: HandoffSpec<T>` to `buildAgentStepTool`. The runner then:
 
-- Auto-injects the reserved **`request_handoff`** control into the tool schema (with the opt provided, declaring it in `config.actions` throws; WITHOUT the opt the name is free — the orchestrator/scaffold mechanism uses it for its own action). Params = `HandoffRequestSchema`: `{ reason: "off_topic" | "completed" | "abandon", context }` — `context` is the customer's request for `off_topic`, the closing line for `completed` / `abandon`.
+- Auto-injects the reserved **`request_handoff`** control into the tool schema (with the opt provided, declaring it in `config.actions` throws; WITHOUT the opt the name is free — the orchestrator/scaffold mechanism uses it for its own action). Params = `HandoffRequestSchema`: `{ reason: "off_topic" | "completed" | "abandon", context }` — `context` is the customer's request for `off_topic`, a short routing note for `completed` / `abandon` (never spoken — the host renders the closing).
+- Auto-injects the **`note_refusal`** control and bounds capture bounces (see `<escalation>`) — both end in a handoff, so both ride this opt.
 - Handles the action internally as an **atomic slot transition** — validates params, clears every transient runner slot (`awaitingInput`, `currentFlow`, `pagedRead`), writes the `handoff` slot into view + committed state, and returns an ok result telling the model the turn ends here. No I/O in the runner. A verdict row or executor requests the same terminal transition (identical atomic cleanup) via the `request_handoff` effect — never by writing the slot through `stateUpdate`, which throws.
 - Enforces **exclusivity**: batched with anything else ⇒ the whole batch is refused with `error: "handoff_must_be_sole_step"`, nothing executes.
 - **No prereqs**, and allowed as the first step under input lockdown (pending confirmation / OTP / match) — "transfer me" must work before any data is loaded and cannot be blocked by a pending gate.
@@ -883,18 +1066,21 @@ interface HandoffSpec<T> {
           | { mode: "delegate"; url: string; assistantId: string; replyNode?: string;
               connectTimeoutMs?: number; timeoutMs?: number; headers?: Record<string, string> };
   actionDescription?: string;        // OPTIONAL — override the LLM-facing description of the
-                                     // auto-injected request_handoff schema variant. The default
-                                     // (HANDOFF_ACTION_DESCRIPTION) says `context` is SPOKEN for
-                                     // completed/abandon — wrong for a host whose resolveClosingMessage
-                                     // composes every closing from state; describe `context` truthfully
-                                     // (e.g. routing metadata) or the schema contradicts the host prompt.
-  terminateMessage: string;          // spoken envelope; also the delegate-failure fallback
-  resolveClosingMessage?: (state: T, request: HandoffRequest) => string | undefined;
-                                     // OPTIONAL — override the completed/abandon closing line from
-                                     // actual operation outcomes (honesty invariant). Returns a string
-                                     // to replace `request.context`, or `undefined` to fall through.
-                                     // NEVER called for off_topic (a silent hand-back;
-                                     // terminateMessage only backs delegate failures).
+                                     // auto-injected request_handoff schema variant, e.g. to enumerate
+                                     // the exact reason/context pairs a modelRequestSchema allows. The
+                                     // default (HANDOFF_ACTION_DESCRIPTION) already describes `context`
+                                     // truthfully as routing metadata.
+  resolveClosingMessage: (state: T, request: HandoffRequest) => string;
+                                     // REQUIRED and TOTAL (4.0.0) — render the caller-audible closing
+                                     // for completed / abandon from state. The return type is `string`:
+                                     // the host's table must end in an unconditional row. The engine
+                                     // never falls back to `request.context` (model prose) or a library
+                                     // default — nothing the engine or the model authors is spoken.
+                                     // NEVER called for off_topic (a silent hand-back).
+  delegateFailureMessage?: (state: T) => string;
+                                     // REQUIRED in delegate mode (4.0.0; validated at construction) —
+                                     // the caller-audible fallback when a delegate run fails. Unused
+                                     // in terminate mode.
   resolveHandoffType?: (state: T, request: HandoffRequest)
                         => "completed" | "abandon" | undefined;
                                      // OPTIONAL (2.3.0) — decide the handback SIGNAL from state
@@ -932,17 +1118,39 @@ interface HandoffSpec<T> {
                                      // prompt prose, each variant carrying its own when-to-use
                                      // description. Does NOT replace HandoffRequestSchema: the
                                      // library-managed slot and trusted effects keep the base
-                                     // schema. Output must still be a HandoffRequest. Engine-only
-                                     // escalation routes (ladder onExhaust contexts) are deliberately
-                                     // OMITTED from it, so the engine holds the only path to them.
+                                     // schema. Output must still be a HandoffRequest. The engine's
+                                     // own structural contexts (auto-handoff, escalation, misuse) are
+                                     // deliberately OMITTED from it, so the engine holds the only
+                                     // path to them.
 }
 ```
 
-**`resolveClosingMessage`** lets the host gate the spoken closing on what actually happened: e.g. only
-speak a success line for `completed` when the mutating action truly persisted, otherwise return a
-neutral/failed phrasing. It runs in `createHandoffNode` for `completed` / `abandon` only; a returned
-string becomes the final message `content` (and `handoff_metadata.success_message`), `undefined` falls
-through to `request.context`.
+**`resolveClosingMessage` is the ONLY source of a spoken closing (4.0.0).** It runs in
+`createHandoffNode` for `completed` / `abandon`; the returned string becomes the final message
+`content` (and `handoff_metadata.success_message`). The host gates the closing on what actually
+happened — a success line for `completed` only when the mutating action truly persisted, a
+neutral/failed phrasing otherwise — and on the engine's own endings, which arrive as STRUCTURAL
+contexts the table matches:
+
+```ts
+import { AUTO_HANDOFF_CONTEXT, ESCALATION_CONTEXT_PREFIX, MALICIOUS_CONTEXT, escalationContext }
+  from "./agent-step/index.js";
+
+resolveClosingMessage: (state, request) => {
+  const c = closingsFor(state.language);                        // host catalog, keyed on state
+  if (request.context === MALICIOUS_CONTEXT) return c.misuse;   // first: overrides the task state
+  if (state.operationSucceeded) return c.success;               // honesty invariant
+  if (request.context === AUTO_HANDOFF_CONTEXT) return c.technical;
+  if (request.context === escalationContext("verify_card")) return c.cardDigitsUnknown;
+  if (request.context.startsWith(ESCALATION_CONTEXT_PREFIX)) return c.escalated;
+  if (request.reason === "abandon") return c.transfer;
+  return c.goodbye;                                             // the unconditional last row
+},
+```
+
+`request.context` stays routing metadata (it rides the envelope as `handoff_reason`). This replaces the
+1.x–3.x design in which the context could BE the closing sentence — spoken model prose for
+`completed`/`abandon`, and a byte-matched library sentence for the auto-handoff.
 
 **State can decide the signal and the metadata (2.3.0).** `resolveHandoffType` is resolved **before the
 first control-plane event**, so the `handoff` custom event, the closing line, `handoff_type` and
@@ -969,7 +1177,7 @@ in state when a handback resolves is what the NEXT task on that thread starts fr
 `agentStepTaskScopedSlots` (`awaitingInput`, `currentFlow`, `pagedRead`, `spentLadders`, `errorCount`)
 plus every domain slot the host named in **`clearsOnHandback`**. Two carve-outs, both correctness
 invariants rather than preferences, so neither is configurable: **`off_topic` clears nothing** (a
-mid-task aside must stay resumable — the caller can come straight back; a spent ladder stays spent),
+mid-task aside must stay resumable — the caller can come straight back; spent patience stays spent),
 and **a successful delegate clears nothing** (the conversation never left this agent). The closing
 line, the signal, and any `resolveClosingMessage` reading state are all computed before the clear, so
 the reply is unaffected.
@@ -989,81 +1197,90 @@ nothing it does can reach the reply, the signal, the metadata or the clears. It 
 handback type (`off_topic` included — the host filters) and never for a successful delegate. It is
 an observer by construction: it returns nothing the node reads and cannot write state, so it can
 never become a second resolver. Why the field exists: some endings run no host executor at all —
-an exhausted ladder, the auto-handoff over a thrown executor — so the resolver is the only place
+an exhausted escalation, the auto-handoff over a thrown executor — so the resolver is the only place
 that sees every ending; without it a host could reach those endings only by wrapping the node or by
 hiding I/O in the pure `resolve*` functions. The library does not log: report failures inside the
 hook.
 
-**Asides mid-task**: the free-deflection damper that was `HandoffSpec.deflectAside` (2.4.0) is now a
-LADDER — configure an aside ladder in the `ladders` registry (instruction: decline in one short
-sentence and re-ask in the same turn; `onExhaust`: the `off_topic` handback carrying the aside as
-routing context) and let the prompt route nobody-serves-it chit-chat to `note_refusal`. Same policy,
-one mechanism, one latch (see `<ladders>`).
+**Asides mid-task**: a question the flow cannot answer, asked while the caller is still pursuing the
+task, is `note_refusal` kind `unsupported_question` — the engine directs a one-sentence decline and
+a repeat of the pending question, and escalates by itself if it recurs (see `<escalation>`). A
+STANDALONE request for something else is not an aside: that is an `off_topic` handback.
 
-Exports: `HANDOFF_ACTION` (`"request_handoff"`), `HANDOFF_NODE` (`"resolve_handoff"` — a node can't be named `handoff`, the state channel claims it), `HANDOFF_ACTION_DESCRIPTION`, `HANDBACK_SIGNALS` (reason → `handoff_type` signal; identity over `off_topic` / `completed` / `abandon`), `handoffParamsSchema`, `handoffRequested(state)` (edge predicate), `createHandoffNode(spec)`, and types `HandoffSpec`, `HandoffOffTopicSpec`, `HandoffDelegateTarget`.
+Exports: `HANDOFF_ACTION` (`"request_handoff"`), `HANDOFF_NODE` (`"resolve_handoff"` — a node can't be named `handoff`, the state channel claims it), `HANDOFF_ACTION_DESCRIPTION`, `AUTO_HANDOFF_CONTEXT` (`"auto_handoff"`), `HANDBACK_SIGNALS` (reason → `handoff_type` signal; identity over `off_topic` / `completed` / `abandon`), `handoffParamsSchema`, `handoffRequested(state)` (edge predicate), `createHandoffNode(spec)`, and types `HandoffSpec`, `HandoffOffTopicSpec`, `HandoffDelegateTarget`.
 
-Wire a conditional edge after the tool node — `createReactAgent` cannot express it, so the graph is hand-rolled: `addConditionalEdges("tools", s => handoffRequested(s) ? HANDOFF_NODE : "agent")`, `addNode(HANDOFF_NODE, createHandoffNode(spec))`, `addEdge(HANDOFF_NODE, END)`. The node emits a `handoff` custom event FIRST (streaming clients abort TTS / reroute before any content), resolves the response (terminate envelope, or a delegate run over the Platform API with live `delegated_token` pass-through and a behavioral fallback to the envelope on failure), emits `handoff_complete`, calls the host's `onHandback` observer when one is configured (3.1.0 — not awaited, contained), and returns `{ handoff: null, ...clears, messages: [AIMessage] }` (the clears are empty unless a task-ending handback resolved — see above) — the model never paraphrases the result.
+Wire a conditional edge after the tool node — `createReactAgent` cannot express it, so the graph is hand-rolled: `addConditionalEdges("tools", s => handoffRequested(s) ? HANDOFF_NODE : "agent")`, `addNode(HANDOFF_NODE, createHandoffNode(spec))`, `addEdge(HANDOFF_NODE, END)`. The node emits a `handoff` custom event FIRST (streaming clients abort TTS / reroute before any content), resolves the response (the host-rendered closing — or silence for `off_topic` —, or a delegate run over the Platform API with live `delegated_token` pass-through and a fallback to `delegateFailureMessage(state)` on failure), emits `handoff_complete`, calls the host's `onHandback` observer when one is configured (3.1.0 — not awaited, contained), and returns `{ handoff: null, ...clears, messages: [AIMessage] }` (the clears are empty unless a task-ending handback resolved — see above) — the model never paraphrases the result.
 
-**Final-message kwargs** (the channel contract): every non-delegate resolution is a handback — `is_handoff: true`, `handoff_type` = the effective reason's signal (`off_topic` / `completed` / `abandon`, after any `resolveHandoffType`), `handoff_reason` = `context`, `handoff_metadata: { ...host fields from resolveHandoffMetadata, service_type, success_message }` — host fields first, library keys last and unclobberable. Spoken content: the `off_topic` envelope (`terminateMessage`, also the delegate-failure fallback) or the closing in `context` for `completed` / `abandon` (the middleware delivers it and flips routing for the NEXT request). Delegate success → NOT a handoff (conversation kept) — informational `{ delegated_to }` only. Streaming clients must request `stream_mode: ["messages-tuple", "custom"]` — the node-built final message never appears in the token stream; `handoff_complete` carries its text. Full wire details + the middleware checklist: `streaming-and-channel-contract.md`.
+**Final-message kwargs** (the channel contract): every non-delegate resolution is a handback — `is_handoff: true`, `handoff_type` = the effective reason's signal (`off_topic` / `completed` / `abandon`, after any `resolveHandoffType`), `handoff_reason` = `context`, `handoff_metadata: { ...host fields from resolveHandoffMetadata, service_type, success_message }` — host fields first, library keys last and unclobberable. Spoken content: EMPTY for a terminate-mode `off_topic` (a silent re-route — the destination agent owns the reply), `delegateFailureMessage(state)` after a failed delegate run, or the host-rendered closing (`resolveClosingMessage`) for `completed` / `abandon` (the middleware delivers it and flips routing for the NEXT request). For engine-decided endings `handoff_reason` is a structural code (`auto_handoff`, `agent-step:escalated[:<action>]`, `agent-step:malicious`), not prose. Delegate success → NOT a handoff (conversation kept) — informational `{ delegated_to }` only. Streaming clients must request `stream_mode: ["messages-tuple", "custom"]` — the node-built final message never appears in the token stream; `handoff_complete` carries its text. Full wire details + the middleware checklist: `streaming-and-channel-contract.md`.
 </handoff>
 
-<system_messages>
-## Runner-emitted system messages (`BuildAgentStepToolOptions.messages`)
+<satisfies>
+## State-satisfied inputs (`ActionDef.satisfies`) — 4.0.0
 
-The runner emits its own `summary` strings for structured refusals/errors it raises directly (not from a verdict row): executor crash, invalid params, unknown action, the abort outcomes, the flow gates, the lockdown/batch-shape refusals, and the confirmation/OTP/match gate outcomes — plus the model-facing CONTRACTS that ride result bodies (reply contracts, the standing-ask contract, the read-back framing directives). **Every runner-emitted string is overridable.** These ship as **neutral English defaults** in `src/agent-step/messages.ts` so the library has ZERO dependency on any host project.
+An action's required input may already exist in state — carried from earlier in the call by the
+channel, or asserted by the channel itself (an authenticated session). `satisfies` declares that, and
+the engine owns the whole mechanic, so the host stops hand-rolling it (a probe module, carried-value
+prompt flags, an executor branch per channel):
 
 ```ts
-interface SystemMessages {
-  executor_error: string;     // an executor threw / named an undeclared verdict (raw cause in `_debug`)
-  invalid_params: string;     // step params failed schema validation (raw detail in `_debug`)
-  unknown_action: string;     // a hallucinated/typo'd action name reached the runner
-  flow_already_active: string;// tried to open a flow while a different flow is active
-  no_flow: string;            // a flow-scoped step ran with no flow active
-  wrong_flow: string;         // a flow-scoped step ran against the wrong flow
-  abort_done: string;         // abort_pending_input cleared a pending gate / active flow
-  abort_nothing: string;      // abort_pending_input ran with nothing pending (no-op)
-  auto_handoff: string;       // spoken when the auto-handoff threshold is hit (see <auto_handoff>)
+interface SatisfiesSpec {
+  values: Record<string, string>;  // bundle name → dotted state path, e.g.
+                                   // { spokenDigits: "collected_identity.taxNumber" }
+  mode: "silent" | "consent";
+  ask?: (state: unknown) => string;// consent only (required): the caller-audible reuse-consent question
+  elseVerdict?: string;            // consent only (required): the declared row answering an empty call
+                                   // when nothing usable is carried
+}
 
-  // Templated summaries — may carry `{placeholder}` tokens the runner
-  // interpolates at emit time (via `formatMessage`; unknown placeholders stay
-  // verbatim so a bad override is visible, not silently blanked). Overrides
-  // are plain strings, so they can live in a host's JSON locale resources.
-  lockdown_confirmation: string;         // {action} {abort_action}
-  lockdown_otp: string;                  // {action} {abort_action}
-  lockdown_match: string;                // {action} {capturer} {abort_action}
-  handoff_must_be_sole_step: string;     // {action}
-  mutation_must_be_sole_step: string;    // {action}
-  mutation_execute_must_be_sole: string; // {action}
-  mutation_must_be_last_in_batch: string;// {action}
-  confirm_proposed: string;              // {action}
-  confirm_reproposed: string;            // {action}
-  confirm_exhausted: string;             // {action}
-  otp_not_pending: string;               // {action}
-  match_not_pending: string;             // {action} {capturer}
-  otp_blocked_match_pending: string;     // {action} {match_action}
-  match_attempts_exhausted: string;      // {action}
-  handoff_requested: string;             // {reason}
-  no_steps: string;                      // (no placeholders)
-  auto_handoff_instruction: string;      // {message} — see <auto_handoff>
-
-  // Model-facing CONTRACTS riding result bodies (3.0.0) — the gate/ask turns
-  // react to these wire bytes instead of prompt memory:
-  confirm_reply_contract: string;        // {action} — the GENERIC reply contract on every proposal
-                                         // (replaced per-action by a composed replyContract)
-  standing_ask_contract: string;         // {action} {param} — rides the entry that recorded a
-                                         // standing ask (see <standing_asks>); includes the
-                                         // repeated-value clause (a reply repeating an
-                                         // already-refused value still calls — the engine counts
-                                         // those turns for captureBounces)
-  read_back_directive_repeat: string;    // framing directive on the repeat control's returned
-                                         // read_back: the stored recap is complete and ends the turn
+interface SatisfiedSource {        // the executor's optional third argument
+  values: Record<string, unknown>; // the resolved bundle; capture-field entries already normalized
 }
 ```
 
-A host overrides any subset via `buildAgentStepTool({ messages })` (`Partial<SystemMessages>`, **shallow-merged** over `DEFAULT_SYSTEM_MESSAGES`). Use this for localized / voice-safe wording on a TTS or non-English agent — and remember the contract strings are MODEL-facing (never caller-audible): they stay English on a Greek agent, but a host may tighten their taxonomy (the reference host overrides `standing_ask_contract` with domain reply categories). The library never imports host strings; the host injects them.
+**The trigger is an EMPTY call** — one that supplies none of the action's capture fields. A call
+carrying any capture value is dictated, and the caller's own words always win: `satisfies` is never
+consulted.
 
-Exports (from `index.ts`): `DEFAULT_SYSTEM_MESSAGES`, `resolveSystemMessages(overrides?)`, type `SystemMessages`. Note these are the **runner's own** strings only — a verdict row's `summary` (the LLM-facing per-action text) is authored on the row and is unaffected.
-</system_messages>
+| | `mode: "consent"` | `mode: "silent"` |
+|---|---|---|
+| Requires | the action IS confirmation-gated; `ask`; `elseVerdict` naming a declared row; at least one `values` key naming one of the action's own capture fields | the action is NOT confirmation-gated; no `ask`, no `elseVerdict` |
+| Availability | PARTIAL: capture-field keys are required, every other key is an optional rider, skipped when absent | ALL-OR-NOTHING: every key must resolve — the bundle's completeness is the predicate |
+| Empty call, source available | proposes on the action's own gate: `read_back` = `ask(state)`, `proposed_params: {}`; the caller's yes re-fires the same empty call, and the executor receives the bundle | executes immediately; the executor receives the bundle |
+| Empty call, nothing usable | answers through the `elseVerdict` row at propose time — no gate stored, no attempt spent (that row typically carries the `ask` for the value) | reaches the executor with no `source`; the executor owns that answer |
+
+The mode is gate-bound by construction: the consent question rides the action's existing confirmation
+gate (the engine never synthesizes one), and a silent skip of a consent-purpose gate is not
+representable.
+
+A `values` key naming one of the action's capture fields is validated — and normalized — through that
+field's own schema, the same refinement a dictated value passes: a malformed carried value makes the
+source unavailable instead of opening a gate over garbage. Other keys are presence-checked and handed
+to the executor as-is. A key may never name a judged or relayed param (state must not impersonate a
+model classification), and paths must be rooted at a host channel — never a library-managed slot.
+
+The values ride state → executor and **never reach the model**: the proposal's `proposed_params` stay
+`{}`. There is deliberately no model-facing surface for the mechanic — no describe marker, no composed
+protocol clause. The LICENCE to make the empty call ("call it with no value first") stays host prompt
+text.
+
+```ts
+// action.ts
+satisfies: {
+  values: { spokenDigits: "collected_identity.taxNumber" },
+  mode: "consent",
+  ask: (state) => carriedIdentityConsentAsk(state as State),
+  elseVerdict: "no_identity_carried",
+},
+
+// executor.ts
+export async function verifyCustomer(params: unknown, slice: Slice, source?: SatisfiedSource) {
+  const digits = (params as Params).spokenDigits ?? (source?.values.spokenDigits as string | undefined);
+  if (!digits) return { verdict: "no_identity_carried" };   // defense in depth: the same declared row
+  …
+}
+```
+</satisfies>
+
 
 <auto_handoff>
 ## Auto-handoff on repeated backend failures
@@ -1076,15 +1293,17 @@ A safety net so a customer is never trapped in an unrecoverable backend-error lo
 // BuildAgentStepToolOptions additions
 backendFailureCodes?: string[];   // extra codes that count (executor_error + backendFailure rows
                                   // always count)
-errorHandoffThreshold?: number;   // default 3
+errorHandoffThreshold?: number;   // default 3 (ERROR_HANDOFF_THRESHOLD), or the deployment's
+                                  // AGENT_STEP_ERROR_HANDOFF_THRESHOLD when omitted — a value given
+                                  // here wins over the variable (see <escalation>, Tolerances)
 onErrorThreshold?: (update: Record<string, unknown>, state: T) => void;
                                   // host hook fired at the threshold — inject a custom
                                   // handoff signal (e.g. write a scaffold `pendingHandoff` slot)
 ```
 
-**At the threshold the runner:** (1) writes the library `handoff` slot `{ reason: "abandon", context: messages.auto_handoff }` when the `handoff` opt is enabled; (2) calls `onErrorThreshold(committed, state)` if provided; (3) resets `errorCount` to 0; (4) appends a synthetic step result `{ action: "auto_handoff", ok: true, isHandoff: true, signal: "abandon", successMessage: <auto_handoff> }`, sets `body.summary` to the **`auto_handoff_instruction`** template, and clears `failed_at`.
+**At the threshold the runner:** (1) writes the library `handoff` slot `{ reason: "abandon", context: AUTO_HANDOFF_CONTEXT }` when the `handoff` opt is enabled; (2) calls `onErrorThreshold(committed, state)` if provided; (3) resets `errorCount` to 0; (4) appends a synthetic step result `{ action: "auto_handoff", ok: true, isHandoff: true, signal: "abandon", instruction }`, sets `body.instruction` to the same engine text (`ENGINE_TEXT.auto_handoff_instruction`), and clears `summary` and `failed_at`.
 
-**Who speaks the closing.** The default `auto_handoff_instruction` tells the model the turn ends here and to produce NO further answer — **the platform delivers the closing** (a `createHandoffNode` graph speaks the handoff `context`; a scaffold/middleware host speaks `success_message` from the final-message kwargs). A host whose graph does NOT deliver the closing overrides `auto_handoff_instruction` and uses the `{message}` placeholder (= the `auto_handoff` closing) to have the model speak it.
+**Who speaks the closing.** The instruction tells the model the turn ends here and to produce NO further answer — **the platform delivers the closing**: a `createHandoffNode` graph calls the host's `resolveClosingMessage`, which matches `request.context === AUTO_HANDOFF_CONTEXT` and renders the technical-escalation closing from state. `AUTO_HANDOFF_CONTEXT` (`"auto_handoff"`) is a routing CODE, never caller prose — through 3.x the context WAS the closing sentence and hosts detected it by byte-equality against a locale entry. A host whose graph does NOT use `createHandoffNode` delivers its own closing from `onErrorThreshold`'s signal.
 
 **Inert by default.** The whole mechanism is skipped unless a handoff path exists — i.e. the `handoff` opt is provided OR `onErrorThreshold` is set. A tool with neither never touches `errorCount`.
 </auto_handoff>
@@ -1094,7 +1313,10 @@ onErrorThreshold?: (update: Record<string, unknown>, state: T) => void;
 
 ```ts
 interface RunnerResultBody {
-  summary: string;                 // last step's summary (success) OR failing step's summary
+  summary?: string;                // mirrors the LAST entry's host caller-audible `summary`, when the
+                                   // batch ended on one
+  instruction?: string;            // mirrors the LAST entry's engine `instruction`, when the batch
+                                   // ended on one (refusals, proposals, controls, the empty batch)
   results: StepResult[];           // one entry per executed step
   failed_at?: number;              // index into results where batch short-circuited
 }
@@ -1102,15 +1324,17 @@ interface RunnerResultBody {
 interface StepResult {
   action: string;
   ok: boolean;
-  [key: string]: unknown;          // the row-composed body fields spread in
+  [key: string]: unknown;          // the row-composed body fields spread in — or, for an entry the
+                                   // engine raised, its `instruction` + `error`
 }
 ```
 
-The `summary` of a runner-emitted refusal/error (executor crash, invalid params, abort, flow gates) is a **host-overridable system message** — see `<system_messages>`. For the `executor_error` and `invalid_params` kinds the runner also attaches a **`_debug`** field carrying the raw technical cause (the thrown message / the Zod issue list), so the overridable `summary` can stay user-safe while the diagnostic detail is preserved for logs.
+An entry carries `summary` (a declared row: host caller-audible bytes) OR `instruction` (engine-raised: a directive the model follows) — see `<registers>`. For the `executor_error` and `invalid_params` kinds the runner also records a **`_debug`** field carrying the raw technical cause (the thrown message / the Zod issue list). `runSteps` returns it on the entry; `buildAgentStepTool` strips it from the `ToolMessage` content and carries it on the message `artifact` (`{ debug }`) — preserved for traces, invisible to the model.
 
 Library-injected fields on specific step kinds:
 - `abort_pending_input` results carry `aborted_awaiting: { kind, for_action }` and/or `aborted_flow: "<name>"` when something was actually cleared.
-- `executor_error` / `invalid_params` results carry `_debug` with the raw cause (the `summary` itself is the overridable system message).
+- `executor_error` / `invalid_params` results carry the engine `instruction` (count-free on the capture path) and — off the wire — `_debug` with the raw cause.
+- an `invalid_params` bounce past the tolerance carries the in-place explanation instruction, then `escalated: true, handoff_requested: true, reason` on the escalation (see `<escalation>`).
 - `issuesOtp` refused while a match gate is pending carries `error: "otp_blocked_match_pending"`.
 - propose / re-propose results carry `needs_confirmation: true`, `proposed_params`, `attempts_left`, a **`reply_contract`** (the composed action-specific contract, or the generic `confirm_reply_contract`), and — when the action declares `ConfirmationOpts.readBack` and it renders something — `read_back` (proposal-only; never on the executing re-call) plus `read_back_directive` when `readBackDirective` renders.
 - exhausted results carry `error: "confirmation_attempts_exhausted"`.
@@ -1118,8 +1342,9 @@ Library-injected fields on specific step kinds:
 - match-mismatch results gain `attempts_left` (decremented) or `verdict: "match_attempts_exhausted"` on the last try.
 - a matching confirm re-call on the proposal's own caller turn carries `error: "confirmation_same_turn_locked"` (no attempt spent; gate untouched).
 - the final entry that recorded a standing ask carries `standing_ask: { action, param }`, `ask_contract`, and `ask_text` when the ask's `render` returned bytes (see `<standing_asks>`).
-- `repeat_pending_question` results carry the stored `read_back` + the `read_back_directive_repeat` framing.
-- `note_refusal` results carry `refusal_noted: true` and the ladder's `instruction` as summary on a free use, or `ladder_exhausted: true, handoff_requested: true, reason` on the escalation (see `<ladders>`).
+- `repeat_pending_question` results carry the stored `read_back` + the `read_back_directive_repeat` framing; over a standing ask, `ask_repeated: true`, `for_action` and the stored ask as `read_back`.
+- `note_refusal` results carry `refusal_noted: true`, the `kind`, and the engine's in-place `instruction` on a free use; `escalated: true, handoff_requested: true, reason` on the escalation; `handoff_requested: true, reason: "completed"` on the third `malicious_intent`; `error: "nothing_owed"` for a `declined_or_cannot` with no value owed (see `<escalation>`).
+- a consent proposal answered from state (`satisfies`) carries `proposed_params: {}` and the rendered reuse-consent question as `read_back` (see `<satisfies>`).
 </result_envelope>
 
 <construction_time_checks>
@@ -1128,12 +1353,12 @@ The runner validates the config + registries at construction. These all throw at
 | Error message contains | Cause |
 |------------------------|-------|
 | `requires \`stateSchema\`` | `stateSchema` not provided |
-| `is a reserved action name` | You declared `abort_pending_input` in config.actions (or `request_handoff` while the `handoff` opt is provided, or `note_refusal` while `ladders` is non-empty, or `repeat_pending_question` while some action opts into `repeatReadBack`) |
+| `is a reserved action name` | You declared `abort_pending_input` in config.actions (or `request_handoff` / `note_refusal` while the `handoff` opt is provided, or `repeat_pending_question` while some action opts into `repeatReadBack`) |
 | `expects a state selector at selectors["xxx"]` | `selectors` registry missing the action-name key for an action |
 | `expects an executor at executors["xxx"]` | `executors` registry missing the action-name key for an action |
 | `is missing a non-empty description` | An action lacks `description` |
 | `verifiers["xxx"] was not provided` | A prereq referenced by some action has no verifier |
-| `pageable action's paramsSchema must be a z.object` | A `pageable` action's `paramsSchema` isn't a `z.object` |
+| `pageable action's paramsSchema must be a plain z.object` | A `pageable` action's `paramsSchema` isn't a plain `z.object` (a refined object — `superRefine` / `exactlyOneOf` — cannot be page-extended) |
 | `at least one action must be defined` | Empty `config.actions` |
 | `declares startsMatchFor "X" but that consumer doesn't declare requiresMatch` | Capturer names a consumer that exists but lacks the `requiresMatch` hook |
 | `declares issuesOtp for "X" but no such action exists` | `issuesOtp.consumer_action` names a non-existent action |
@@ -1141,14 +1366,23 @@ The runner validates the config + registries at construction. These all throw at
 | `the state schema is missing channel(s)` | Channel-completeness check: a library slot this configuration writes has no channel in the host schema — spread `agentStepZodShape` / `agentStepStateSpec` |
 | `has a verdicts entry with an empty code` | A `verdicts` row keyed by an empty string |
 | `sets backendFailure but body.error is not a static string` | A `backendFailure: true` row whose `body.error` is missing or dynamic — the failure counter matches on that code (3.0.0) |
-| `asks["xxx"] targets unknown action` / `names param "xxx" which is not declared` / `has invalid expects` | Standing-ask validation (3.0.0): the mapped target action must exist and the named param must be a declared field of its params schema |
+| `declares no verdict rows` | An action with no `verdicts` — every executor result names a row, so a row-less action can never answer a call (4.0.0) |
+| `verdicts["xxx"].ask targets unknown action` / `declares no caller-capture field` / `omits \`param\` but … declares N capture fields` / `names param "xxx" which is not declared` / `is not a caller-capture field` | Row-ask validation (4.0.0): the target must exist and declare a capture field (`digits`/`text`); `param` is required only when the target has several, and must name a capture — not a judged or relayed param |
+| `declares an ask AND a terminal handoff` | A row carrying a `request_handoff` effect also declares `ask` — a handed-back conversation owes nothing (4.0.0) |
+| `exposes JSON-Schema keyword "xxx"` | A model-facing params schema carries `pattern` / `minLength` / `maxLength` / `format` — express value-shape rules as refinements (4.0.0) |
+| `names "xxx" in double quotes, which is not a declared action or control` | An `askContract` or `replyContract` category routes the model to a name that is not callable — fix the name, or write a wire field in backticks (4.0.0) |
+| `askContract requires at least one reply category` / `categories must be non-empty strings` | An `askContract` with an empty `categories` list — omit the option to keep the generic frame (4.0.0) |
+| `invalidations names …` | The config-level invalidation table names a library-managed slot, or a slot that is not a channel of the state schema (4.0.0) |
+| `bounceCapture "xxx" is not one of its capture fields` / `declares bounceCapture with a single capture field` | `bounceCapture` must name one of SEVERAL capture fields; with one it is derived and must be omitted (4.0.0) |
+| `declares satisfies …` / `satisfies.values["k"] …` / `satisfies mode "consent" …` / `satisfies mode "silent" …` | State-satisfied-input validation (4.0.0): at least one value; paths rooted at a host channel (never a library slot); a key naming one of the action's params must name a CAPTURE; `consent` needs the confirmation gate, `ask`, a declared `elseVerdict` row and at least one capture key; `silent` forbids the gate, `ask` and `elseVerdict` (see `<satisfies>`) |
+| `handoff.resolveClosingMessage is required` | The handoff spec lacks the host closing renderer — required and total (4.0.0) |
+| `handoff.delegateFailureMessage is required in delegate mode` | A delegate-mode spec lacks the host-rendered failure fallback (4.0.0) |
 | `enables repeatReadBack but declares no replyContract` | A repeatable gate routes re-asks through the repeat control, which the generic reply contract forbids — declare the gate's own reply taxonomy (3.0.0) |
 | `composeGateContract requires …` | A `replyContract` spec with an empty `subject`/`subjectNoun`/`executesLabel` or no categories (a yes/no-only gate keeps the generic contract instead) |
-| `ladders require handoff` | A non-empty `ladders` registry without the `handoff` opt — every ladder escalates into one (3.0.0) |
-| `ladder "xxx" …` | Ladder validation (3.0.0): empty name/description/instruction, `maxFreeUses` < 1, or an `onExhaust` that fails `handoffParamsSchema` |
-| `captureBounces … not a configured ladder` | An action's `captureBounces.ladder` names no entry in the `ladders` registry (3.0.0) |
 | `abortPolicy …` | Abort-policy validation (2.5.0): non-boolean knobs, empty/duplicate/unknown action names in `allowedFollowers` / `allowedPendingTargets`, or `allowStandalone=false` with an explicitly empty follower list |
 | `handoff.modelRequestSchema must be a Zod schema` | The model-facing handoff schema narrowing isn't a Zod schema |
+
+Since 4.0.0 **`runSteps` runs the same validation** (once per options object), so a test harness surfaces these in the suite that exercises the wiring rather than at `npm run dev`.
 
 Runtime errors raised by the runner (not construction-time, but loud):
 
@@ -1159,6 +1393,7 @@ Runtime errors raised by the runner (not construction-time, but loud):
 | `requested merge_flow_data but no flow is active` | Executor emitted `merge_flow_data` without `startsFlow` and no flow is open |
 | `reported otp_issued but no flow is active` | Issuer didn't pair with `startsFlow` |
 | `reported otp_issued but config lacks issuesOtp opt` | Executor returned the effect but the action's config didn't declare `issuesOtp` |
+| `AGENT_STEP_… must be an integer >= N` | A tolerance environment variable is set to something that is not a plain base-10 integer within range — fix or unset it (see `<escalation>`, Tolerances) |
 | `otp_blocked_match_pending` (step error) | An `issuesOtp` step ran while a double-entry match gate was still pending — consume the match before issuing the OTP; the match's own consumer is exempt and may issue (see `<otp_lifecycle>`) |
 
 Slot declaration is enforced at construction (the channel-completeness row above) — a state schema missing a required library slot fails at startup instead of silently dropping writes. Spreading `agentStepZodShape` into your Zod state schema (as the bootstrap state template does) brings all six slots in together with their reducers.
@@ -1168,16 +1403,17 @@ Slot declaration is enforced at construction (the channel-completeness row above
 For ground truth, read these files in the project (don't paraphrase — they ARE the contract):
 
 - `src/agent-step/index.ts` — the public surface (only what's re-exported here is part of the API; the module layout below is internal)
-- `src/agent-step/types.ts` — the authoring contracts: `VerdictDef`, `DeclaredExecutorResult`, `ExecutorEffect`, `Executor`, registries, `ActionDef`, `ControllerHooks`, `ConfirmationOpts`, `GateContractSpec`, `DictationAsk`, `CaptureBouncePolicy`, `Verifier`
+- `src/agent-step/types.ts` — the authoring contracts: `VerdictDef`, `DeclaredExecutorResult`, `ExecutorEffect`, `Executor`, registries, `ActionDef`, `ControllerHooks`, `ConfirmationOpts`, `GateContractSpec`, `AskContractSpec`, `RowAsk`, `SatisfiesSpec`, `SatisfiedSource`, `Verifier`
 - `src/agent-step/state.ts` — the library-managed slot schemas (`AwaitingInputSchema`, `CurrentFlowSchema`, `PagedCacheSchema`, `HandoffRequestSchema`) + the slot table (`AGENT_STEP_SLOT_META`) + the spreadable fragments (`agentStepZodShape`, `agentStepStateSpec`, `agentStepInternalSlotMask`) and derived lists (`agentStepTaskScopedSlots`, `agentStepRunnerOwnedSlots`)
 - `src/agent-step/runner.ts` — the thin public entry points (`buildAgentStepTool`, `runSteps`); the machinery lives in the phase modules:
-  - `compile/` — `validate.ts` (every construction-time check), `plan.ts` (`BuildAgentStepToolOptions` + the compiled plan), `activation.ts` (the single ControlActivation construction), `schema.ts` / `describe.ts` (the model-facing schema + tool description), `action-describe.ts` (the composed per-action description), `gate-contract.ts` (`composeGateContract`), `protocol.ts` (`composeProtocolPrompt`), `state-schema.ts`
-  - `run/` — `admission.ts` (the fixed-order whole-batch preconditions), `planning.ts` (confirm-mode freeze), `execution.ts` (per-step loop, verdict-row normalization, effects ordering, handoff monotonicity), `finalize.ts` (result body + standing-ask lifecycle + error-counter policy), `batch-state.ts` (the single write path into view/committed), `value-equal.ts`
-  - `interaction/` — one policy module per gate kind: `confirmation.ts`, `otp.ts`, `match.ts`, `flow.ts`, `dictation.ts` (the standing-ask lifecycle), `turn-identity.ts` (`resolveCallerTurnId`)
-  - `controls/` — the library-owned model-facing actions (`abort.ts`, `request-handoff.ts`, `repeat-question.ts`, `note-refusal.ts` — also `climbLadder` + the ladder types) in an ordered `registry.ts`, over the shared `contract.ts`
+  - `compile/` — `validate.ts` (every construction-time check), `plan.ts` (`BuildAgentStepToolOptions` + the compiled plan), `activation.ts` (the single ControlActivation construction), `schema.ts` / `describe.ts` (the model-facing schema + tool description), `action-describe.ts` (the composed per-action description), `gate-contract.ts` (`composeGateContract`), `ask-contract.ts` (`composeAskContract`), `asks.ts` (row-ask resolution + the derived bounce capture), `protocol.ts` (`composeProtocolPrompt`), `state-schema.ts`
+  - `run/` — `admission.ts` (the fixed-order whole-batch preconditions), `planning.ts` (confirm-mode freeze), `execution.ts` (per-step loop, verdict-row normalization, effects ordering, handoff monotonicity), `finalize.ts` (result body + standing-ask lifecycle + error-counter policy), `satisfies.ts` (state-satisfied input resolution), `batch-state.ts` (the single write path into view/committed), `value-equal.ts`
+  - `interaction/` — one policy module per gate kind: `confirmation.ts`, `otp.ts`, `match.ts`, `flow.ts`, `dictation.ts` (the standing-ask lifecycle), `escalation.ts` (bounded patience: the bounce / explanation / misuse counters and the structural contexts), `turn-identity.ts` (`resolveCallerTurnId`)
+  - `controls/` — the library-owned model-facing actions (`abort.ts`, `request-handoff.ts`, `repeat-question.ts`, `note-refusal.ts` — the refusal kinds) in an ordered `registry.ts`, over the shared `contract.ts`
   - `handoff/` — `contract.ts` (action + signals + `HandoffSpec`), `node.ts` (`createHandoffNode` — the frozen channel contract), `delegate-client.ts` (SSE/Platform-API transport)
 - `src/agent-step/paginate.ts` — the read-pagination primitives + the `pageable` orchestration
-- `src/agent-step/capture.ts` — the caller capture primitives (refinement-not-regex, count-free messages, group join, candidate arrays, text/relay/XOR builders; see `<caller_digit_capture>`)
-- `src/agent-step/messages.ts` — the runner's overridable strings: `SystemMessages`, `DEFAULT_SYSTEM_MESSAGES`, `resolveSystemMessages`
-- Tests (all pass on `npm test`): `runner.test.ts`, `paginate.test.ts`, `capture.test.ts`, `capture-bounce.test.ts`, `handoff.test.ts`, `hardening.test.ts`, `repeat-question.test.ts`, `note-refusal.test.ts`, `dictation.test.ts`, `verdict-map.test.ts`, `action-describe.test.ts`, `gate-contract.test.ts`, `zod-state.test.ts` — worked examples covering every runner branch, the declared-verdict normalization, the standing-ask lifecycle, the ladder mechanism, the capture-bounce bound, the composed descriptions/contracts, and the stored-byte question repeat
+- `src/agent-step/capture.ts` — the param builders and the field-kind registry (refinement-not-regex, count-free messages, group join, candidate arrays, text/judged/relay/XOR builders; see `<caller_digit_capture>`)
+- `src/agent-step/engine-text.ts` — every string the engine emits to the model (`ENGINE_TEXT`, `formatMessage`), with the register doctrine; not overridable (see `<registers>`)
+- `src/agent-step/tolerances.ts` — the four engine tolerances: measured defaults, the `AGENT_STEP_*` variable names (`TOLERANCE_ENV`) and `resolveTolerances`; the only module that reads the environment (see `<escalation>`, Tolerances)
+- Tests (all pass on `npm test`): `runner.test.ts`, `paginate.test.ts`, `capture.test.ts`, `field-kinds.test.ts`, `handoff.test.ts`, `hardening.test.ts`, `declare-hardening.test.ts`, `repeat-question.test.ts`, `escalation.test.ts`, `tolerances.test.ts`, `satisfies.test.ts`, `engine-text.test.ts`, `dictation.test.ts`, `verdict-map.test.ts`, `action-describe.test.ts`, `gate-contract.test.ts`, `zod-state.test.ts` — worked examples covering every runner branch, the declared-verdict normalization, the standing-ask lifecycle, bounded patience and the refusal kinds, the tolerances and their environment overrides, state-satisfied inputs, the construction checks, the composed descriptions/contracts, and the stored-byte question repeat
 </key_files_to_inspect>

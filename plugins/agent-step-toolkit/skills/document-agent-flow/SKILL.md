@@ -23,9 +23,9 @@ This skill produces documentation, never agent code. The deliverable is `<slug>.
 
 **7. Every step and trigger carries a status:** `exists` (built, reachable today) · `change` (built, needs a change for this ladder) · `new` (nothing today) · `tbd` (unverified). The status dot, pill and fill are driven by it everywhere.
 
-**8. The engine column speaks current agent-step.** Express each step with the library's own primitives (verdict rows, gates, flows, asks, ladders, handoff routes — `references/engine-notation.md`), read from `../create-tool/references/agent-step-api.md`, not from an older vendored copy in the project under study. The validator refuses primitives the library has removed (`ExecutorResult`, bounded choices, `guardTurn`, `deflect_aside`, `ttlMs`…) and the non-library `readOnly` flag.
+**8. The engine column speaks current agent-step.** Express each step with the library's own primitives (verdict rows and their row asks, field kinds, gates, flows, `satisfies`, the config-level `invalidations` table, handoff routes — `references/engine-notation.md`), read from `../create-tool/references/agent-step-api.md`, not from an older vendored copy in the project under study. The validator refuses primitives the library has removed (the 3.x `asks` map, the per-action bounce and invalidation options and the named ladders that 4.0.0 retired; `ExecutorResult`, bounded choices, `guardTurn`, `deflect_aside`, `ttlMs`…) and the non-library `readOnly` flag.
 
-**9. Verify in each output's own medium, and report what you observed.** `verify.py` rebuilds twice (determinism), reads the xlsx back, checks the md sections, renders the page headless in light, dark and 400 px (0 console errors, no horizontal scroll, every step opens its own panel, no label or chip over anything as rendered), checks that no edge passes through a box and every ⚡ chip sits on its own edge, and break-tests the validator (eight ways) and the page. A skipped check is printed in the final line — "ALL CHECKS PASSED (1 SKIPPED …)" is not a pass for that check. "Built" is not "verified"; name the check and its result.
+**9. Verify in each output's own medium, and report what you observed.** `verify.py` rebuilds twice (determinism), reads the xlsx back, checks the md sections, renders the page headless in light, dark and 400 px (0 console errors, no horizontal scroll, every step opens its own panel, no label or chip over anything as rendered), checks that no edge passes through a box and every ⚡ chip sits on its own edge, and break-tests the validator (nine ways) and the page. A skipped check is printed in the final line — "ALL CHECKS PASSED (1 SKIPPED …)" is not a pass for that check. "Built" is not "verified"; name the check and its result.
 
 **10. Adversarial review before the owner sees it.** A fresh reviewer agent with the `references/research-briefs.md` §Review brief spot-checks claims against source. On the reference it caught three real errors: a capability refuted by the source, stale text that contradicted a later correction, and a step that broke the document's own "one closing action per step" rule.
 
@@ -79,7 +79,7 @@ uvx playwright install chromium     # once per machine, if verify reports no bro
 ```python
 FLOW = {
   "meta": {"slug": "...", "title": "...", "subtitle": "...",
-           "engine_version": "3.1.0",          # the toolkit's templates/agent-step/VERSION — shown top-right
+           "engine_version": "4.0.0",          # the toolkit's templates/agent-step/VERSION — shown top-right
            "code_engine_version": "1.4.0"},    # optional: the project's src/agent-step/VERSION
   "stages": [{"id": "A", "name": "Start"}, ...],
   "steps": {"S0": {"stage": "A", "title": "...", "completion": "...", "next": [{"to": "S1", "when": "..."}],
@@ -96,7 +96,7 @@ Outcome kinds: `main` (default) · `branch` · `fail` · `opt`. A step with `par
 
 <reference_index>
 - **references/data-model.md** — the spec schema, field by field, with what each output does with it; the validator's rules.
-- **references/engine-notation.md** — how to write the "Step-engine expression" column in agent-step 3.x primitives; the catalog; what changed since older library versions; pitfalls (flow data vs edits, OTP re-send). Deriving steps from a codebase is in `workflows/intake-existing.md` §2.
+- **references/engine-notation.md** — how to write the "Step-engine expression" column in agent-step 4.x primitives; the catalog; what changed since older library versions; pitfalls (flow data vs edits, OTP re-send, what a row ask may target). Deriving steps from a codebase is in `workflows/intake-existing.md` §2.
 - **references/layout.md** — how the automatic layout places nodes and routes edges; the knobs a spec can use (`label`, `sub`, outcome kinds, containers) and how to fix a crowded graph without coordinates.
 - **references/design-guide.md** — palette tokens, type pairing, the three-state dark mode, the sheet's columns and why, the Markdown section checklist, the page budget.
 - **references/research-briefs.md** — the four parallel research briefs (fields, documents, action-surface audit, real routes), the reviewer brief, and the evidence rules each carries.
@@ -114,7 +114,7 @@ Outcome kinds: `main` (default) · `branch` · `fail` · `opt`. A step with `par
 <templates_index>
 - **templates/flowdoc/** — the generator: `model.py` (load + validate), `layout.py` (automatic layout), `render_md.py`, `render_html.py` + `template.html`, `render_xlsx.py`, `build.py` (CLI), `verify.py` (checks). Python 3 (tested on 3.12), stdlib + openpyxl (+ playwright for verify).
 - **templates/flow_spec.py.template** — a commented starting spec.
-- **examples/pizza-order/** — a synthetic, fully worked spec (`pizza_order.py` + a domain sheet) and its three outputs. It exercises every feature: branch lane, container with a cross-cutting bar, back edges on both sides, self-loops, a side terminal, parallel edges, an optional step.
+- **examples/pizza-order/** — a synthetic, fully worked spec (`pizza_order.py` + a domain sheet) and its three outputs. It exercises every feature: branch lane, container with a cross-cutting bar, back edges on both sides, self-loops, a side terminal, parallel edges, an optional step, a global exit.
 </templates_index>
 
 <success_criteria>

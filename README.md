@@ -29,7 +29,7 @@ Ships five skills:
   langgraph config, the agent-step runner **library**, graph/agent/state/prompt
   skeleton, streaming CLI, Dockerfile, build script), add a domain tool to an
   existing one (actions, executors, verifiers, `controller` lifecycle hooks,
-  `invalidatesOnChange` cascades, state slots, prompt sections), **or port an
+  the config-level `invalidations` table, state slots, prompt sections), **or port an
   existing project** onto agent-step (reading the source as a domain spec only).
   Covers read-tool patterns (native paginated reads via `pageable`) and the
   data-analysis pattern (an analyze action running LLM-authored snippets over

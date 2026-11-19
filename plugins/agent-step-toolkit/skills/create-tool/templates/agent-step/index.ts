@@ -13,18 +13,22 @@ export type {
   Verifier,
   VerifierRegistry,
   ActionDef,
+  AskContractSpec,
   ControllerHooks,
   ConfirmationOpts,
   DeclaredExecutorResult,
-  DictationAsk,
+  RowAsk,
   GateContractSpec,
   VerdictDef,
+  SatisfiesSpec,
+  SatisfiedSource,
   AgentStepConfig,
   StepResult,
   RunnerResultBody,
 } from "./types.js";
 export { composeGateContract } from "./compile/gate-contract.js";
 export type { GateContractContext } from "./compile/gate-contract.js";
+export { composeAskContract } from "./compile/ask-contract.js";
 export { defineConfig } from "./define-config.js";
 export {
   buildAgentStepTool,
@@ -38,11 +42,15 @@ export type {
 } from "./runner.js";
 export type { AbortPolicy } from "./controls/contract.js";
 
-// Runner-emitted system `summary` strings. Neutral English defaults live in the
-// library; a host overrides them via `BuildAgentStepToolOptions.messages` (e.g.
-// localized / voice-safe wording). The library never imports host strings.
-export { DEFAULT_SYSTEM_MESSAGES, resolveSystemMessages } from "./messages.js";
-export type { SystemMessages } from "./messages.js";
+// Engine instruction text (4.0.0): every runner-emitted string is a
+// MODEL-FACING instruction the engine owns outright — there is no wording
+// override. Caller-audible text is host-rendered from state (verdict
+// summaries, read-backs, ask renders, handoff closings); host doctrine
+// extends engine frames through structured seams (GateContractSpec,
+// AskContractSpec, toolTurnRules). Exported for goldens and tests,
+// never for overriding. See engine-text.ts for the register doctrine.
+export { ENGINE_TEXT, formatMessage } from "./engine-text.js";
+export type { EngineTextKey } from "./engine-text.js";
 
 // Library-managed state slots. Consumers spread `agentStepStateSpec` into their
 // `Annotation.Root` and `agentStepZodShape` into their Zod state schema rather
@@ -76,6 +84,7 @@ export {
   HANDOFF_ACTION,
   HANDOFF_NODE,
   HANDOFF_ACTION_DESCRIPTION,
+  AUTO_HANDOFF_CONTEXT,
   HANDBACK_SIGNALS,
   handoffParamsSchema,
   handoffRequested,
@@ -87,22 +96,44 @@ export type {
 } from "./handoff/contract.js";
 export { createHandoffNode } from "./handoff/node.js";
 
-// Engine-owned escalation ladders (journey-engine G7): configured "once"
-// counters (`BuildAgentStepToolOptions.ladders`) behind the `note_refusal`
-// control; exhaustion escalates atomically into each ladder's configured
-// handoff. See controls/note-refusal.ts.
+// Bounded patience, universal and undeclared: one task-scoped latch counting
+// unusable captures and free explanations, RESET ON PROGRESS, behind the
+// `note_refusal` control. Exhaustion escalates atomically into a structural
+// abandon context naming the action whose value was owed, which the host's own
+// context→closing table maps to caller words. See interaction/escalation.ts.
 export { NOTE_REFUSAL_ACTION } from "./controls/note-refusal.js";
+export {
+  ESCALATION_CONTEXT_PREFIX,
+  escalationContext,
+  // The `malicious_intent` note that reaches the limit ends the call through
+  // this structural context (cumulative, never reset by progress).
+  MALICIOUS_CONTEXT,
+} from "./interaction/escalation.js";
+
+// The engine TOLERANCES — the four numbers behind bounded patience and the
+// backend-failure auto-handoff. The constants are the MEASURED DEFAULTS; a
+// deployment may move them through `AGENT_STEP_*` environment variables
+// (`TOLERANCE_ENV`), read once at construction and validated loudly. There is
+// no per-action or per-tool setting. `resolveTolerances` is exported so a host
+// can log the effective values at boot. See tolerances.ts.
+export {
+  BOUNCE_TOLERANCE,
+  FREE_EXPLANATIONS,
+  MALICIOUS_LIMIT,
+  ERROR_HANDOFF_THRESHOLD,
+  DEFAULT_TOLERANCES,
+  TOLERANCE_ENV,
+  resolveTolerances,
+} from "./tolerances.js";
+export type { EngineTolerances, ToleranceEnv } from "./tolerances.js";
 
 // The engine-composed protocol prompt fragment: the machinery text hosts
 // splice into their system prompt instead of hand-rolling it. See
 // compile/protocol.ts for the ownership boundary.
 export { composeProtocolPrompt } from "./compile/protocol.js";
 export type { ProtocolSurface } from "./compile/protocol.js";
-export type {
-  EscalationLadder,
-  LadderRegistry,
-  SpentLadders,
-} from "./controls/note-refusal.js";
+export type { RefusalKind } from "./controls/note-refusal.js";
+export { REFUSAL_KINDS } from "./controls/note-refusal.js";
 
 // Caller-turn identity + the turn-scoped guard latch. `resolveCallerTurnId` is
 // the library's own definition of "the current caller turn" (host hook, else
@@ -140,12 +171,20 @@ export {
   callerDigits,
   callerTextParam,
   relayParam,
+  judgedEnum,
+  judgedFlag,
   exactlyOneOf,
   digitGroupsParam,
   digitCandidatesParam,
+  fieldKindOf,
+  fieldMetaOf,
+  objectShapeOf,
+  captureFieldsOf,
 } from "./capture.js";
 export type {
   CallerTextParamOpts,
   DigitGroupsParamOpts,
   DigitCandidatesParamOpts,
+  FieldKind,
+  FieldMeta,
 } from "./capture.js";

@@ -4,6 +4,10 @@
 // the predicate to gate, and emits the denial in the result envelope when it
 // fails. The registry key in the tool's index.ts MUST match the prereq name
 // declared in config.actions[X].prereqs.
+//
+// The denial's `instruction` is MODEL-FACING doctrine in English — it tells
+// the model what to do next ("Run \"verify_customer\" first."), never the
+// caller what to hear. It rides the refused entry's `instruction` field.
 
 import type { State } from "../../../state.js";
 import type { Verifier } from "../../../agent-step/index.js";
@@ -11,7 +15,7 @@ import type { Verifier } from "../../../agent-step/index.js";
 export const {{PREREQ_NAME}}: Verifier<State> = {
   check: (s) => {{PREDICATE_EXPRESSION}},
   denial: {
-    summary: "{{LLM_FACING_DENIAL_SUMMARY}}",
+    instruction: "{{MODEL_FACING_DENIAL_INSTRUCTION}}",
     error: "{{MACHINE_ERROR_KEY}}",
   },
 };

@@ -12,7 +12,8 @@ import {
 } from "./runner.js";
 import type { ExecutorRegistry, VerifierRegistry } from "./types.js";
 import type { AwaitingInput, CurrentFlow, HandoffRequest } from "./state.js";
-import { DEFAULT_SYSTEM_MESSAGES } from "./messages.js";
+import { ENGINE_TEXT, formatMessage } from "./engine-text.js";
+import { AUTO_HANDOFF_CONTEXT } from "./handoff/contract.js";
 
 interface S {
   customer?: { code: string } | null;
@@ -183,11 +184,11 @@ function makeOpts(
   const verifiers: VerifierRegistry<S> = {
     customerVerified: {
       check: (s) => s?.customer != null,
-      denial: { summary: "Need verify_customer.", error: "customer_not_verified" },
+      denial: { instruction: "Need verify_customer.", error: "customer_not_verified" },
     },
     cardVerified: {
       check: (s) => s?.card != null,
-      denial: { summary: "Need verify_card.", error: "card_not_verified" },
+      denial: { instruction: "Need verify_card.", error: "card_not_verified" },
     },
   };
   return {
@@ -246,7 +247,7 @@ test("executor that throws → ok:false step, short-circuit, earlier commits pre
   assert.equal(body.results[1].error, "executor_error");
   // User-facing summary is the neutral default message (no backend internals
   // leak to the spoken response); the raw cause is preserved in `_debug`.
-  assert.equal(body.results[1].summary, DEFAULT_SYSTEM_MESSAGES.executor_error);
+  assert.equal(body.results[1].instruction, ENGINE_TEXT.executor_error);
   assert.match(body.results[1]._debug as string, /boom: backend exploded/);
   assert.equal(body.failed_at, 1);
   // verify_customer's commit is NOT discarded by the later throw.
@@ -597,7 +598,7 @@ test("abort_pending_input is idempotent — returns nothing-to-abort when no inp
     SEEDED,
   );
   assert.equal(body.results[0].ok, true);
-  assert.equal(body.results[0].summary, DEFAULT_SYSTEM_MESSAGES.abort_nothing);
+  assert.equal(body.results[0].instruction, ENGINE_TEXT.abort_nothing);
   // Idempotent: no slot mutations.
   assert.equal(
     (committed as { pendingConfirmation?: unknown }).pendingConfirmation,
@@ -609,29 +610,30 @@ test("abort_pending_input is idempotent — returns nothing-to-abort when no inp
   );
 });
 
-test("system messages: host `messages` overrides are used in place of the defaults", async () => {
-  // The library ships neutral English defaults but lets a host inject its own
-  // wording via `opts.messages` (shallow-merged). Verify both an error path and
-  // an abort path pick up the override; un-overridden keys keep their defaults.
+test("engine text: runner-emitted directives come from ENGINE_TEXT, on `instruction`, with no override surface", async () => {
+  // 4.0.0: the engine owns its instruction bytes outright — the old
+  // `messages` override is gone, and engine emissions ride `instruction`
+  // (never `summary`, which is reserved for host caller-audible bytes).
   const thrown = makeOpts({ cardThrows: true });
   const errRun = await runSteps(
-    { ...thrown.opts, messages: { executor_error: "CUSTOM-ERR" } },
+    thrown.opts,
     [
       { action: "verify_customer", params: { code: "C1" } },
       { action: "verify_card", params: { pan: "P1" } },
     ],
     EMPTY,
   );
-  assert.equal(errRun.body.results[1].summary, "CUSTOM-ERR", "executor_error override used");
-  assert.match(errRun.body.results[1]._debug as string, /boom: backend exploded/, "raw cause still in _debug");
+  assert.equal(errRun.body.results[1].instruction, ENGINE_TEXT.executor_error);
+  assert.equal(errRun.body.results[1].summary, undefined, "engine text never rides summary");
+  assert.match(errRun.body.results[1]._debug as string, /boom: backend exploded/, "raw cause still in _debug (runSteps test seam)");
 
   const aborts = makeConfirmOpts();
   const abortRun = await runSteps(
-    { ...aborts.opts, messages: { abort_nothing: "CUSTOM-NOTHING" } },
+    aborts.opts,
     [{ action: "abort_pending_input", params: {} }],
     SEEDED,
   );
-  assert.equal(abortRun.body.results[0].summary, "CUSTOM-NOTHING", "abort_nothing override used");
+  assert.equal(abortRun.body.results[0].instruction, ENGINE_TEXT.abort_nothing);
 });
 
 test("library refuses user action named abort_pending_input", () => {
@@ -1066,6 +1068,48 @@ test("phase-2: abort_pending_input in a multi-step batch clears + allows next st
   const flow = (committed as { currentFlow?: CurrentFlow | null }).currentFlow;
   assert.ok(flow);
   assert.equal(flow!.name, "flow_b");
+});
+
+test("flow mutex covers EVERY step, not just the first", async () => {
+  const { opts, calls } = makeFlowOpts();
+  // [validate_a_otp, open_flow_b] with flow_a active. The first step opens no
+  // flow, so the old first-step-only check admitted the batch — and
+  // open_flow_b's executor then RAN (issuing its OTP, merging into the wrong
+  // flow's data bag) while `flowAfterOkStep` silently left flow_a in place.
+  const { body } = await runSteps(
+    opts,
+    [
+      { action: "validate_a_otp", params: { otp: "123456" } },
+      { action: "open_flow_b", params: {} },
+    ],
+    {
+      currentFlow: { name: "flow_a", data: { challengeId: "ch-1" } },
+      awaitingInput: { kind: "otp", for_action: "validate_a_otp", flow_ref: "flow_a" },
+    } as S,
+  );
+  assert.equal(body.results[0].error, "flow_already_active");
+  assert.equal(body.results[0].action, "open_flow_b", "the refusal names the offending step");
+  // Refused at admission: nothing ran.
+  assert.deepEqual(calls, { openA: 0, validateA: 0, finishA: 0, openB: 0 });
+});
+
+test("flow mutex allows the supported end-then-open sequence", async () => {
+  const { opts } = makeFlowOpts();
+  // `endsFlow` before `startsFlow` is the library's documented way to switch
+  // flows, so tracking clearers (rather than testing every step against
+  // batch-start state) is what keeps this legal.
+  const { body, committed } = await runSteps(
+    opts,
+    [
+      { action: "finish_flow_a", params: {} },
+      { action: "open_flow_b", params: {} },
+    ],
+    { currentFlow: { name: "flow_a", data: {} } } as S,
+  );
+  assert.equal(body.results[0].ok, true);
+  assert.equal(body.results[1].ok, true);
+  const flow = (committed as { currentFlow?: CurrentFlow | null }).currentFlow;
+  assert.equal(flow?.name, "flow_b");
 });
 
 test("abortPolicy requires active state and one allow-listed follower", async () => {
@@ -2199,7 +2243,7 @@ test("issuesOtp: allowed when no match is pending (guard is not over-broad)", as
   assert.equal(committed.awaitingInput?.for_action, "commit_value");
 });
 
-// ─── invalidatesOnChange ────────────────────────────────────────────────── //
+// ─── config-level invalidations ─────────────────────────────────────────── //
 
 interface InvalidateS {
   pan?: string | null;
@@ -2249,9 +2293,6 @@ function makeInvalidateOpts(): BuildAgentStepToolOptions<
           description: "set the card; changes here clear amount slots",
           paramsSchema: z.object({ pan: z.string() }),
           prereqs: [],
-          invalidatesOnChange: {
-            pan: ["amount", "amountCollected", "matchedTx"],
-          },
           verdicts: {
             ok: { ok: true, summary: "card set", body: { verdict: "ok" } },
           },
@@ -2264,6 +2305,9 @@ function makeInvalidateOpts(): BuildAgentStepToolOptions<
             ok: { ok: true, summary: "amount set", body: { verdict: "ok" } },
           },
         },
+      },
+      invalidations: {
+        pan: ["amount", "amountCollected", "matchedTx"],
       },
     }),
     stateSchema: invalidateStateAnnotation,
@@ -2286,7 +2330,7 @@ function makeInvalidateOpts(): BuildAgentStepToolOptions<
   };
 }
 
-test("invalidatesOnChange: changing watched slot clears declared downstream slots", async () => {
+test("invalidations: changing watched slot clears declared downstream slots", async () => {
   const opts = makeInvalidateOpts();
   const seeded: InvalidateS = {
     pan: "P1",
@@ -2305,7 +2349,7 @@ test("invalidatesOnChange: changing watched slot clears declared downstream slot
   assert.equal(committed.matchedTx, null);
 });
 
-test("invalidatesOnChange: first-time set (null → value) does NOT clear downstream", async () => {
+test("invalidations: first-time set (null → value) does NOT clear downstream", async () => {
   const opts = makeInvalidateOpts();
   const { committed } = await runSteps(
     opts,
@@ -2322,7 +2366,7 @@ test("invalidatesOnChange: first-time set (null → value) does NOT clear downst
   assert.equal(committed.matchedTx, "TX-7");
 });
 
-test("invalidatesOnChange: same-value re-write does NOT clear downstream", async () => {
+test("invalidations: same-value re-write does NOT clear downstream", async () => {
   const opts = makeInvalidateOpts();
   const seeded: InvalidateS = {
     pan: "P1",
@@ -2340,7 +2384,7 @@ test("invalidatesOnChange: same-value re-write does NOT clear downstream", async
   assert.equal(committed.matchedTx, undefined);
 });
 
-test("invalidatesOnChange: downstream slots set later in same batch are NOT cleared", async () => {
+test("invalidations: downstream slots set later in same batch are NOT cleared", async () => {
   // The cascade fires immediately after each step's stateUpdate. A subsequent
   // step in the same batch that writes to a previously-invalidated slot must
   // see the write land — the invalidation belongs to the upstream step alone.
@@ -2365,7 +2409,7 @@ test("invalidatesOnChange: downstream slots set later in same batch are NOT clea
   assert.equal(committed.matchedTx, "TX-9");
 });
 
-test("invalidatesOnChange: executor's own writes to downstream slots win over the cascade", async () => {
+test("invalidations: executor's own writes to downstream slots win over the cascade", async () => {
   // When the executor's stateUpdate writes BOTH a changed watched slot AND a
   // downstream slot (e.g. collect_amount changes amount AND writes a new
   // match), the executor's downstream write must be visible — the cascade
@@ -2397,13 +2441,13 @@ test("invalidatesOnChange: executor's own writes to downstream slots win over th
           description: "set amount + rewrite match",
           paramsSchema: z.object({ amount: z.number(), tx: z.string() }),
           prereqs: [],
-          invalidatesOnChange: {
-            amount: ["matchedTx"],
-          },
           verdicts: {
             ok: { ok: true, summary: "ok", body: { verdict: "ok" } },
           },
         },
+      },
+      invalidations: {
+        amount: ["matchedTx"],
       },
     }),
     stateSchema: annotation,
@@ -2439,27 +2483,33 @@ test("composed tool description indexes actions by summary, not full description
   const cfg = defineConfig<ActionName, PrereqName>({
     tool: { name: "test_tool", description: "lead paragraph" },
     actions: {
+      // Rows are required of every action (an executor result names one), so
+      // even a description-composition fixture declares its result space.
       verify_customer: {
         summary: "one-line summary",
         description: `verify the customer — ${SENTINEL}`,
         paramsSchema: z.object({ code: z.string() }),
         prereqs: [],
+        verdicts: { ok: { ok: true, summary: "verified" } },
       },
       verify_card: {
         description: "verify the card",
         paramsSchema: z.object({ pan: z.string() }),
         prereqs: ["customerVerified"],
+        verdicts: { ok: { ok: true, summary: "card verified" } },
       },
       fetch_status: {
         description: "read card status",
         paramsSchema: z.object({}),
         prereqs: ["cardVerified"],
+        verdicts: { ok: { ok: true, summary: "status read" } },
       },
       change_status: {
         description: "change card status",
         paramsSchema: z.object({ newStatus: z.string() }),
         prereqs: ["cardVerified"],
         controller: { soleStep: true },
+        verdicts: { ok: { ok: true, summary: "status changed" } },
       },
     },
   });
@@ -2485,6 +2535,12 @@ interface AHState {
 const ahAnnotation = Annotation.Root({
   errorCount: Annotation<number | null>({ reducer: (_, n) => n ?? null, default: () => null }),
   handoff: Annotation<HandoffRequest | null>({ reducer: (_, n) => n ?? null, default: () => null }),
+  // A configured handoff opts into `note_refusal`, which writes the escalation
+  // latch — a missing channel would discard that write silently.
+  spentLadders: Annotation<Record<string, number> | null>({
+    reducer: (_, n) => n ?? null,
+    default: () => null,
+  }),
 });
 
 const ahSelectors = { call_backend: (s: AHState) => s };
@@ -2557,7 +2613,8 @@ test("auto-handoff: 3 consecutive executor_error batches hit the threshold and e
   const synthetic = res.body.results[res.body.results.length - 1];
   assert.equal(synthetic.action, "auto_handoff");
   assert.equal(synthetic.isHandoff, true);
-  assert.equal(synthetic.successMessage, DEFAULT_SYSTEM_MESSAGES.auto_handoff);
+  assert.equal(synthetic.instruction, ENGINE_TEXT.auto_handoff_instruction);
+  assert.equal(synthetic.successMessage, undefined, "no engine-authored spoken bytes");
   assert.equal(res.body.failed_at, undefined, "failure cleared once escalated");
 });
 
@@ -2628,36 +2685,29 @@ test("auto-handoff: inert when neither handoff nor onErrorThreshold is configure
 
 test("auto-handoff: writes the library `handoff` slot at threshold when handoff is enabled", async () => {
   const opts = makeAhOpts({
-    handoff: { offTopic: { mode: "terminate" }, terminateMessage: "bye" },
+    handoff: { offTopic: { mode: "terminate" }, resolveClosingMessage: (_s: unknown, r: { context: string }) => r.context },
     errorHandoffThreshold: 1,
   });
   const res = await runSteps(opts, [{ action: "call_backend", params: { mode: "throw" } }], {});
   const committed = res.committed as AHState;
   assert.equal(committed.handoff?.reason, "abandon");
-  assert.equal(committed.handoff?.context, DEFAULT_SYSTEM_MESSAGES.auto_handoff);
+  assert.equal(committed.handoff?.context, AUTO_HANDOFF_CONTEXT, "structural code, never prose");
   const synthetic = res.body.results[res.body.results.length - 1];
   assert.equal(synthetic.isHandoff, true);
 });
 
 test("auto-handoff: instruction says the platform delivers the closing (no speak-this)", async () => {
-  // The synthetic result must not tell the model to voice the closing — hosts
-  // that resolve the handoff in the graph would double-speak. Hosts whose
-  // graph does NOT deliver it can opt back in via the {message} placeholder.
+  // The synthetic result must not tell the model to voice the closing — the
+  // host graph's handoff resolver renders and speaks it from state
+  // (resolveClosingMessage, required and total). No opt-back-in exists.
   const opts = makeAhOpts({ errorHandoffThreshold: 1, onErrorThreshold: () => {} });
   const res = await runSteps(opts, [{ action: "call_backend", params: { mode: "throw" } }], {});
   const synthetic = res.body.results[res.body.results.length - 1];
   assert.equal(synthetic.action, "auto_handoff");
-  assert.equal(synthetic.summary, DEFAULT_SYSTEM_MESSAGES.auto_handoff_instruction);
-  assert.doesNotMatch(synthetic.summary as string, /Speak this exact message/);
-
-  const spoken = makeAhOpts({
-    errorHandoffThreshold: 1,
-    onErrorThreshold: () => {},
-    messages: { auto_handoff_instruction: "SAY: {message}" },
-  });
-  const res2 = await runSteps(spoken, [{ action: "call_backend", params: { mode: "throw" } }], {});
-  const synthetic2 = res2.body.results[res2.body.results.length - 1];
-  assert.equal(synthetic2.summary, `SAY: ${DEFAULT_SYSTEM_MESSAGES.auto_handoff}`);
+  assert.equal(synthetic.instruction, ENGINE_TEXT.auto_handoff_instruction);
+  assert.doesNotMatch(synthetic.instruction as string, /Speak this exact message/);
+  assert.equal(res.body.instruction, ENGINE_TEXT.auto_handoff_instruction);
+  assert.equal(res.body.summary, undefined, "the escalated body carries no caller bytes");
 });
 
 // ─── Error counter neutrality: no-executor batches neither increment nor reset ─ //
@@ -2788,15 +2838,18 @@ test("error counter: an EXECUTED success resets the streak (its proposal alone d
 
 // ─── Templated system messages ──────────────────────────────────────────── //
 
-test("system messages: templated summaries interpolate placeholders and honor overrides", async () => {
-  // Propose summary ({action}).
+test("engine text: templated directives interpolate the runner's placeholders", async () => {
+  // Propose directive ({action}).
   const proposed = makeConfirmOpts();
   const proposeRun = await runSteps(
-    { ...proposed.opts, messages: { confirm_proposed: "PROPOSE<{action}>" } },
+    proposed.opts,
     [{ action: "change_status", params: { newStatus: "lost" } }],
     SEEDED,
   );
-  assert.equal(proposeRun.body.results[0].summary, "PROPOSE<change_status>");
+  assert.equal(
+    proposeRun.body.results[0].instruction,
+    formatMessage(ENGINE_TEXT.confirm_proposed, { action: "change_status" }),
+  );
 
   // Lockdown summary ({action} + {abort_action}).
   const locked = makeConfirmOpts();
@@ -2811,13 +2864,20 @@ test("system messages: templated summaries interpolate placeholders and honor ov
     },
   };
   const lockedRun = await runSteps(
-    { ...locked.opts, messages: { lockdown_confirmation: "LOCKED {action} via {abort_action}" } },
+    locked.opts,
     [{ action: "fetch_status", params: {} }],
     lockedSeed,
   );
-  assert.equal(lockedRun.body.results[0].summary, "LOCKED change_status via abort_pending_input");
-
+  assert.equal(
+    lockedRun.body.results[0].instruction,
+    formatMessage(ENGINE_TEXT.lockdown_confirmation, {
+      action: "change_status",
+      abort_action: "abort_pending_input",
+    }),
+  );
   // Unknown placeholders stay verbatim (visible, never silently blanked).
+  assert.equal(formatMessage("EXHAUSTED {nope}", {}), "EXHAUSTED {nope}");
+
   const exhausted = makeConfirmOpts();
   const exhaustedSeed: S = {
     ...SEEDED,
@@ -2830,11 +2890,14 @@ test("system messages: templated summaries interpolate placeholders and honor ov
     },
   };
   const exhaustedRun = await runSteps(
-    { ...exhausted.opts, messages: { confirm_exhausted: "EXHAUSTED {nope}" } },
+    exhausted.opts,
     [{ action: "change_status", params: { newStatus: "stolen" } }],
     exhaustedSeed,
   );
-  assert.equal(exhaustedRun.body.results[0].summary, "EXHAUSTED {nope}");
+  assert.equal(
+    exhaustedRun.body.results[0].instruction,
+    formatMessage(ENGINE_TEXT.confirm_exhausted, { action: "change_status" }),
+  );
 });
 
 // ─── Confirmation gate: params normalization (parsed-vs-parsed compare) ──── //
@@ -2879,7 +2942,13 @@ function makeNormOpts(): {
           set_digits: {
             description: "confirm-required digit write",
             paramsSchema: z.object({
-              digits: z.preprocess(stripNonDigits, z.string().regex(/^\d+$/, "digits only")),
+              digits: z.preprocess(
+                stripNonDigits,
+                z.string().superRefine((val, ctx) => {
+                  if (!/^\d+$/.test(val))
+                    ctx.addIssue({ code: "custom", message: "digits only" });
+                }),
+              ),
             }),
             prereqs: [],
             controller: { requiresConfirmation: { maxAttempts: 3 }, soleOnExecute: true },
@@ -2982,7 +3051,7 @@ test("confirm gate: invalid params on propose → voice-safe summary, detail in 
   );
   assert.equal(calls.set, 0);
   assert.equal(body.results[0].error, "invalid_params");
-  assert.equal(body.results[0].summary, DEFAULT_SYSTEM_MESSAGES.invalid_params);
+  assert.equal(body.results[0].instruction, ENGINE_TEXT.invalid_params);
   assert.match(body.results[0]._debug as string, /Invalid params for "set_digits"/);
 });
 
@@ -3003,7 +3072,7 @@ test("confirm gate: soleOnExecute execute-prediction normalizes raw params too",
 
 // ─── invalidatesOnChange: value equality on object slots ───────────────────── //
 
-test("invalidatesOnChange: fresh-but-value-equal OBJECT re-write does NOT clear downstream", async () => {
+test("invalidations: fresh-but-value-equal OBJECT re-write does NOT clear downstream", async () => {
   // Executors write fresh objects each run. Reference identity (Object.is)
   // would read a same-value re-write as a change and spuriously cascade.
   interface ObjS {
@@ -3036,12 +3105,12 @@ test("invalidatesOnChange: fresh-but-value-equal OBJECT re-write does NOT clear 
           description: "sets holder; changes clear derived",
           paramsSchema: z.object({ code: z.string() }),
           prereqs: [],
-          invalidatesOnChange: { holder: ["derived"] },
           verdicts: {
             set: { ok: true, summary: "holder set" },
           },
         },
       },
+      invalidations: { holder: ["derived"] },
     }),
     stateSchema: annotation,
     selectors: objSelectors,
@@ -3260,7 +3329,7 @@ function makeRefuseOpts(
   refuseProposal: (
     params: Record<string, unknown>,
     state: unknown,
-  ) => ({ summary: string; error: string } & Record<string, unknown>) | null,
+  ) => { verdict: string; data?: Record<string, unknown> } | null,
 ): BuildAgentStepToolOptions<S, string, string, typeof baseSelectors> {
   const base = makeOpts();
   const cfg = makeConfig();
@@ -3268,14 +3337,21 @@ function makeRefuseOpts(
     maxAttempts: 3,
     refuseProposal,
   };
+  // The refusal NAMES a row, so the row must exist — the body is composed from
+  // it exactly as it is on the execute path.
+  cfg.actions.change_status.verdicts = {
+    ...cfg.actions.change_status.verdicts,
+    nothing_to_confirm: {
+      ok: false,
+      summary: "nothing to confirm",
+      body: { error: "no_afm_source" },
+    },
+  };
   return { ...base.opts, config: cfg };
 }
 
-test("refuseProposal: a returned body refuses on the FIRST call — no gate, no attempt spent", async () => {
-  const opts = makeRefuseOpts(() => ({
-    summary: "nothing to confirm",
-    error: "no_afm_source",
-  }));
+test("refuseProposal: a named row refuses on the FIRST call — no gate, no attempt spent", async () => {
+  const opts = makeRefuseOpts(() => ({ verdict: "nothing_to_confirm" }));
   const { body, committed } = await runSteps(
     opts,
     [{ action: "change_status", params: { newStatus: "lost" } }],

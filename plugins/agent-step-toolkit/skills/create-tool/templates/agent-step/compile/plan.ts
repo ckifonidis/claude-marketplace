@@ -3,8 +3,10 @@
 // The compile phase's product: a `CompiledPlan` — everything the run pipeline
 // reads, normalized EXACTLY ONCE. Confirmation defaults, pageable resolution,
 // the effective params schema (declared schema + injected page params), the
-// control activation, the state-schema merger, and the resolved system
-// messages are all computed here; no run-phase code ever re-derives them.
+// control activation, the state-schema merger, the composed standing-ask
+// contract, and the engine tolerances (measured defaults, or the deployment's
+// `AGENT_STEP_*` environment overrides — ../tolerances.ts) are all computed
+// here; no run-phase code ever re-derives them.
 //
 // `compilePlan` does NOT validate — `buildAgentStepTool` validates first
 // (compile/validate.ts) and then compiles; the direct `runSteps` seam compiles
@@ -14,16 +16,16 @@ import { z } from "zod";
 import type {
   ActionDef,
   AgentStepConfig,
+  AskContractSpec,
   ControllerHooks,
-  DictationAsk,
   ExecutorRegistry,
   VerdictDef,
+  SatisfiesSpec,
   Selector,
   VerifierRegistry,
 } from "../types.js";
 import type { LibraryManagedSlots } from "../state.js";
-import type { SystemMessages } from "../messages.js";
-import { resolveSystemMessages } from "../messages.js";
+import { composeAskContract } from "./ask-contract.js";
 import { resolvePageable, type ResolvedPageable } from "../paginate.js";
 import {
   type HandoffSpec,
@@ -38,7 +40,9 @@ import {
   type ControlActivation,
 } from "../controls/contract.js";
 import { activeControls } from "../controls/registry.js";
+import { resolveTolerances, type EngineTolerances } from "../tolerances.js";
 import { composeActionDescription } from "./action-describe.js";
+import { resolveActionAsks, soleCaptureField, type ResolvedAsk } from "./asks.js";
 import { buildControlActivation } from "./activation.js";
 import {
   buildMergerFromStateSchema,
@@ -46,10 +50,9 @@ import {
   type StateSchemaLike,
 } from "./state-schema.js";
 
-/** DEFAULT number of consecutive backend-failure batches before the runner
- *  triggers an automatic handoff. Overridable via
- *  `BuildAgentStepToolOptions.errorHandoffThreshold`. */
-export const ERROR_HANDOFF_THRESHOLD = 3;
+// The DEFAULT backend-failure threshold lives with the other tolerances;
+// re-exported here, where the option that overrides it is declared.
+export { ERROR_HANDOFF_THRESHOLD } from "../tolerances.js";
 
 export interface BuildAgentStepToolOptions<
   T extends LibraryManagedSlots,
@@ -81,13 +84,6 @@ export interface BuildAgentStepToolOptions<
   /** Optionally narrow the built-in abort control to an engine-enforced
    * in-domain transition. Omit for the legacy permissive/idempotent behavior. */
   abortPolicy?: AbortPolicy<Extract<keyof Selectors, string>>;
-  /** Opt into engine-owned escalation ladders (the `note_refusal` control):
-   *  the prompt's "once" rules — explain a refusal once, suggest the lookup
-   *  once — counted by the engine in the task-scoped `spentLadders` latch,
-   *  with exhaustion escalating atomically into each ladder's configured
-   *  handoff. Requires `handoff`. The host prompt decides only the semantic
-   *  classification (declined/unavailable vs question vs cancellation). */
-  ladders?: import("../controls/note-refusal.js").LadderRegistry;
   /** Resolve a stable identity for the latest caller turn. Three protections
    *  key on it: bounded-choice resolution records it (fails closed without
    *  one), the choice's offered-this-turn lock compares against it, and the
@@ -98,12 +94,13 @@ export interface BuildAgentStepToolOptions<
    *  compact or replace messages must provide a stable non-compacted turn
    *  token. */
   getCallerTurnId?: (state: T) => string | null | undefined;
-  /** Optional overrides for the runner's own system `summary` strings (executor
-   *  error, invalid params, abort, flow gates). Shallow-merged over
-   *  `DEFAULT_SYSTEM_MESSAGES` (neutral English). A host with localized /
-   *  voice-safe wording (e.g. a TTS agent) injects it here; omit to use the
-   *  defaults. The library never imports host strings — see messages.ts. */
-  messages?: Partial<SystemMessages>;
+  /** Host extension of the engine's standing-ask contract frame: the measured
+   *  domain reply categories spliced into the composed `ask_contract` (see
+   *  compile/ask-contract.ts for the frame and the splice position). Omit to
+   *  keep the generic frame. There is NO wording override for engine text —
+   *  the engine owns its instruction bytes outright (engine-text.ts); hosts
+   *  extend contracts through structured seams like this one. */
+  askContract?: AskContractSpec;
   /** Called when the consecutive backend-failure counter reaches the threshold
    *  (`errorHandoffThreshold`, default 3). The host uses this to inject its
    *  preferred handoff signal into `update` (e.g. write a custom slot). Runs in
@@ -118,7 +115,11 @@ export interface BuildAgentStepToolOptions<
    *  or the counter will escalate recoverable situations. */
   backendFailureCodes?: string[];
   /** Consecutive backend-failure batches before the runner auto-triggers a
-   *  handoff. Default `ERROR_HANDOFF_THRESHOLD` (3). */
+   *  handoff. Default `ERROR_HANDOFF_THRESHOLD` (3), or the deployment's
+   *  `AGENT_STEP_ERROR_HANDOFF_THRESHOLD` when this option is omitted — a
+   *  value given HERE wins over the environment. (The other three tolerances
+   *  — the bounce tolerance, the free explanations and the malicious limit —
+   *  are deployment-level only: `AGENT_STEP_*`, see tolerances.ts.) */
   errorHandoffThreshold?: number;
 }
 
@@ -141,6 +142,7 @@ export type AnySelector = (state: any) => unknown;
 export type AnyExecutor = (
   params: unknown,
   state: any,
+  source?: import("../types.js").SatisfiedSource,
 ) => Promise<import("../types.js").DeclaredExecutorResult<any>>;
 
 /** One action with every per-action derivation resolved. */
@@ -157,16 +159,17 @@ export interface CompiledAction {
   /** The params schema actually validated — the declared schema, plus
    *  `page`/`pageSize` when the action is pageable. */
   effectiveSchema: z.ZodTypeAny;
-  invalidatesOnChange: Record<string, string[]>;
-  /** Standing asks keyed by verdict-or-error code — `{}` when none declared.
-   *  Includes the asks merged from declared verdict rows. */
-  asks: Record<string, DictationAsk>;
+  /** Row-site standing asks, keyed by ROW key (not wire code) and fully
+   *  resolved (param defaulted, expects derived) — `{}` when none declared. */
+  rowAsks: Record<string, ResolvedAsk>;
+  /** The action's sole caller-capture field, or null. Drives the DERIVED
+   *  bounce re-ask and the escalation checks. */
+  captureField: { name: string; kind: "digits" | "text" } | null;
   /** Declared verdict rows for the declarative executor return shape —
    *  `{}` when none declared. */
   verdicts: Record<string, VerdictDef>;
-  /** Bound on consecutive malformed captures, or null when unbounded (the
-   *  default). See {@link import("../types.js").CaptureBouncePolicy}. */
-  captureBounces: import("../types.js").CaptureBouncePolicy | null;
+  /** State-satisfied inputs declaration, or null. */
+  satisfies: SatisfiesSpec | null;
 }
 
 export interface CompiledPlan<T extends LibraryManagedSlots> {
@@ -190,11 +193,21 @@ export interface CompiledPlan<T extends LibraryManagedSlots> {
    *  a confirm-gated action's same-turn protection). When false, the host's
    *  `getCallerTurnId` hook is never consulted. */
   needsCallerTurnId: boolean;
-  msgs: SystemMessages;
+  /** The composed standing-ask contract (engine frame + host categories),
+   *  with `{action}`/`{param}` placeholders interpolated per recorded ask by
+   *  the finalizer. */
+  askContract: string;
+  /** The config-level downstream-invalidation table (AgentStepConfig
+   *  `invalidations`) — applied by the run pipeline whenever any executor's
+   *  stateUpdate changes a watched slot. */
+  invalidations: Record<string, string[]>;
   merge: PatchMerger<T>;
   getCallerTurnId?: (state: T) => string | null | undefined;
   backendFailureCodes: Set<string>;
-  errorHandoffThreshold: number;
+  /** The engine's four bounds, resolved once at compile: the explicit
+   *  `errorHandoffThreshold` option, then the `AGENT_STEP_*` environment, then
+   *  the measured defaults (../tolerances.ts). */
+  tolerances: EngineTolerances;
   onErrorThreshold?: (update: Record<string, unknown>, state: T) => void;
 }
 
@@ -209,8 +222,14 @@ function effectiveParamsSchema(action: ActionDef<string>): z.ZodTypeAny {
   if (!resolvePageable(action.pageable)) return action.paramsSchema;
   const schema = action.paramsSchema;
   if (!(schema instanceof z.ZodObject)) {
+    // A REFINED schema lands here too (`z.object({...}).superRefine(...)` is a
+    // ZodEffects), and it cannot be page-extended: the runner injects
+    // `page`/`pageSize` via `.extend()`, which only a plain object offers.
+    // Keep a pageable action's params plain and move any cross-field rule into
+    // the executor — hence the explicit mention rather than a bare type name.
     throw new Error(
-      `agent-step: pageable action's paramsSchema must be a z.object (got ${schema?.constructor?.name ?? typeof schema}).`,
+      `agent-step: pageable action's paramsSchema must be a plain z.object so the runner can extend it with page/pageSize ` +
+        `(got ${schema?.constructor?.name ?? typeof schema} — a refined schema, e.g. one carrying superRefine/exactlyOneOf, cannot be extended).`,
     );
   }
   return (schema as z.ZodObject<z.ZodRawShape>).extend(PAGE_PARAMS);
@@ -233,7 +252,6 @@ export function compilePlan<
     actions: rawActions,
     handoff: opts.handoff,
     abortPolicy: opts.abortPolicy,
-    ladders: opts.ladders,
   });
   const controls = activeControls(activation);
   const controlNames = new Set(controls.map((c) => c.name));
@@ -246,8 +264,9 @@ export function compilePlan<
     const def = rawActions[name];
     actions[name] = {
       name,
-      // The schema variant's `.describe()` bytes: host semantic lead + the
-      // engine-derived mechanics tail (gate marker, glossed verdict index).
+      // The schema variant's `.describe()` bytes: the engine-derived gate
+      // marker leading, then the host semantic lead (no verdict index — see
+      // compile/action-describe.ts).
       description: composeActionDescription(def),
       summary: def.summary,
       prereqs: def.prereqs,
@@ -260,10 +279,10 @@ export function compilePlan<
       }),
       pageable: resolvePageable(def.pageable),
       effectiveSchema: effectiveParamsSchema(def),
-      invalidatesOnChange: def.invalidatesOnChange ?? {},
-      asks: { ...(def.asks ?? {}) },
+      rowAsks: resolveActionAsks(name, def, opts.config.actions),
+      captureField: soleCaptureField(def),
       verdicts: def.verdicts ?? {},
-      captureBounces: def.captureBounces ?? null,
+      satisfies: def.satisfies ?? null,
     };
   }
 
@@ -279,7 +298,8 @@ export function compilePlan<
     activation,
     controls,
     controlNames,
-    msgs: resolveSystemMessages(opts.messages),
+    askContract: composeAskContract(opts.askContract),
+    invalidations: opts.config.invalidations ?? {},
     merge: buildMergerFromStateSchema<T>(opts.stateSchema),
     getCallerTurnId: opts.getCallerTurnId,
     backendFailureCodes: new Set<string>([
@@ -293,7 +313,9 @@ export function compilePlan<
           .map((row) => row.body?.error as string),
       ),
     ]),
-    errorHandoffThreshold: opts.errorHandoffThreshold ?? ERROR_HANDOFF_THRESHOLD,
+    tolerances: resolveTolerances(undefined, {
+      errorHandoffThreshold: opts.errorHandoffThreshold,
+    }),
     onErrorThreshold: opts.onErrorThreshold,
   };
 }

@@ -31,7 +31,7 @@ STEPS = {
             {"to": "S0", "when": "<what makes it stay — re-ask>", "kind": FAIL},
         ],
         "lookups": [],
-        "engine": "<closing_action>{params} · prereqs[...] · <gates> · verdicts: ok✓→slot | refused✗",
+        "engine": "<closing_action>{param: kind} · prereqs[...] · <gates> · verdicts: ok✓→slot | refused✗ ask:self",
         "status": NEW, "status_note": "<what the code does today, with path:line>",
         "open": ["Q1"],
     },

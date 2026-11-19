@@ -14,6 +14,7 @@
 import { z } from "zod";
 import type { StepResult } from "../types.js";
 import type { LibraryManagedSlots } from "../state.js";
+import { ENGINE_TEXT } from "../engine-text.js";
 import type { ControlAction, ControlOutcome, ControlRunContext } from "./contract.js";
 import {
   clearInteractionPatch,
@@ -101,7 +102,7 @@ export const abortControl: ControlAction = {
     _params: unknown,
     ctx: ControlRunContext<T>,
   ): ControlOutcome {
-    const { state, msgs } = ctx;
+    const { state } = ctx;
     const priorAwaiting = getAwaitingInput(state.view);
     const priorFlow = getCurrentFlow(state.view);
     const hadSomething = priorAwaiting != null || priorFlow != null;
@@ -111,7 +112,7 @@ export const abortControl: ControlAction = {
     const entry: StepResult = {
       action: ABORT_ACTION,
       ok: true,
-      summary: hadSomething ? msgs.abort_done : msgs.abort_nothing,
+      instruction: hadSomething ? ENGINE_TEXT.abort_done : ENGINE_TEXT.abort_nothing,
     };
     // Report the gate the caller was actually answering.
     const abortedGate = priorAwaiting;

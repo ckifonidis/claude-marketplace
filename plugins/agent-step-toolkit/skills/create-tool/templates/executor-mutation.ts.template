@@ -37,6 +37,8 @@ async function read{{ENTITY}}State({{ENTITY_ID}}: string): Promise<string> {
 export async function {{EXECUTOR_FN_NAME}}(
   rawParams: unknown,
   state: Slice,
+  // Optional third argument — `source?: SatisfiedSource` — the resolved bundle
+  // when this action declares `satisfies` and the call was answered from state.
 ): Promise<DeclaredExecutorResult<State>> {
   const p = rawParams as {{ACTION_PARAMS_TYPE}};
 

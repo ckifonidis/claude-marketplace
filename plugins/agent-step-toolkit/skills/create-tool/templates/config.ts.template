@@ -29,4 +29,13 @@ export const {{TOOL_NAME}}Config = defineConfig<ActionName, PrereqName, State>({
     {{ACTION_2}}: {{ACTION_2_CAMEL}}Action,
     {{ACTION_3}}: {{ACTION_3_CAMEL}}Action,
   },
+  // ─── Downstream-slot invalidation (optional) — ONE table for the tool ─── //
+  // Staleness is a fact about the SLOTS, not about which action wrote them:
+  // whenever ANY executor's stateUpdate CHANGES a watched slot (non-null →
+  // a different value), the listed downstream slots reset to `null`. Every
+  // name must be a channel of the host state schema with a replace-on-write
+  // reducer that accepts `null`; library-managed slots are not allowed.
+  // invalidations: {
+  //   {{WATCHED_SLOT}}: ["{{DOWNSTREAM_SLOT_A}}", "{{DOWNSTREAM_SLOT_B}}"],
+  // },
 });

@@ -16,11 +16,13 @@
 //      parse bounces a bad shape as recoverable `invalid_params` — before any
 //      read-back and without spending a confirmation attempt.
 //   2. REFINEMENT MESSAGES CARRY NO DIGIT COUNT. The runner surfaces zod issue
-//      messages through the StepResult's `_debug`, and `_debug` rides the body
-//      handed BACK to the model. "must be exactly 9 digits" re-introduces,
-//      through the error path, the very constraint the refinement keeps out of
-//      the schema — precisely on the turn where the model is about to re-ask.
-//      Say WHAT failed, never HOW MANY DIGITS. The rule is about the VALUE's
+//      messages through the StepResult's `_debug`. The tool binding keeps
+//      `_debug` off the model's wire (it rides the ToolMessage `artifact`),
+//      but `runSteps` returns it and a host is free to log or relay it — and
+//      "must be exactly 9 digits", once it reaches a model by any route,
+//      re-introduces through the error path the very constraint the
+//      refinement keeps out of the schema, precisely on the turn where the
+//      model is about to re-ask. Say WHAT failed, never HOW MANY DIGITS. The rule is about the VALUE's
 //      length; a count of something else (e.g. how many alternative readings
 //      `maxCandidates` allows) says nothing about the digits and is fine.
 //   3. REPRESENTATION FLIPS MUST NOT READ AS DRIFT. The confirmation gate
@@ -57,6 +59,66 @@
 
 import { z } from "zod";
 
+// ── FIELD KINDS ─────────────────────────────────────────────────────────────
+//
+// The builders below register a MACHINE-READABLE kind for the schema they
+// return, so the engine can ASK what a param is instead of inferring it from
+// which builder the author happened to call. The kind exists exactly ONCE
+// (here) — never as authoring convention, and never as an `expects` copy on
+// every ask.
+//
+// What the kind buys, all of it enforced at construction (compile/validate.ts):
+//   - an ask may only target a CAPTURE field ("you cannot dictate a
+//     judgement"), with two distinct errors behind it — a param that is not
+//     declared at all, versus one that is declared but not dictatable;
+//   - an ask may omit `param` when its target declares exactly ONE capture,
+//     and MUST name it when the target declares several;
+//   - `digits` vs `text` is derived from the kind, so `expects` is gone and
+//     the two can never disagree with the field they describe.
+//
+// Escalation is NOT among them: bounded patience is universal — its numbers
+// are deployment-level tolerances (tolerances.ts), never a per-field or
+// per-action setting — so a capture field declares nothing about it.
+//
+// A `WeakMap` keyed on the schema object, NOT a `.brand()`: brands are
+// type-level only, and every consumer here asks at RUNTIME. Registration is
+// identity-based, so a builder's result must be passed on unchanged — a host
+// wrapper that appends `.optional()` after the fact would produce a NEW schema
+// object and lose the kind (`digitCaptureField` in the reference host returns
+// the builder's schema untouched, which is why it inherits `digits`).
+
+/** What a declared param IS, from the caller's point of view. `digits`/`text`
+ *  are caller-DICTATED captures (the model transcribes); `judged` is the
+ *  model's classification of what the caller meant (never transcribed);
+ *  `relay` is the caller's exact words passed through for the SYSTEM to
+ *  classify. Only the first two are ask targets. */
+export type FieldKind = "digits" | "text" | "judged" | "relay";
+
+/** Registered facts about one declared param. `wire` is what the model sends;
+ *  `values` carries a judged enum's domain (used by describes and tests). */
+export interface FieldMeta {
+  kind: FieldKind;
+  wire: "string" | "boolean";
+  values?: readonly string[];
+}
+
+const FIELD_META = new WeakMap<z.ZodTypeAny, FieldMeta>();
+
+/** Tag a builder's schema with its kind and hand it straight back. */
+const registerField = <T extends z.ZodTypeAny>(schema: T, meta: FieldMeta): T => {
+  FIELD_META.set(schema, meta);
+  return schema;
+};
+
+/** The registered facts for a schema, or `undefined` for a param declared with
+ *  plain zod (the library never guesses a kind it was not told). */
+export const fieldMetaOf = (schema: z.ZodTypeAny): FieldMeta | undefined =>
+  FIELD_META.get(schema);
+
+/** The registered kind for a schema, or `undefined` — see `fieldMetaOf`. */
+export const fieldKindOf = (schema: z.ZodTypeAny): FieldKind | undefined =>
+  FIELD_META.get(schema)?.kind;
+
 /** Strip everything but digits from a string; pass non-strings through
  *  untouched (they fail the type check downstream, as they should). STT
  *  captures arrive with separators — "70,76", "12 34", "48/65" — which are
@@ -79,11 +141,18 @@ export const digitsOnlyDeep = (v: unknown): unknown => {
  *  shape check is a REFINEMENT and never a `.regex()` — see header rule 1 —
  *  and the `message` must stay COUNT-FREE — see header rule 2. */
 export const callerDigits = (shape: RegExp, message: string) =>
-  z.string().superRefine((v, ctx) => {
-    if (!shape.test(v)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
-    }
-  });
+  registerField(
+    z.string().superRefine((v, ctx) => {
+      if (!shape.test(v)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+      }
+    }),
+    // A caller-dictated digit string BY DEFINITION — the kind rides the
+    // primitive itself, so a host that composes its own preprocess/union
+    // around it (rather than using `digitGroupsParam`) still declares a
+    // capture the engine can see.
+    { kind: "digits", wire: "string" },
+  );
 
 /** Options for `digitGroupsParam`. */
 export interface DigitGroupsParamOpts {
@@ -97,6 +166,15 @@ export interface DigitGroupsParamOpts {
    *  (see header). Copy the doctrine template from agent-step-api.md
    *  `<caller_digit_capture>` and adapt it to the host. */
   describe: string;
+  /** Per-group canonicaliser, applied to every array entry (and to a single
+   *  string) BEFORE the join. Defaults to stripping every non-digit. A host
+   *  whose capture legitimately carries LETTERS — a foreign tax number such as
+   *  `SK479482C` — supplies its own, and `shape` then judges the joined
+   *  canonical value. It must only strip separators and canonicalise what was
+   *  spoken (spelled letter names → the letter); it must never add, reorder
+   *  or drop content, and an unreadable token should become a character
+   *  outside `shape` so the capture bounces instead of silently shortening. */
+  normalize?: (raw: string) => string;
 }
 
 /** A "transcription field" for a caller-dictated digit sequence spoken in
@@ -107,8 +185,9 @@ export interface DigitGroupsParamOpts {
  *  lose the zero of round tens when asked to concatenate). The joined value
  *  validates via `callerDigits`. The field is OPTIONAL by construction:
  *  omission is the host's channel for "consume a carried/collected value". */
-export const digitGroupsParam = (opts: DigitGroupsParamOpts) =>
-  z
+export const digitGroupsParam = (opts: DigitGroupsParamOpts) => {
+  const normalize = opts.normalize ?? ((s: string) => s.replace(/\D/g, ""));
+  const field = z
     .preprocess(
       (v) => {
         if (v === undefined) return undefined;
@@ -118,8 +197,8 @@ export const digitGroupsParam = (opts: DigitGroupsParamOpts) =>
         // Coercing keeps every spoken group in the result. (Contrast the
         // candidates builder, where each entry stays a separate value and a
         // non-string fails loudly instead — nothing can be silently lost.)
-        if (Array.isArray(v)) return v.map((x) => String(x).replace(/\D/g, "")).join("");
-        return digitsOnly(v);
+        if (Array.isArray(v)) return v.map((x) => normalize(String(x))).join("");
+        return typeof v === "string" ? normalize(v) : v;
       },
       z
         .union([
@@ -132,6 +211,8 @@ export const digitGroupsParam = (opts: DigitGroupsParamOpts) =>
         .optional(),
     )
     .describe(opts.describe);
+  return registerField(field, { kind: "digits", wire: "string" });
+};
 
 /** Options for `callerTextParam`. */
 export interface CallerTextParamOpts {
@@ -152,8 +233,8 @@ export interface CallerTextParamOpts {
  *  text analogue of `callerDigits`. Trim + bounded length as a REFINEMENT
  *  with count-free messages — every voice host was re-deriving this rule by
  *  hand next to the digit builders. */
-export const callerTextParam = (opts: CallerTextParamOpts) =>
-  z
+export const callerTextParam = (opts: CallerTextParamOpts) => {
+  const field = z
     .string()
     .trim()
     .superRefine((v, ctx) => {
@@ -167,13 +248,46 @@ export const callerTextParam = (opts: CallerTextParamOpts) =>
       }
     })
     .describe(opts.describe);
+  return registerField(field, { kind: "text", wire: "string" });
+};
 
 /** A relay-only transcription field: the caller's exact words, OPTIONAL,
  *  passed through for the SYSTEM to classify — the model never translates,
  *  normalizes, or invents them. Mechanically just a described optional
  *  string; the builder exists so the authoring surface NAMES the intent
  *  (stenographer field) instead of each host re-deriving it. */
-export const relayParam = (describe: string) => z.string().optional().describe(describe);
+export const relayParam = (describe: string) =>
+  registerField(z.string().optional().describe(describe), {
+    kind: "relay",
+    wire: "string",
+  });
+
+/** A JUDGED enum: the model's classification of what the caller meant, in the
+ *  system's own vocabulary («και χρεωστική και πιστωτική» → `dual`). NOT a
+ *  transcription — the caller never says `dual` — so it is never an ask target
+ *  and never gets a read-back: there are no caller bytes to speak back. The
+ *  `describe` must tell the model to OMIT the field when the caller's words do
+ *  not clearly name one of the values; an unclear description is not a guess,
+ *  and omitting simply asks them. Only safe where being wrong is a cheap,
+ *  recoverable detour — nothing can validate a judgement. */
+export const judgedEnum = <const T extends readonly [string, ...string[]]>(
+  values: T,
+  describe: string,
+) =>
+  registerField(z.enum(values).optional().describe(describe), {
+    kind: "judged",
+    wire: "string",
+    values,
+  });
+
+/** A JUDGED boolean: a conversation-level fact the model concludes rather than
+ *  transcribes (e.g. "the caller VOLUNTEERED a theft"). The same licence and
+ *  the same limits as `judgedEnum`. */
+export const judgedFlag = (describe: string) =>
+  registerField(z.boolean().optional().describe(describe), {
+    kind: "judged",
+    wire: "boolean",
+  });
 
 /** An exactly-one-of selector for a params object (XOR over optional
  *  fields), as a REFINEMENT so the model-facing JSON Schema stays a plain
@@ -213,7 +327,7 @@ export interface DigitCandidatesParamOpts {
  *  mutually exclusive alternative selector or a carried-value channel). */
 export const digitCandidatesParam = (opts: DigitCandidatesParamOpts) => {
   const max = opts.maxCandidates ?? 3;
-  return z
+  const field = z
     .preprocess(
       digitsOnlyDeep,
       z
@@ -237,4 +351,50 @@ export const digitCandidatesParam = (opts: DigitCandidatesParamOpts) => {
         .optional(),
     )
     .describe(opts.describe);
+  return registerField(field, { kind: "digits", wire: "string" });
+};
+
+// ── READING A PARAMS SCHEMA ─────────────────────────────────────────────────
+
+/** The `z.object` underneath a params schema, unwrapping the refinement /
+ *  optional / default layers a host may have applied — `.shape` is `undefined`
+ *  on a `ZodEffects`, and reading it directly is how the ask-param check
+ *  silently skipped every action whose schema carried an `exactlyOneOf`
+ *  refinement. Returns `undefined` only when no object is reachable at all,
+ *  which callers must treat as an ERROR rather than as "nothing to check". */
+export const objectShapeOf = (
+  schema: unknown,
+): Record<string, z.ZodTypeAny> | undefined => {
+  let current = schema as { _def?: { typeName?: string; schema?: unknown; innerType?: unknown }; shape?: unknown };
+  // Bounded walk: a hand-built schema could in principle nest deeply, and an
+  // unbounded loop here would hang construction instead of failing it.
+  for (let depth = 0; depth < 10 && current; depth += 1) {
+    const shape = (current as { shape?: unknown }).shape;
+    if (shape && typeof shape === "object") {
+      return shape as Record<string, z.ZodTypeAny>;
+    }
+    const def = current._def;
+    const inner = def?.schema ?? def?.innerType;
+    if (!inner) return undefined;
+    current = inner as typeof current;
+  }
+  return undefined;
+};
+
+/** The CAPTURE fields of a params schema — the caller-dictated ones only, so a
+ *  `judged` enum or a `relay` passthrough is excluded by construction. This is
+ *  the predicate behind "an ask targets a capture", "the ask may omit `param`
+ *  when there is exactly one", and "a capture action must declare its
+ *  escalation". */
+export const captureFieldsOf = (
+  schema: unknown,
+): { name: string; kind: "digits" | "text" }[] => {
+  const shape = objectShapeOf(schema);
+  if (!shape) return [];
+  const out: { name: string; kind: "digits" | "text" }[] = [];
+  for (const [name, field] of Object.entries(shape)) {
+    const kind = fieldKindOf(field);
+    if (kind === "digits" || kind === "text") out.push({ name, kind });
+  }
+  return out;
 };

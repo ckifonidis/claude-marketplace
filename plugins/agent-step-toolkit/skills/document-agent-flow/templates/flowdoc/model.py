@@ -28,7 +28,7 @@ TONES = (TONE_GOOD, TONE_BAD)
 
 SPEC_VARIABLE = "FLOW"  # the name a Python spec module must bind
 REQUIRED_META = ("slug", "title", "subtitle", "engine_version")
-# "3.0.1" — the version a step-engine expression is written against; also "code_engine_version".
+# "4.0.0" — the version a step-engine expression is written against; also "code_engine_version".
 VERSION_PATTERN = r"^\d+\.\d+\.\d+$"
 REQUIRED_STEP = ("stage", "title", "completion", "next", "engine", "status")
 REQUIRED_TRIGGER = ("name", "short", "real", "on_ok", "status")
@@ -40,23 +40,62 @@ EXCEL_TITLE_MAX = 31                       # Excel's own sheet-name limits
 EXCEL_TITLE_FORBIDDEN = set("[]:*?/\\")
 RESERVED_SHEETS = {"Steps", "Triggers & APIs", "Open & TBD"}
 
-# Primitives agent-step removed or renamed (library CHANGELOG, 2.0.0 and 3.0.0 "Breaking"). An
+# Primitives agent-step removed or renamed (library CHANGELOG, 2.0.0, 3.0.0 and 4.0.0 "Breaking"). An
 # `engine` expression describes how the step WILL run, on the current library, so naming one of
 # these is a documentation bug. The value says what to write instead.
 # Keys are regexes: word-bounded so DeclaredExecutorResult (current) does not trip ExecutorResult.
+
+# The 3.x asks map, in the spellings an engine expression used for it: `asks: {…}` / `asks{…}`, or
+# `asks <code>→<action>[.param]`. The English verb must not trip it ("the caller asks → we check",
+# "asks: which store?", "re-asks phone"), so the arrow form needs a tight arrow, a snake_case code,
+# or an `action.param` target. The current row ask is spelled `ask:self` / `ask→action` — singular.
+_ASKS_MAP = (
+    r"(?<![\w-])asks\s*:?\s*(?:"
+    r"\{[^}]*\}?"                              # asks: {code: {...}}  /  asks{...}
+    r"|\w+(?:→|->)[\w.]+"                      # asks code→action[.param]
+    r"|\w*_\w*\s*(?:→|->)\s*[\w.]*"            # asks wire_code → …
+    r"|\w+\s*(?:→|->)\s*\w+\.\w+"              # asks code → action.param
+    r")"
+)
+_ROW_ASK = ("a row ask on the verdict row that asks — `code✗ ask:self` / `ask→action` (VerdictDef.ask); the "
+            "invalid_params re-ask is derived, so write nothing for it (the asks map was removed in 4.0.0)")
+_BOUNDED_PATIENCE = ("nothing — bounded patience is universal since 4.0.0 and never declared per step (by default two "
+                     "unusable captures, one in-place explanation, then an abandon handoff on "
+                     "agent-step:escalated:<action>; the numbers are deployment-level AGENT_STEP_* tolerances); a "
+                     "refusal is note_refusal{kind}")
+
 RETIRED_ENGINE_TERMS = {
     r"(?<![A-Za-z])ExecutorResult\b": "a declared verdict row (ActionDef.verdicts) that the executor names",
     r"\bresultBody\b": "a verdict row's body",
-    r"\b[Bb]oundedChoice": "an escalation ladder or verdict rows (bounded choices were removed in 3.0.0)",
-    r"\bdeflect_?[Aa]side\b": "an escalation ladder via note_refusal",
-    r"\bforcedHandoff": "an escalation ladder's onExhaust, or a request_handoff effect",
-    r"\bguardTurn\b": "a verdict row or an escalation ladder (the guard latch was removed in 3.0.0)",
+    r"\b[Bb]oundedChoice": "verdict rows — a ✗ row with a row ask re-asks and the engine bounds the repeats "
+                           "(bounded choices were removed in 3.0.0)",
+    r"\bdeflect_?[Aa]side\b": "note_refusal{kind: unsupported_question}",
+    r"\bforcedHandoff": "a request_handoff effect on the verdict row (the engine's own escalation needs no declaration)",
+    r"\bguardTurn\b": "a verdict row or a note_refusal kind (the guard latch was removed in 3.0.0)",
     r"\brepeat_pending_confirmation\b": "repeat_pending_question",
     r"\bttlMs\b": "nothing — pending gates do not expire by time (removed in 2.0.0)",
     r"\bstateAnnotation\b": "the Zod state schema (removed in 2.0.0)",
-    # Never shipped by the toolkit (some projects patched it into a vendored copy): in 3.x a read is simply an
+    # Never shipped by the toolkit (some projects patched it into a vendored copy): a read is simply an
     # action with no gate, and a pending gate admits only its target / abort / handoff / repeat.
     r"\breadOnly\b": "a plain action with no gate (agent-step has no read-only flag)",
+    # ---- removed in 4.0.0 ----
+    _ASKS_MAP: _ROW_ASK,
+    r"\bDictationAsk\b": _ROW_ASK,
+    r"\bcaptureBounces?\b": "nothing — the bounce re-ask and its bound are the engine's since 4.0.0 "
+                            "(bounceCapture: <field> only when the action has several capture fields)",
+    # `ladders` the build option, a named ladder, and their types. Not `spentLadders` (a current state
+    # slot) and not the step ladder of the flow itself, which an expression has no reason to call `ladders`.
+    r"\bladders\b|\bladder\s*:|\bescalation ladders?\b|\b(?:EscalationLadder|LadderRegistry|CaptureBouncePolicy)\b":
+        _BOUNDED_PATIENCE,
+    r"\bonExhaust\b|\bmaxFreeUses\b": _BOUNDED_PATIENCE + "; the closing after an escalation is the host's "
+                                       "resolveClosingMessage row for that context",
+    r"\binvalidatesOnChange\b": "the config-level table — `config: invalidations{slot:[downstream]}` "
+                               "(AgentStepConfig.invalidations; the per-action option was removed in 4.0.0)",
+    r"SystemMessages\b|SYSTEM_MESSAGES\b": "nothing — engine text is an engine-owned `instruction` since 4.0.0; a host "
+                                          "adds reply categories with askContract{categories} and renders what the "
+                                          "caller hears itself",
+    r"\bterminateMessage\b": "resolveClosingMessage (required and total since 4.0.0; delegateFailureMessage in "
+                             "delegate mode)",
 }
 
 

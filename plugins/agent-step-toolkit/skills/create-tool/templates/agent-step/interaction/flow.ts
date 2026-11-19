@@ -8,7 +8,7 @@
 
 import type { ControllerHooks, ExecutorEffect, StepResult } from "../types.js";
 import type { CurrentFlow } from "../state.js";
-import type { SystemMessages } from "../messages.js";
+import { ENGINE_TEXT } from "../engine-text.js";
 
 /** Refusal for a `requiresFlow` step running with no flow / the wrong flow,
  *  or `null` when satisfied. Runs BEFORE confirm-mode resolution and user
@@ -17,17 +17,21 @@ export function refuseWrongFlow(
   actionName: string,
   controller: ControllerHooks | undefined,
   flow: CurrentFlow | null,
-  msgs: SystemMessages,
 ): StepResult | null {
   if (!controller?.requiresFlow) return null;
   if (!flow) {
-    return { action: actionName, ok: false, summary: msgs.no_flow, error: "no_flow_active" };
+    return {
+      action: actionName,
+      ok: false,
+      instruction: ENGINE_TEXT.no_flow,
+      error: "no_flow_active",
+    };
   }
   if (flow.name !== controller.requiresFlow) {
     return {
       action: actionName,
       ok: false,
-      summary: msgs.wrong_flow,
+      instruction: ENGINE_TEXT.wrong_flow,
       error: "wrong_flow",
       active_flow: flow.name,
     };

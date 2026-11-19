@@ -26,7 +26,8 @@
 
 import type { RunnerResultBody } from "../types.js";
 import type { HandoffRequest, LibraryManagedSlots } from "../state.js";
-import { formatMessage } from "../messages.js";
+import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
+import { AUTO_HANDOFF_CONTEXT } from "../handoff/contract.js";
 import type { CompiledPlan } from "../compile/plan.js";
 import { askOfFinalEntry, dictationAfterBatch } from "../interaction/dictation.js";
 import { getAwaitingInput, getHandoff, type BatchState } from "./batch-state.js";
@@ -43,14 +44,18 @@ export function finalizeRun<T extends LibraryManagedSlots>(
   st: BatchState<T>,
   initialState: T,
 ): RunResult<T> {
-  const { msgs } = plan;
-  const body: RunnerResultBody = {
-    summary: exec.lastSummary || msgs.no_steps,
-    results: exec.results,
-  };
+  // The top-level body mirrors the last entry's text on the field matching
+  // its REGISTER: host caller-audible bytes under `summary`, engine/host
+  // directives under `instruction`. An empty batch is an engine instruction.
+  const body: RunnerResultBody = { results: exec.results };
+  if (exec.last) {
+    body[exec.last.register] = exec.last.text;
+  } else {
+    body.instruction = ENGINE_TEXT.no_steps;
+  }
   if (exec.failedAt !== undefined) body.failed_at = exec.failedAt;
 
-  // ─── Standing-ask lifecycle (`ActionDef.asks` → the `dictation` awaiting
+  // ─── Standing-ask lifecycle (`VerdictDef.ask` → the `dictation` awaiting
   //     kind): the batch's FINAL entry decides the standing question — set the
   //     mapped ask, clear a serviced one, never disturb a live gate. Skipped
   //     entirely on a handoff (the terminal cleanup already cleared the slot,
@@ -58,10 +63,19 @@ export function finalizeRun<T extends LibraryManagedSlots>(
   //     direct-`committed` channel as the error counter below: the batch is
   //     over, and `awaitingInput` is replace-on-write.
   if (getHandoff(st.view) == null) {
-    const transition = dictationAfterBatch(plan, exec.results, getAwaitingInput(st.view));
+    const transition = dictationAfterBatch(plan, exec.results, exec.rowKeys, getAwaitingInput(st.view));
     if (transition !== undefined) {
-      const awaiting =
+      let awaiting =
         transition === null ? null : (transition as Record<string, unknown>).awaitingInput;
+      // Host-rendered ask bytes, when the ask declares them: the model speaks
+      // `ask_text` exactly instead of reciting a catalog line from prompt
+      // memory (which measurably drifts). Rendered ONCE here, then (a) stored
+      // on the dictation record so `repeat_pending_question` can re-present
+      // the standing question byte-exact, and (b) stamped on the final entry.
+      const askText = askOfFinalEntry(plan, exec.results, exec.rowKeys)?.render?.(st.view);
+      if (awaiting != null && typeof askText === "string" && askText.length > 0) {
+        awaiting = { ...(awaiting as Record<string, unknown>), ask_text: askText };
+      }
       (st.committed as Record<string, unknown>).awaitingInput = awaiting;
       // Make the recorded ask VISIBLE on the final entry — the transcript is
       // the model's only authority for engine state (never injected into the
@@ -70,17 +84,13 @@ export function finalizeRun<T extends LibraryManagedSlots>(
       const dictation = awaiting as { for_action?: string; param?: string } | null;
       if (dictation?.for_action && dictation.param && body.results.length > 0) {
         const lastIndex = body.results.length - 1;
-        // Host-rendered ask bytes, when the ask declares them: the model
-        // speaks `ask_text` exactly instead of reciting a catalog line from
-        // prompt memory (which measurably drifts).
-        const askText = askOfFinalEntry(plan, exec.results)?.render?.(st.view);
         body.results[lastIndex] = {
           ...body.results[lastIndex],
           standing_ask: { action: dictation.for_action, param: dictation.param },
           ...(typeof askText === "string" && askText.length > 0
             ? { ask_text: askText }
             : {}),
-          ask_contract: formatMessage(msgs.standing_ask_contract, {
+          ask_contract: formatMessage(plan.askContract, {
             action: dictation.for_action,
             param: dictation.param,
           }),
@@ -101,14 +111,17 @@ export function finalizeRun<T extends LibraryManagedSlots>(
     const committedRec = st.committed as Record<string, unknown>;
     if (isBackendFailure) {
       const newErrorCount = prevErrorCount + 1;
-      if (newErrorCount >= plan.errorHandoffThreshold) {
+      if (newErrorCount >= plan.tolerances.errorHandoffThreshold) {
         // Threshold reached → escalate. Write the library `handoff` slot (when
         // handoff is enabled and the batch didn't already request one) and/or
         // let the host inject a custom signal.
         if (plan.activation.handoffEnabled && !committedRec.handoff) {
+          // STRUCTURAL marker, never prose: the host's resolveClosingMessage
+          // matches this context code to render the caller-facing closing in
+          // the session language. The engine never authors spoken bytes.
           committedRec.handoff = {
             reason: "abandon",
-            context: msgs.auto_handoff,
+            context: AUTO_HANDOFF_CONTEXT,
           } satisfies HandoffRequest;
         }
         // Latch clears at the threshold. Deliberately NOT a loop over
@@ -118,26 +131,21 @@ export function finalizeRun<T extends LibraryManagedSlots>(
         // task-scoped sweep (handoff/node.ts) is the loop-driven authority
         // when a handoff path exists. The invariant that no task-scoped slot
         // survives the resolved handback is pinned by test instead.
-        if (plan.activation.laddersEnabled) committedRec.spentLadders = null;
+        if (true) committedRec.spentLadders = null;
         plan.onErrorThreshold?.(committedRec, initialState);
         committedRec.errorCount = 0;
         // Platform delivers the wording: the host graph's handoff resolver
-        // speaks the closing (possibly overriding `auto_handoff` from state),
-        // so instructing the model to voice it invites double-speaking. Hosts
-        // whose graph does NOT deliver it can override the template and use
-        // the `{message}` placeholder.
-        const handoffInstruction = formatMessage(msgs.auto_handoff_instruction, {
-          message: msgs.auto_handoff,
-        });
+        // renders and speaks the closing from state, so instructing the model
+        // to voice anything invites double-speaking.
         body.results.push({
           action: "auto_handoff",
           ok: true,
           isHandoff: true,
           signal: "abandon",
-          successMessage: msgs.auto_handoff,
-          summary: handoffInstruction,
+          instruction: ENGINE_TEXT.auto_handoff_instruction,
         });
-        body.summary = handoffInstruction;
+        body.instruction = ENGINE_TEXT.auto_handoff_instruction;
+        delete body.summary;
         delete body.failed_at;
       } else {
         committedRec.errorCount = newErrorCount;

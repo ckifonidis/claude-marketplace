@@ -8,12 +8,16 @@
 //   - emits a `handoff` custom event via `config.writer` (streamMode "custom")
 //     BEFORE any response content, so streaming clients can react (abort TTS,
 //     switch routing) without parsing message text;
-//   - terminate mode: uses the fixed `terminateMessage` envelope;
+//   - terminate mode: `off_topic` resolves SILENTLY (empty content — the
+//     orchestrator's destination agent owns the caller-facing reply);
+//     `completed`/`abandon` speak the host-rendered closing
+//     (`resolveClosingMessage(state, request)` — required, total; nothing the
+//     engine or the model authors is ever spoken);
 //   - delegate mode (off_topic): calls the delegate LangGraph deployment with
 //     the SAME thread id (handoff/delegate-client.ts), forwards its LLM tokens
 //     through the writer as `delegated_token` custom events, and uses its
-//     final text; any delegate failure falls back to the terminate envelope
-//     (behavioral fallback — not a config fallback);
+//     final text; any delegate failure speaks the host-rendered
+//     `delegateFailureMessage(state)` instead;
 //   - emits a `handoff_complete` custom event carrying the final text
 //     (node-constructed AIMessages never appear in the `messages` token
 //     stream, so streaming clients need this to render/speak the reply);
@@ -101,13 +105,15 @@ export function createHandoffNode<T extends LibraryManagedSlots>(spec: HandoffSp
     // request concerns another service" line. The `off_topic` `handoff_type` +
     // the caller's verbatim request in `handoff_reason`/`context` are still
     // emitted so the router can route. (delegate mode overrides `content`
-    // below; a delegate FAILURE falls back to the spoken terminateMessage.)
-    // completed / abandon are genuine endings, NOT redirects — they keep their
-    // closing line (resolveClosingMessage override, else the LLM `context`).
+    // below; a delegate FAILURE speaks the host-rendered fallback.)
+    // completed / abandon are genuine endings, NOT redirects — the HOST
+    // renders their closing from state (resolveClosingMessage is required and
+    // total; there is no engine or model-prose fallback: `context` is routing
+    // metadata and is never spoken).
     let content =
       effective.reason === "off_topic"
         ? ""
-        : (spec.resolveClosingMessage?.(state, effective) ?? effective.context);
+        : spec.resolveClosingMessage(state, effective);
     let delegated = false;
     let delegateError: string | null = null;
 
@@ -127,7 +133,9 @@ export function createHandoffNode<T extends LibraryManagedSlots>(spec: HandoffSp
         delegated = true;
       } catch (err) {
         delegateError = err instanceof Error ? err.message : String(err);
-        content = spec.terminateMessage;
+        // Host-rendered from state (construction requires it in delegate
+        // mode); the empty-string guard covers unvalidated direct wiring.
+        content = spec.delegateFailureMessage?.(state) ?? "";
         writer?.({ type: "handoff_delegate_failed", error: delegateError });
       }
     }

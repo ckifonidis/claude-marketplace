@@ -11,6 +11,81 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.29.0] — 2026-11-19
+
+Ships **agent-step library 4.0.0** — a major library release; `/pull-library` is **required** for
+downstream projects and applies 11 transforms (see
+[migrations/3.1.0-to-4.0.0.md](migrations/3.1.0-to-4.0.0.md)). Every sentence gets one owner: engine
+text becomes a model-facing `instruction` the engine owns outright (no wording override), and
+everything a caller can hear is rendered by the host from state. Standing asks move onto the verdict
+row that asks, params declare a field kind, and the configured escalation ladders give way to
+universal bounded patience whose numbers are deployment-level tolerances. Library suite 229 → 300
+tests; verified by throwaway bootstrap from these templates: clean typecheck, 300/300 passing. Model
+behaviour on the new wire text was not measured at release — hosts re-measure after upgrading.
+
+### Added
+- **Library 4.0.0** — two wire-visible **registers** (a result entry carries `summary` or
+  `instruction`; `_debug` moves off the tool message onto its `artifact`), **row asks**
+  (`VerdictDef.ask`, `param`/`expects` derived, `askContract` categories), **field kinds** (`digits` /
+  `text` / `judged` / `relay`, new `judgedEnum` / `judgedFlag`; construction refuses `pattern`, length
+  and `format` keywords in model-facing params), **universal bounded patience** (nothing declared per
+  action, reset on progress, ending in an `agent-step:escalated[:<action>]` handback), **refusal
+  kinds** on `note_refusal` (the `malicious_intent` attempt that reaches the limit ends the task),
+  **state-satisfied inputs** (`ActionDef.satisfies`, silent or consent) and the config-level
+  **`invalidations`** table. Details in [CHANGELOG.md](CHANGELOG.md).
+- **Engine tolerances** — the four numbers behind bounded patience and the backend-failure
+  auto-handoff are process-wide, with measured defaults and environment overrides the engine itself
+  reads once at construction: `AGENT_STEP_BOUNCE_TOLERANCE` (default 2),
+  `AGENT_STEP_FREE_EXPLANATIONS` (1), `AGENT_STEP_MALICIOUS_LIMIT` (3),
+  `AGENT_STEP_ERROR_HANDOFF_THRESHOLD` (3). A malformed value fails the boot; an explicit
+  `errorHandoffThreshold` option wins over its variable; no model-facing text carries a count, so
+  moving a tolerance moves no wire byte. No host wiring.
+- **Migration `3.1.0-to-4.0.0.md`** — prose + 11 ordered transforms (the `messages` option, host-rendered
+  closings, the verifier denial, `refuseProposal`, asks onto rows, field kinds, ladders to refusal
+  kinds, config-level invalidations, the protocol surface, register readers, the commented tolerance
+  block in `.env.example`) plus manual follow-ups (re-measure the model, closings for the engine's own
+  endings, the `handoff_reason` codes, non-default counts, tests that count turns).
+- `agent-step-api.md`: new `<registers>`, `<escalation>` (with the Tolerances table), `<invalidations>`
+  and `<satisfies>` sections. `identity-patterns.md`: identity that may already be carried, through
+  `satisfies`.
+
+### Changed
+- **Tool templates** — `action.ts.template` (field-kind builders, row asks, `satisfies`,
+  `bounceCapture`), `config.ts.template` (`invalidations`), `tool-index.ts.template` (`askContract`
+  in; `messages` and `ladders` out), both verifier templates and `plan.md.template` (a denial is
+  `{ instruction, error }`), the read and mutation executor templates (optional `source`).
+- **Project templates** — `prompt.ts.template` (no ladders), `env.example.template` (no
+  `HANDOFF_TERMINATE_MESSAGE`: closings are host-rendered; gains the commented `AGENT_STEP_*`
+  tolerance block), `cli.ts.template` (prints `instruction` entries), `state.ts.template`.
+- **References reconciled with 4.0.0** — `agent-step-api.md` (rewritten `<standing_asks>`, handoff,
+  result-envelope and construction-check sections; `<ladders>`, `<system_messages>`,
+  `<invalidates_on_change>` removed), `streaming-and-channel-contract.md` (the channel envelope is
+  unchanged; `handoff_reason` carries structural codes for engine-decided endings), six further
+  references, both create-tool workflows, and the `create-tool` / `test-agent-step` SKILLs.
+- **`document-agent-flow`** — the engine-notation catalog and `RETIRED_ENGINE_TERMS` cover what 4.0.0
+  removed (+1 break test); `engine_version` examples → 4.0.0; the pizza example's "same address as
+  last time?" step is now a `satisfies` consent step, `out/` rebuilt.
+- `plugin.json` / marketplace entry: library version and description (registers, field kinds, row
+  asks, state-satisfied inputs, bounded patience with its tolerances).
+
+### Fixed
+- Root `README.md`: the `create-tool` bullet named the removed `invalidatesOnChange` option.
+- Maintainer blast-radius map (`.claude/skills/bump-version/references/tracked-assets.md`):
+  `DictationAsk` in the Tier 4 type listing; Tiers 2, 3 and 5 now list every template and workflow
+  (`plan.md.template`, `cli.ts.template` and `env.example.template` mirror the library and were
+  missing).
+
+### Breaking (for downstream projects, not for the plugin)
+- Removed: the `messages` option / `SystemMessages`, `ActionDef.asks` / `DictationAsk`, `ladders` /
+  `captureBounces`, `ActionDef.invalidatesOnChange`, `HandoffSpec.terminateMessage`.
+  `resolveClosingMessage` is required and total (`delegateFailureMessage` in delegate mode);
+  `Verifier.denial` is `{ instruction, error }`; `refuseProposal` names a verdict row. Middleware:
+  `handoff_reason` can be `auto_handoff`, `agent-step:escalated[:<action>]` or `agent-step:malicious`.
+  Hosts re-measure their model-surface goldens.
+
+Verified at release on the `document-agent-flow` example: the generator rebuilds and `verify.py`
+passes all 40 checks, the browser checks (headless render in light, dark and 400 px) included.
+
 ## [0.28.0] — 2026-11-17
 
 New skill **`document-agent-flow`** (contributed by Kotsarinis Miltiadis, PR #11) — documents any

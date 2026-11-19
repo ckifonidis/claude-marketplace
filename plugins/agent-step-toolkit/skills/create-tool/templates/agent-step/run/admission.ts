@@ -21,7 +21,7 @@
 
 import type { StepResult } from "../types.js";
 import type { LibraryManagedSlots } from "../state.js";
-import { formatMessage } from "../messages.js";
+import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
 import type { CompiledPlan } from "../compile/plan.js";
 import { ABORT_ACTION, EXCLUSIVITY_GROUPS } from "../controls/registry.js";
 import {
@@ -46,7 +46,7 @@ export function admitBatch<T extends LibraryManagedSlots>(
   view: Partial<T>,
   currentCallerTurnId: string | undefined,
 ): BatchRefusal | null {
-  const { msgs, activation } = plan;
+  const { activation } = plan;
   const first = userSteps[0];
 
   // ── 1. Unknown-action defense. The LangChain wrapper validates input against
@@ -64,7 +64,7 @@ export function admitBatch<T extends LibraryManagedSlots>(
       entry: {
         action: s.action,
         ok: false,
-        summary: msgs.unknown_action,
+        instruction: formatMessage(ENGINE_TEXT.unknown_action, { action: s.action }),
         error: "unknown_action",
       },
     };
@@ -75,8 +75,9 @@ export function admitBatch<T extends LibraryManagedSlots>(
   //    check resolves what happens next), an allowed control, or — for match —
   //    the capturer, so the customer can re-capture (e.g. enter a different
   //    first PIN) without aborting the flow, or — for otp — an ISSUER of that
-  //    gate, so a code that never arrived can be re-sent without aborting. Abort may lead a multi-step
-  //    batch: subsequent steps run after the gate is cleared.
+  //    gate, so a code that never arrived can be re-sent without aborting.
+  //    Abort may lead a multi-step batch: subsequent steps run after the gate
+  //    is cleared.
   //
   //    No library-side TTL on any slot — confirmation and OTP are both
   //    conversation-driven. Stale state is cleared by `abort_pending_input` or
@@ -144,17 +145,17 @@ export function admitBatch<T extends LibraryManagedSlots>(
           abort_action: ABORT_ACTION,
           capturer: capturer ?? "",
         };
-        const summary =
+        const instruction =
           gate.kind === "confirmation"
-            ? formatMessage(msgs.lockdown_confirmation, lockdownVars)
+            ? formatMessage(ENGINE_TEXT.lockdown_confirmation, lockdownVars)
             : gate.kind === "otp"
-              ? formatMessage(msgs.lockdown_otp, lockdownVars)
-              : formatMessage(msgs.lockdown_match, lockdownVars);
+              ? formatMessage(ENGINE_TEXT.lockdown_otp, lockdownVars)
+              : formatMessage(ENGINE_TEXT.lockdown_match, lockdownVars);
         return {
           entry: {
             action: first?.action ?? "(empty)",
             ok: false,
-            summary,
+            instruction,
             error: errorCode,
             awaiting: { kind: gate.kind, for_action: gate.for_action },
           },
@@ -163,24 +164,59 @@ export function admitBatch<T extends LibraryManagedSlots>(
     }
   }
 
-  // ── 5. Flow mutex: if the first step opens a flow (`startsFlow`) but a
-  //    DIFFERENT flow is already active, refuse. `startsFlow` is idempotent
-  //    within the same flow — the executor will re-run (e.g. to re-issue an
-  //    OTP) without resetting `currentFlow.data`.
+  // ── 5. Flow mutex: if ANY step opens a flow (`startsFlow`) while a
+  //    DIFFERENT flow is active, refuse. `startsFlow` is idempotent within the
+  //    same flow — the executor will re-run (e.g. to re-issue an OTP) without
+  //    resetting `currentFlow.data`.
+  //
+  //    Every step, not just the first. Checking only `first` let a batch of
+  //    [read, open_other_flow] past the mutex, and `flowAfterOkStep` then took
+  //    its "admission already refused this" branch and did nothing — so the
+  //    second step's executor RAN (issuing its OTP, doing its backend work)
+  //    while `currentFlow` silently stayed the OLD flow, and anything it
+  //    merged landed in the wrong flow's data bag. Harmless while a host has
+  //    one flow (this one), reachable the moment it has two.
+  //
+  //    A step EARLIER in the batch may legitimately clear the flow, which is
+  //    the library's supported "end the old flow before starting the new one":
+  //    `abort_pending_input` clears the whole interaction, and `endsFlow`
+  //    closes it on success. So the scan tracks whether a flow is still active
+  //    at each position rather than testing every step against batch-start
+  //    state — otherwise the supported [abort, open_other_flow] sequence would
+  //    be refused. Runtime-only clearers (an `abort_flow` effect) cannot be
+  //    seen here; treating a statically-unknowable case as "still active"
+  //    would refuse a legal batch, so only declared clearers count.
+  //
+  //    The scan deliberately does NOT predict flows this batch would OPEN:
+  //    whether a later `startsFlow` conflicts depends on whether the earlier
+  //    one actually succeeded, so predicting forward invents refusals for
+  //    legal batches — and, when a batch is malformed for a second reason,
+  //    preempts the more accurate error ([abort, open_a, open_b] must report
+  //    `abort_too_many_followers`, not a flow conflict). Two different
+  //    `startsFlow` steps in ONE batch therefore still reach
+  //    `flowAfterOkStep`, whose no-op branch leaves the first flow standing;
+  //    catching that needs a per-step check at execution time, where the flow
+  //    state is current.
   const currentFlow = getCurrentFlow(view);
-  if (currentFlow && first) {
-    const starts = plan.actions[first.action]?.controller?.startsFlow;
-    if (starts && starts.name !== currentFlow.name) {
+  let activeFlowName = currentFlow?.name;
+  for (const step of userSteps) {
+    if (step.action === ABORT_ACTION) {
+      activeFlowName = undefined;
+      continue;
+    }
+    const controller = plan.actions[step.action]?.controller;
+    if (activeFlowName && controller?.startsFlow && controller.startsFlow.name !== activeFlowName) {
       return {
         entry: {
-          action: first.action,
+          action: step.action,
           ok: false,
-          summary: msgs.flow_already_active,
+          instruction: ENGINE_TEXT.flow_already_active,
           error: "flow_already_active",
-          active_flow: currentFlow.name,
+          active_flow: activeFlowName,
         },
       };
     }
+    if (controller?.endsFlow) activeFlowName = undefined;
   }
 
   // ── 6. Control exclusivity, in group order: a sole-step control mixed into
@@ -197,7 +233,7 @@ export function admitBatch<T extends LibraryManagedSlots>(
         entry: {
           action: found.action,
           ok: false,
-          summary: group.summary(found.action, msgs),
+          instruction: group.instruction(found.action),
           error: group.errorCode,
         },
       };
@@ -218,7 +254,9 @@ export function admitBatch<T extends LibraryManagedSlots>(
         entry: {
           action: ABORT_ACTION,
           ok: false,
-          summary: `"${ABORT_ACTION}" must be the first step in the batch.`,
+          instruction: formatMessage(ENGINE_TEXT.abort_must_be_first, {
+            abort_action: ABORT_ACTION,
+          }),
           error: "abort_must_be_first",
         },
       };
@@ -230,7 +268,9 @@ export function admitBatch<T extends LibraryManagedSlots>(
         entry: {
           action: ABORT_ACTION,
           ok: false,
-          summary: `"${ABORT_ACTION}" requires pending input or an active flow.`,
+          instruction: formatMessage(ENGINE_TEXT.abort_requires_active, {
+            abort_action: ABORT_ACTION,
+          }),
           error: "abort_requires_active_input",
         },
       };
@@ -247,15 +287,22 @@ export function admitBatch<T extends LibraryManagedSlots>(
       const allowed = abortPolicy.allowedPendingTargets
         .map((name) => `"${name}"`)
         .join(", ");
-      const summary =
+      const instruction =
         awaitingTarget == null
-          ? `"${ABORT_ACTION}" requires pending input targeting one of: ${allowed}.`
-          : `"${ABORT_ACTION}" cannot clear pending input for "${awaitingTarget.for_action}"; allowed targets: ${allowed}.`;
+          ? formatMessage(ENGINE_TEXT.abort_no_pending_target, {
+              abort_action: ABORT_ACTION,
+              allowed,
+            })
+          : formatMessage(ENGINE_TEXT.abort_pending_target_not_allowed, {
+              abort_action: ABORT_ACTION,
+              target: awaitingTarget.for_action,
+              allowed,
+            });
       return {
         entry: {
           action: ABORT_ACTION,
           ok: false,
-          summary,
+          instruction,
           error: "abort_pending_target_not_allowed",
           ...(awaitingTarget
             ? {
@@ -275,7 +322,9 @@ export function admitBatch<T extends LibraryManagedSlots>(
         entry: {
           action: ABORT_ACTION,
           ok: false,
-          summary: `"${ABORT_ACTION}" must be followed by exactly one allowed domain action.`,
+          instruction: formatMessage(ENGINE_TEXT.abort_follower_required, {
+            abort_action: ABORT_ACTION,
+          }),
           error: "abort_follower_required",
         },
       };
@@ -285,7 +334,9 @@ export function admitBatch<T extends LibraryManagedSlots>(
         entry: {
           action: ABORT_ACTION,
           ok: false,
-          summary: `"${ABORT_ACTION}" may be followed by at most one domain action.`,
+          instruction: formatMessage(ENGINE_TEXT.abort_too_many_followers, {
+            abort_action: ABORT_ACTION,
+          }),
           error: "abort_too_many_followers",
         },
       };
@@ -301,7 +352,10 @@ export function admitBatch<T extends LibraryManagedSlots>(
           entry: {
             action: follower.action,
             ok: false,
-            summary: `"${follower.action}" is not an allowed follower of "${ABORT_ACTION}".`,
+            instruction: formatMessage(ENGINE_TEXT.abort_follower_not_allowed, {
+              action: follower.action,
+              abort_action: ABORT_ACTION,
+            }),
             error: "abort_follower_not_allowed",
           },
         };
@@ -334,7 +388,9 @@ export function admitBatch<T extends LibraryManagedSlots>(
         entry: {
           action: s.action,
           ok: false,
-          summary: formatMessage(msgs.mutation_must_be_sole_step, { action: s.action }),
+          instruction: formatMessage(ENGINE_TEXT.mutation_must_be_sole_step, {
+            action: s.action,
+          }),
           error: "mutation_must_be_sole_step",
         },
       };
@@ -353,7 +409,7 @@ export function admitBatch<T extends LibraryManagedSlots>(
           entry: {
             action: s.action,
             ok: false,
-            summary: formatMessage(msgs.mutation_execute_must_be_sole, {
+            instruction: formatMessage(ENGINE_TEXT.mutation_execute_must_be_sole, {
               action: s.action,
             }),
             error: "mutation_must_be_sole_step",
@@ -365,7 +421,7 @@ export function admitBatch<T extends LibraryManagedSlots>(
           entry: {
             action: s.action,
             ok: false,
-            summary: formatMessage(msgs.mutation_must_be_last_in_batch, {
+            instruction: formatMessage(ENGINE_TEXT.mutation_must_be_last_in_batch, {
               action: s.action,
             }),
             error: "mutation_must_be_last_in_batch",

@@ -69,7 +69,7 @@ function makeOpts(
     selectors,
     executors,
     verifiers: {},
-    handoff: { offTopic: { mode: "terminate" }, terminateMessage: "bye" },
+    handoff: { offTopic: { mode: "terminate" }, resolveClosingMessage: (_s: unknown, r: { context: string }) => r.context },
     errorHandoffThreshold: 1,
   };
 }

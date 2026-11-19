@@ -4,7 +4,7 @@ The ladder a phone agent walks to take one pizza order, from greeting to deliver
 
 **Source of truth for the flow:** the product owner's call walkthrough (synthetic).
 
-**Step engine:** agent-step 3.1.0.
+**Step engine:** agent-step 4.0.0.
 
 | File | What it holds |
 |---|---|
@@ -42,6 +42,9 @@ E  P7       Kitchen & tracking     ⚡ status           → P8
    P8       Tip & feedback         ⚡ feedback         → END
 ```
 
+From any step:
+- an answer the tool still cannot use after two tries and one explanation → handed back (abandon)
+
 In total: 10 ladder steps, 4 sub-steps and 8 triggers.
 
 | Status | Steps | Triggers |
@@ -65,13 +68,18 @@ Every mechanism below is agent-step configuration, not prompt prose.
 | Trigger chain | One closing action per step; its executor runs the chain in order and names one verdict row. |
 | Read-back before placing | `requiresConfirmation{maxAttempts:3, readBack}` on `place_order`. |
 | Payment code | A short `payment` flow: `choose_payment` starts it and `issuesOtp`; `confirm_payment` `requiresOtp` and ends it. |
-| Re-ask a bad phone number | `asks` + `captureBounces`, escalating through a ladder. |
+| What the caller owes next | A row ask: `start_order`'s `set` row asks for the phone number (`ask→identify_caller`); `add_item`'s `unavailable` row asks for another item (`ask:self`). |
+| Re-ask a bad phone number | Nothing declared. `phone` is a `digits` capture, so a number the schema rejects bounces (`invalid_params`) and the re-ask is derived from the field. |
+| “Try again, then get a person” | Nothing declared either: the engine's bounded patience. By default two unusable answers in a row bounce plainly, the next earns one explanation, the one after hands back `abandon` on `agent-step:escalated:<action>`. The counters reset as soon as an answer is accepted. |
+| The caller will not give the number | The `note_refusal` control with kind `declined_or_cannot`: the model only names the kind. The engine has it explain once why the number is needed; a second refusal hands back `abandon`. |
+| “Same address as last time?” | `satisfies` in `consent` mode on `set_address`: an empty call offers the saved address on the action's confirmation gate, a dictated address always wins, and a new customer gets the `no_saved_address` row with its ask. |
 
 Facts that drove this design:
 
 1. A batch stops only on a ✗ verdict row, so a quote whose price changed must be a ✗ row — otherwise the order would be placed at the old price.
-2. An address edit after the quote must void the quote: `invalidatesOnChange{address:[quote]}`.
+2. An address edit after the quote must void the quote. Invalidation is one table on the config, not an option of `set_address`: `invalidations{address:[quote]}` nulls `quote` whenever any action's write changes `address`.
 3. While the read-back is pending, only `place_order`, `abort_pending_input`, the handoff or the repeat control may run — and abort clears the gate AND any open flow. An edit therefore aborts and re-enters P3; it is safe only because the cart is a host slot, not flow data.
+4. Everything the caller hears is rendered by the host from state: a row's `summary`, the read-back, the handoff closing. The engine's own text is a model-facing `instruction`, never spoken. So `resolveClosingMessage` has a row for each ending the engine decides: `auto_handoff` (the TECH terminal), `agent-step:escalated:<action>` and `agent-step:malicious`.
 
 ## 4. The steps where a decision was made
 

@@ -14,7 +14,7 @@ prompt, and when porting an existing agent (the closing checklist is the port-mo
 The graph is three nodes — `agent`, `tools`, `resolve_handoff` — and the agent node does exactly one
 thing: build the prompt, invoke the model over the transcript, return its message. Nothing is
 injected, nothing is wrapped, no state is patched from outside. Every mechanism — confirmation
-gates, standing asks, escalation ladders, abort policy, handoff resolution, attempt accounting,
+gates, standing asks, bounded patience, abort policy, handoff resolution, attempt accounting,
 admission — lives in
 the agent-step engine; every business behaviour lives in the configuration, the prompt, or an
 executor. The model learns the world only from the transcript: tool results carry every engine
@@ -58,7 +58,7 @@ prompt is byte-identical across differing states — is a cheap guard worth addi
 
 If the model must know an engine fact, that fact must appear in a tool result. Every engine
 transition is visible in the transcript (e.g. a recorded standing ask stamps `standing_ask` +
-`ask_contract` on the final entry; a ladder escalation stamps `ladder_exhausted` +
+`ask_contract` on the final entry; an escalation stamps `escalated` +
 `handoff_requested`); pending status is derived from the results themselves. A
 silent state mutation in the engine is a bug by definition, because the transcript is the model's
 only authority.
@@ -115,8 +115,10 @@ is precisely what must be removed from it.
 pressure, and paraphrase fixed offers — each a consent defect the confirmation gate cannot catch,
 because both sides then agree on words nobody said.
 
-*How:* `ConfirmationOpts.readBack` + `repeatReadBack` (stored-byte repetition), and
-`DictationAsk.render` (`ask_text`). The read-back authority is stated ONCE, by the engine-composed
+*How:* `ConfirmationOpts.readBack` + `repeatReadBack` (stored-byte repetition), a row ask's
+`render` (`ask_text`), verdict-row `summary` renderers, and `HandoffSpec.resolveClosingMessage` —
+every caller-audible byte is host-rendered from state; engine text is an `instruction` the model
+follows and never speaks (`agent-step-api.md` `<registers>`). The read-back authority is stated ONCE, by the engine-composed
 protocol fragment; the per-result framing rides the wire as `read_back_directive`.
 
 ## 7. One authority per behaviour in the prompt

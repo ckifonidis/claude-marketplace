@@ -44,6 +44,14 @@ function gateMarker(def: ActionDef<string>): string {
  *  carries on the result body, at the exact turn it occurs. One gloss was
  *  measured actively harmful (0/4). A result that explains itself does not
  *  need a preview in the schema. */
+// NOTE deliberately NO satisfies marker (owner pushback 2026-08-24): the
+// state-satisfied mechanic (ActionDef.satisfies) is internal — values ride
+// state → executor and never reach the model. The one model-facing byte the
+// mechanic needs, the LICENCE to make the empty call at all, already has an
+// authority in each host's prompt (the reference host's probe rules, measured); a
+// composed copy here would be a second authority for the same behaviour.
+// Moving that licence from prompt to wire is a separate, measured decision.
+
 export function composeActionDescription(def: ActionDef<string>): string {
   return `${gateMarker(def)} ${def.description}`;
 }

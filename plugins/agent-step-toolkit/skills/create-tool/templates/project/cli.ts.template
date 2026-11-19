@@ -528,7 +528,11 @@ interface LocalMessage {
 interface StepResult {
   action: string;
   ok: boolean;
+  /** Host caller-audible text (a declared verdict row). */
   summary?: string;
+  /** Engine directive (an entry the runner raised) — an entry carries
+   *  `summary` OR `instruction`, never both. */
+  instruction?: string;
   error?: string;
   needs_confirmation?: boolean;
   attempts_left?: number;
@@ -550,6 +554,7 @@ interface StepResult {
 
 interface ToolEnvelope {
   summary?: string;
+  instruction?: string;
   results?: StepResult[];
   failed_at?: number;
 }
@@ -672,8 +677,9 @@ function formatStepLine(r: StepResult): string {
   if (r.newStatus) bits.push(`newStatus=${r.newStatus}`);
   if (r.masked_pin_last2) bits.push(`pin=**${r.masked_pin_last2}`);
   if (r.error) bits.push(`error=${r.error}`);
-  if (bits.length === 0 && r.summary)
-    bits.push(r.summary.length > 60 ? r.summary.slice(0, 60) + "…" : r.summary);
+  const text = r.summary ?? r.instruction;
+  if (bits.length === 0 && text)
+    bits.push(text.length > 60 ? text.slice(0, 60) + "…" : text);
   return `${DIM}  • ${r.action} ${mark}${bits.length ? " " + bits.join(" ") : ""}${RESET}`;
 }
 

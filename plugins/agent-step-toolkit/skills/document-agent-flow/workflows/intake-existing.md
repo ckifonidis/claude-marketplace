@@ -14,11 +14,12 @@ local patch as an open item and in `status_note`. Where the declarations live de
 
 | Library | Actions declared in | Outcomes declared in |
 |---|---|---|
-| 3.x | the scaffold layout puts each in `src/tools/<tool>/actions/<action>/action.ts` (+ `names.ts`, `config.ts` assembles) — but many 3.x projects still declare everything inline in one `config.ts`; grep both | the action's `verdicts` rows |
+| ≥ 3.0 | the scaffold layout puts each in `src/tools/<tool>/actions/<action>/action.ts` (+ `names.ts`, `config.ts` assembles) — but many projects still declare everything inline in one `config.ts`; grep both | the action's `verdicts` rows |
 | < 3.0 | `src/tools/<tool>/config.ts` (one `defineConfig`, often with shared controller presets) | the executor's return bodies (`ok`, `resultBody`, lifecycle) |
 
-Then read, per tool: `index.ts` (handoff, ladders, abortPolicy, messages), `verifiers/*.ts` (each
-prereq's predicate — which state slot it reads), `state.ts` (slots), and the prompt — `src/prompt.ts`
+Then read, per tool: `index.ts` (handoff, abortPolicy, askContract), `config.ts` (the `invalidations`
+table), `verifiers/*.ts` (each prereq's predicate — which state slot it reads), `state.ts` (slots), the
+handoff spec (`resolveClosingMessage` — which endings get which closing), and the prompt — `src/prompt.ts`
 or wherever it is assembled (a prompt registry, per-channel variants). The taught order and the example
 batches show the ladder the model is taught. When the prompt differs per channel or per caller type
 (anonymous vs authenticated), draw one ladder with a branch step per variant, and say in
@@ -26,11 +27,15 @@ batches show the ladder the model is taught. When the prompt differs per channel
 
 Greps that list the surface quickly (scaffold layout; when the declarations are inline, point them at `config.ts`):
 ```bash
-grep -rnE "prereqs:|requiresConfirmation|soleStep|soleOnExecute|startsFlow|requiresFlow|endsFlow|issuesOtp|requiresOtp|startsMatchFor|requiresMatch|pageable|asks:|captureBounces|invalidatesOnChange" src/tools/*/actions/*/action.ts
+grep -rnE "prereqs:|requiresConfirmation|soleStep|soleOnExecute|startsFlow|requiresFlow|endsFlow|issuesOtp|requiresOtp|startsMatchFor|requiresMatch|pageable|ask:|satisfies:|bounceCapture" src/tools/*/actions/*/action.ts
 grep -rn 'verdict: "' src/tools/*/actions/*/executor.ts
 grep -rnE "request_handoff|otp_issued|abort_flow|clear_awaiting_input|merge_flow_data" src/tools
-grep -nE "handoff:|ladders|abortPolicy|modelRequestSchema|clearsOnHandback" src/tools/*/index.ts
+grep -nE "handoff:|askContract|abortPolicy|modelRequestSchema|clearsOnHandback|invalidations" src/tools/*/index.ts src/tools/*/config.ts
+grep -rnE "digitGroupsParam|digitCandidatesParam|callerDigits|callerTextParam|judgedEnum|judgedFlag|relayParam" src/tools
 ```
+A copy older than 4.0.0 spells four of these differently: an `asks:` map on the action instead of `ask:` on
+the row, `captureBounces` and `invalidatesOnChange` on the action, and `ladders` / `messages` in `index.ts`.
+Grep for those as well when `VERSION` is below 4.0.0.
 Presets and spreads (`...SECTION_WRITE`) hide options from these greps — resolve every spread and shared
 constant before concluding an action lacks a gate. That is how the reference audit got one of its three
 wrong "does not exist" claims.
@@ -51,7 +56,10 @@ A step is what the USER experiences as one stretch of the conversation. Derive s
 | `startsMatchFor` / `requiresMatch` | capture step → confirm step (double entry) |
 | a prereq P on B whose verifier reads slot X that A writes | an edge A → B |
 | a ✗ verdict row / an error body | a failure outcome (`kind: "fail"`), usually a self-loop or a back edge |
-| `invalidatesOnChange {X: [Y]}` | a back edge: changing X re-opens the step that set Y |
+| `invalidations {X: [Y]}` on the config (before 4.0.0: `invalidatesOnChange` on the action) | a back edge: changing X re-opens the step that set Y |
+| a verdict row with `ask` (before 4.0.0: an entry of the `asks` map) | `"self"`: a re-ask self-loop on that failure outcome. `{action}`: what the next step opens with |
+| an `invalid_params` bounce (before 4.0.0: `captureBounces` and a named ladder) | a re-ask self-loop. The handback after repeated bounces or a `note_refusal` is not an edge: list it in `meta.global_exits` |
+| `satisfies` on the closing action | the step's `prefilled`, and its `opens` when the mode is `consent` (the reuse question) |
 | a `startsFlow` … `endsFlow` span | the steps inside it (often just a code's send + read-back); name the flow in their `engine`. If the code keeps the whole journey in one flow with editable read-backs inside it, that is a `change` — see `references/engine-notation.md` §Pitfalls |
 | `request_handoff` / a handoff route | a terminal |
 | one human answer that picks between two actions (agree → A, decline → B) | ONE step whose outcomes name both; its `engine` lists both closing actions |
@@ -83,8 +91,9 @@ for routes worth listing that no single trigger owns (a shared client, a base UR
 ## 5. Engine column on an old library
 
 When the project vendors an older agent-step, write the engine column for the **current** library (the
-target) and put the old mechanism in `status_note`. Never copy a pre-3.0 term into the engine column;
-the validator refuses removed primitives and `readOnly`.
+target) and put the old mechanism in `status_note`. Never copy a retired term into the engine column —
+a pre-3.0 one, or one 4.0.0 removed (the asks map, the per-action bounce and invalidation options, named
+ladders); the validator refuses removed primitives and `readOnly`.
 
 ## 6. Continue
 

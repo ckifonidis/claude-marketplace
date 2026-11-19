@@ -59,7 +59,7 @@ And remember: a default — even one reading an env var — does **not** fill st
 
 ## Library-managed slots (awaitingInput + currentFlow + pagedRead + spentLadders + handoff + errorCount)
 
-`awaitingInput` / `currentFlow` are required whenever the new tool declares any lifecycle opt on a mutation (`requiresConfirmation`, `requiresOtp`, `issuesOtp`, `requiresMatch`, `startsMatchFor`, `startsFlow`, `endsFlow`, `requiresFlow`) or any standing ask (`ActionDef.asks`); `pagedRead` whenever an action declares `pageable`; `spentLadders` (3.0.0) whenever `ladders` or any `captureBounces` is configured; `handoff` / `errorCount` for the library handoff + auto-handoff guard. (`buildAgentStepTool` enforces this at construction: a state schema missing a channel for any slot the configuration writes throws.) All arrive by **spreading the library's exported `agentStepZodShape` fragment** — never hand-declare them (the library's `state.ts` doc-comment forbids it; hand-rolled copies drift). Each slot in the fragment is already wrapped with `withLangGraph` carrying the runner's expected reducer/default:
+`awaitingInput` / `currentFlow` are required whenever the new tool declares any lifecycle opt on a mutation (`requiresConfirmation`, `requiresOtp`, `issuesOtp`, `requiresMatch`, `startsMatchFor`, `startsFlow`, `endsFlow`, `requiresFlow`) or collects any caller capture (a row `ask`, or the derived bounce re-ask, records the `dictation` slot); `pagedRead` whenever an action declares `pageable`; `spentLadders` (the bounded-patience latch) and `handoff` whenever the `handoff` opt is configured; `errorCount` for the auto-handoff guard. (`buildAgentStepTool` enforces this at construction: a state schema missing a channel for any slot the configuration writes throws.) All arrive by **spreading the library's exported `agentStepZodShape` fragment** — never hand-declare them (the library's `state.ts` doc-comment forbids it; hand-rolled copies drift). Each slot in the fragment is already wrapped with `withLangGraph` carrying the runner's expected reducer/default:
 
 ```ts
 import { MessagesZodState, type ExtractStateType } from "@langchain/langgraph";
@@ -119,7 +119,7 @@ The MACHINERY text is engine-composed since 3.0.0 — the prompt keeps only doma
 The turn/speech machinery (tool turn vs speaking turn, the reply/ask contracts, the gate handshake,
 READ-BACK authority, handoff silence) comes from `composeProtocolPrompt` (see `agent-step-api.md`
 `<composed_surface>`): `prompt.ts` composes the fragment from the tool's feature surface (config +
-ladders + handoff) and splices it at the `{PROTOCOL}` placeholder. When adding the FIRST tool, wire
+handoff) and splices it at the `{PROTOCOL}` placeholder. When adding the FIRST tool, wire
 this splice (the bootstrap `prompt.ts` carries the commented scaffolding); when adding a later tool
 to a single-tool prompt, the fragment recomposes automatically from the updated config. Domain
 capture doctrines that must outrank the generic contracts go on `toolTurnRules` — never hand-written
