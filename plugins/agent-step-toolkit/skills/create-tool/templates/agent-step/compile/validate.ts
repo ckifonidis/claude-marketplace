@@ -26,7 +26,7 @@ import { captureFieldsOf, objectShapeOf, fieldKindOf } from "../capture.js";
 
 export interface ValidatableOptions {
   config: {
-    tool: { name: string; description: string };
+    tool: { name: string; description: string; toolChoice?: "auto" | "required" };
     actions: Record<string, ActionDef<string>>;
   };
   stateSchema?: StateSchemaLike;
@@ -149,9 +149,36 @@ export function validateConfig(opts: ValidatableOptions): void {
     }
   }
   const actionNames = Object.keys(config.actions);
+  for (const [name, action] of Object.entries(config.actions)) {
+    for (const [key, row] of Object.entries(action.verdicts ?? {})) {
+      const next = row.continuation;
+      if (next !== undefined && next !== "continue" && next !== "await_caller" &&
+          !(next && typeof next === "object" && actionNames.includes(next.action))) {
+        throw new Error(`agent-step: ${name}.${key}.continuation must name continue, await_caller, or an existing action.`);
+      }
+      if (row.presentation !== undefined && row.presentation !== "verbatim") {
+        throw new Error(`agent-step: ${name}.${key}.presentation must be verbatim.`);
+      }
+      if (next && ((next !== "await_caller" && row.ask) || row.backendFailure || row.effects?.some(e => e.type === "request_handoff"))) {
+        throw new Error(`agent-step: ${name}.${key}.continuation conflicts with its ask or handoff.`);
+      }
+      for (const field of ["continuation", "reply_text"]) {
+        if (field in (row.body ?? {})) throw new Error(`agent-step: ${name}.${key}.${field} is engine-owned; declare it on the row.`);
+      }
+    }
+  }
+  for (const [name, action] of Object.entries(config.actions)) {
+    if (action.invalidParamsVerdict === undefined) continue;
+    const row = action.verdicts?.[action.invalidParamsVerdict];
+    if (!row || row.ok !== false || row.stateUpdate || row.effects?.length || row.ask || row.backendFailure ||
+        (row.continuation !== undefined && row.continuation !== "await_caller")) {
+      throw new Error(`agent-step: ${name}.invalidParamsVerdict must name a failure row with no state writes, effects, ask or backendFailure.`);
+    }
+  }
   // Shared construction (compile/activation.ts); conservativeLifecycle keeps
   // the reserved-name set independent of the lifecycle analysis below.
   const activation = buildControlActivation({
+    toolChoice: opts.config.tool.toolChoice,
     actions: config.actions as Record<string, import("../types.js").ActionDef<string>>,
     handoff: opts.handoff as ActivationInputs<string>["handoff"],
     abortPolicy: opts.abortPolicy,
@@ -159,9 +186,8 @@ export function validateConfig(opts: ValidatableOptions): void {
   });
   const repeatableConfirmationActions = activation.repeatableConfirmationActions;
   // A repeatable gate's taxonomy is incompatible with the generic reply
-  // contract: the generic template ends "anything else → make no call and
-  // re-ask", while the repeat control exists precisely so the re-ask is a
-  // TOOL CALL returning the stored bytes (measured 2026-08-14: at a repeatable
+  // contract: the generic template uses the speaking protocol to re-ask,
+  // while this control first retrieves the exact stored bytes (measured 2026-08-14: at a repeatable
   // consent gate governed by the generic contract, the model made no call on a
   // clarification and executed on side-speech). Fail construction rather than
   // silently inherit the wrong contract.
@@ -175,7 +201,7 @@ export function validateConfig(opts: ValidatableOptions): void {
       throw new Error(
         `agent-step: action "${name}" enables repeatReadBack but declares no ` +
           `replyContract. A repeatable gate routes re-asks through the repeat ` +
-          `control, which the generic reply contract forbids ("make no call"); ` +
+          `control, which the generic reply contract does not select; ` +
           `declare the gate's own reply taxonomy in ` +
           `requiresConfirmation.replyContract.`,
       );

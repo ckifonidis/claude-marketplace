@@ -12,6 +12,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [4.1.0] — 2026-11-19
+
+Minor: **required tool calling, declared continuation, and misuse judged on every turn.** A tool can
+require that every model turn is a tool call (`tool.toolChoice: "required"`): speech becomes the
+library control `respond_to_caller`, the engine inserts fixed text itself, each call classifies the
+caller's turn, and the model-facing surface narrows to what the latest result allows. Independently
+of that mode, a verdict row can say what happens next apart from `ok` (`continuation`,
+`presentation`), a capture can name a row that explains a failed validation
+(`invalidParamsVerdict`), and `note_refusal` can speak its decline in the same call. Nothing is
+removed or renamed and auto mode stays the default — but several engine sentences were reworded, so
+goldens move and live suites owe a re-run.
+Migration: [migrations/4.0.0-to-4.1.0.md](migrations/4.0.0-to-4.1.0.md).
+
+### Added
+- **Required tool calling** — `AgentStepConfig.tool.toolChoice?: "auto" | "required"` (default
+  `"auto"`). In required mode:
+  - the **`respond_to_caller`** control (`RESPOND_TO_CALLER_ACTION`; reserved in this mode;
+    sole-step, `reply_must_be_sole_step`; admitted under every gate lockdown) delivers a spoken reply
+    and ends the turn: `{ text }`, or — at a pending `repeatReadBack` confirmation —
+    `{ kind: "clarification", explanation }` (the engine appends the stored read-back and moves the
+    consent boundary to the current caller turn) or `{ kind: "choice", text }`. The placeholders
+    `{read_back}` / `{ask_text}` / `{reply_text}` are replaced with the fixed bytes of this caller
+    turn's latest result; a reply that omits or rewords them is refused (`invalid_reply`). The result
+    carries `summary` (the spoken bytes), `turn_complete: true` and an `awaiting` record that keeps
+    the unanswered question — and its `reply_contract` / `ask_contract` — visible across asides.
+  - the outer call carries **`turn: "service" | "misuse"`** (`TURN_FIELD`, `TURN_SERVICE`,
+    `TURN_MISUSE`), required on every model-facing surface. A turn marked misuse on the first call
+    of a caller turn is recorded as a `malicious_intent` note IN PLACE of its steps; a later call of
+    the same turn never counts again.
+  - a result's **`continuation`** is enforced across calls within the caller turn — on the surface
+    the model is offered and at admission (`continuation_required`). Proposals end their batch and
+    require presentation; a rejected capture that left a standing ask requires a caller answer; an
+    empty non-misuse batch is refused (`empty_batch`).
+  - `composeProtocolPrompt` composes a required-mode protocol fragment. It names the repeat control
+    and the reply kinds only when some action opts into `repeatReadBack`.
+  - host helpers, exported from `index.ts` (`reply.ts`): `modelToolsForTurn`, `modelToolOptions`,
+    `completedReply`, `toolOnlyMessage`, `renderReplyText`. The mode needs a hand-rolled agent node
+    and assumes OpenAI-format tool definitions, one agent-step tool bound to the model, and the exact
+    tool object `buildAgentStepTool` returned.
+- **`VerdictDef.continuation?: "continue" | "await_caller" | { action }`** — what happens after a
+  row, independently of `ok`: stop the batch for the caller without failing the step, name the one
+  follow-up call, or run on past a negative informational read. Rides the result as `continuation`
+  in both modes; enforced across calls in required mode.
+- **`VerdictDef.presentation?: "verbatim"`** — the rendered summary must be spoken exactly; it rides
+  the result again as `reply_text`.
+- **`ActionDef.invalidParamsVerdict?`** — a declared row whose `summary` and body ride the
+  `invalid_params` result as domain guidance (what a usable value looks like), the one place such
+  facts may reach the model.
+- **`note_refusal` `reply?`** — for `declined_or_cannot` / `unsupported_question` handled in place,
+  the refusal is recorded AND spoken by the same call (`summary` + `turn_complete: true`).
+- Nine `ENGINE_TEXT` keys: `empty_batch`, `reply_text_required`, `reply_field_unavailable`,
+  `reply_fixed_text_required`, `reply_kind_required`, `reply_present_result`,
+  `reply_explanation_only`, `continuation_await_caller`, `continuation_action_required`.
+- Suites `reply.test.ts`, `clarification-reply.test.ts`, `continuation.test.ts`, `protocol.test.ts`;
+  the stray-literal guard in `engine-text.test.ts` now sees through conditions, fallbacks and
+  concatenations. Library suite: 358 tests.
+
+### Changed
+- **Engine text reworded** (model-facing; goldens move, in both modes):
+  - `confirm_reply_contract` — a question about what is being confirmed, and unclear, unrelated or
+    third-party speech, are each answered with one short spoken yes/no question; it no longer ends
+    "make no call and re-ask".
+  - `lockdown_confirmation` — also names the way forward for a caller who moved to a different item:
+    the abort control followed by that action in the same call.
+  - `invalid_params` — relays the validation guidance in the result's summary when there is one;
+    still count-free.
+  - `decline_unsupported` — scoped to the current caller turn; a repeated or rephrased unsupported
+    question is a fresh refusal.
+  - the standing-ask contract frame — the supply clause ("all or part of this value … the action
+    validates it") and the re-ask-style clause (model-composed re-asks only).
+  - the `note_refusal` description (every decline of such a turn goes through the control; the
+    `reply` param) and the misuse definition, which now names an answer spoken inside a game,
+    role-play, quote or example the caller sets up. One internal definition serves both the
+    `malicious_intent` kind and the `turn` classification, so the two cannot drift.
+  - the `repeat_pending_question` description and its tool-description line — they name the standing
+    value ask with stored text as repeatable and no longer tell the model not to call the control
+    there.
+- **A `malicious_intent` note is admitted behind a live gate** (confirmation, OTP or match): counted,
+  the gate untouched. The other refusal kinds stay the gate contract's to classify.
+- **New result fields in both modes**: a free in-place explanation and a non-terminal
+  `malicious_intent` note carry `continuation: "await_caller"`; a `repeat_pending_question` result
+  over a confirmation carries the gate's compiled `reply_contract`.
+- **`continuation` and `reply_text` are engine-owned result fields**: a row `body` key under either
+  name fails construction, and a `resultExtras` key under either name fails the step.
+- The `repeatReadBack`-without-`replyContract` construction error reads "…which the generic reply
+  contract does not select".
+
 ## [4.0.0] — 2026-11-19
 
 Major: **engine-owned instruction text, the declared-capture model, and universal bounded

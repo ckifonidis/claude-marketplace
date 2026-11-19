@@ -18,6 +18,7 @@ import type { AwaitingInput } from "../state.js";
 import type { CompiledAction } from "../compile/plan.js";
 import type { GateContractContext } from "../compile/gate-contract.js";
 import { composeGateContract } from "../compile/gate-contract.js";
+import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
 import { valueEqual } from "../run/value-equal.js";
 
 /** The compiled confirmation opts: every field filled, and `replyContract`
@@ -63,13 +64,29 @@ export function normalizeConfirmation(
   };
 }
 
+/** One source for a proposal's reply taxonomy, including after an aside or
+ * exact repeat. Re-emitting it must not substitute a generic contract for
+ * the host's declared categories. */
+export function confirmationReplyContract(
+  confirmation: NormalizedConfirmation | null | undefined,
+  action: string,
+  toolRepliesEnabled = false,
+): string {
+  return confirmation?.replyContract || formatMessage(ENGINE_TEXT.confirm_reply_contract, {
+      action, speech_reply: toolRepliesEnabled && !confirmation?.repeatReadBack
+        ? "respond_to_caller with text" : "the speaking-turn protocol",
+    });
+}
+
 /** Does this raw controller declaration opt into the repeat-read-back
  *  control? Kept here with normalization so compile and construction-time
  *  validation derive activation from one interpretation. */
-export function repeatReadBackEnabled(
-  v: boolean | ConfirmationOpts | undefined,
-): boolean {
-  return typeof v === "object" && v.repeatReadBack === true;
+export function repeatReadBackEnabled(v: unknown): boolean {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as ConfirmationOpts).repeatReadBack === true
+  );
 }
 
 /** The pending confirmation as plan expansion needs it, or null when the

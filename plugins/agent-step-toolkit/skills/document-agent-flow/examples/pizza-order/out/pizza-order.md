@@ -4,7 +4,7 @@ The ladder a phone agent walks to take one pizza order, from greeting to deliver
 
 **Source of truth for the flow:** the product owner's call walkthrough (synthetic).
 
-**Step engine:** agent-step 4.0.0.
+**Step engine:** agent-step 4.1.0.
 
 | File | What it holds |
 |---|---|
@@ -76,9 +76,9 @@ Every mechanism below is agent-step configuration, not prompt prose.
 
 Facts that drove this design:
 
-1. A batch stops only on a ✗ verdict row, so a quote whose price changed must be a ✗ row — otherwise the order would be placed at the old price.
+1. Unless a row declares a continuation, a batch stops only on a ✗ verdict row, so a quote whose price changed must be a ✗ row — otherwise the order would be placed at the old price.
 2. An address edit after the quote must void the quote. Invalidation is one table on the config, not an option of `set_address`: `invalidations{address:[quote]}` nulls `quote` whenever any action's write changes `address`.
-3. While the read-back is pending, only `place_order`, `abort_pending_input`, the handoff or the repeat control may run — and abort clears the gate AND any open flow. An edit therefore aborts and re-enters P3; it is safe only because the cart is a host slot, not flow data.
+3. While the read-back is pending, only `place_order`, `abort_pending_input`, the handoff or the repeat control may run (a misuse note is still recorded, without touching the gate) — and abort clears the gate AND any open flow. An edit therefore aborts and re-enters P3; it is safe only because the cart is a host slot, not flow data.
 4. Everything the caller hears is rendered by the host from state: a row's `summary`, the read-back, the handoff closing. The engine's own text is a model-facing `instruction`, never spoken. So `resolveClosingMessage` has a row for each ending the engine decides: `auto_handoff` (the TECH terminal), `agent-step:escalated:<action>` and `agent-step:malicious`.
 
 ## 4. The steps where a decision was made

@@ -53,7 +53,7 @@ Target: /absolute/path/to/<project_name>/
 - build_and_push.sh
 
 ### Agent-step library source (verbatim from skill templates)
-The ENTIRE `templates/agent-step/` tree, copied recursively — top-level files (`types.ts`, `state.ts`, `runner.ts`, `engine-text.ts`, `tolerances.ts`, `define-config.ts`, `paginate.ts`, `capture.ts`, `index.ts`, plus every `*.test.ts` suite) and the five phase-module directories (`compile/`, `run/`, `interaction/`, `controls/`, `handoff/`):
+The ENTIRE `templates/agent-step/` tree, copied recursively — top-level files (`types.ts`, `state.ts`, `runner.ts`, `reply.ts`, `engine-text.ts`, `tolerances.ts`, `define-config.ts`, `paginate.ts`, `capture.ts`, `index.ts`, plus every `*.test.ts` suite) and the five phase-module directories (`compile/`, `run/`, `interaction/`, `controls/`, `handoff/`):
 - src/agent-step/**  (see `references/project-bootstrap-structure.md` for the per-file inventory)
 - src/agent-step/VERSION  (library version marker; lets `/pull-library` know what the project currently vendors)
 
@@ -139,7 +139,7 @@ These files are NOT templates — they're verbatim source. Copy the whole tree r
 cp -R templates/agent-step/ "$PROJECT/src/agent-step/"
 ```
 
-Sanity-check the copy landed complete: `"$PROJECT/src/agent-step/VERSION"` exists, and `runner.ts`, `compile/plan.ts`, `run/execution.ts`, `interaction/dictation.ts`, `controls/registry.ts`, `handoff/node.ts` all resolve.
+Sanity-check the copy landed complete: `"$PROJECT/src/agent-step/VERSION"` exists, and `runner.ts`, `reply.ts`, `compile/plan.ts`, `run/execution.ts`, `interaction/dictation.ts`, `controls/registry.ts`, `handoff/node.ts` all resolve.
 
 Don't edit them. If the templates need updating later, treat that as a separate maintenance task (sync new library changes back into `templates/agent-step/`).
 

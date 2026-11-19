@@ -32,6 +32,8 @@ import type { CompiledPlan } from "../compile/plan.js";
 import { askOfFinalEntry, dictationAfterBatch } from "../interaction/dictation.js";
 import { getAwaitingInput, getHandoff, type BatchState } from "./batch-state.js";
 import type { ExecutionOutcome } from "./execution.js";
+import { RESPOND_TO_CALLER_ACTION } from "../reply.js";
+import { confirmationReplyContract } from "../interaction/confirmation.js";
 
 export interface RunResult<T> {
   body: RunnerResultBody;
@@ -99,6 +101,36 @@ export function finalizeRun<T extends LibraryManagedSlots>(
     }
   }
 
+  // A conversational aside preserves the cursor AND its reply taxonomy.
+  // Compose from the same plan as a newly recorded ask; the next caller's
+  // reply must not lose its contract behind an intervening speech result.
+  const finalEntry = body.results.at(-1);
+  if (finalEntry?.action === RESPOND_TO_CALLER_ACTION && finalEntry.ok === true) {
+    const cursor = finalEntry.awaiting as Record<string, unknown> | undefined;
+    if (cursor?.kind === "dictation" && typeof cursor.for_action === "string" && typeof cursor.param === "string") {
+      finalEntry.awaiting = {
+        ...cursor,
+        ask_contract: formatMessage(plan.askContract, { action: cursor.for_action, param: cursor.param }),
+      };
+    }
+  }
+
+  // Confirmation replies keep their taxonomy just as standing asks do.
+  // Derive it from the compiled action, not an old transcript entry, and
+  // expose no proposed parameters through the conversational cursor.
+  const pending = getAwaitingInput(st.view);
+  if (pending?.kind === "confirmation" && finalEntry?.ok === true) {
+    const replyContract = confirmationReplyContract(plan.actions[pending.for_action]?.confirmation, pending.for_action, plan.activation.toolRepliesEnabled);
+    if (finalEntry.action === RESPOND_TO_CALLER_ACTION) {
+      finalEntry.awaiting = {
+        ...(finalEntry.awaiting as Record<string, unknown>),
+        reply_contract: replyContract,
+      };
+    } else if (finalEntry.confirmation_repeated === true) {
+      finalEntry.reply_contract = replyContract;
+    }
+  }
+
   const autoHandoffEnabled =
     plan.activation.handoffEnabled || plan.onErrorThreshold != null;
   if (autoHandoffEnabled) {
@@ -155,5 +187,16 @@ export function finalizeRun<T extends LibraryManagedSlots>(
     }
   }
 
+  if (plan.activation.toolRepliesEnabled) {
+    const last = body.results.at(-1);
+    if (last && !last.turn_complete && !last.isHandoff) {
+      // A standing ask alone is not a turn barrier: the caller may already
+      // have volunteered the next value. Only a rejected capture, a rendered
+      // read-back, or an explicit verdict continuation requires a new answer.
+      if (last.needs_confirmation || last.read_back || (last.error === "invalid_params" && last.standing_ask)) {
+        last.continuation ??= "await_caller";
+      }
+    }
+  }
   return { body, committed: st.committed };
 }

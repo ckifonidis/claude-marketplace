@@ -22,10 +22,11 @@
  *  must stay import-light (no executors, no env) can call this with exactly
  *  what they already export. */
 import { captureFieldsOf } from "../capture.js";
+import { repeatableConfirmationActionsOf } from "./activation.js";
 
 export interface ProtocolSurface {
   config: {
-    tool: { name: string };
+    tool: { name: string; toolChoice?: "auto" | "required" };
     actions: Record<
       string,
       {
@@ -57,6 +58,38 @@ export function composeProtocolPrompt(surface: ProtocolSurface): string {
       captureFieldsOf(a.paramsSchema).length > 0,
   );
   const handoff = surface.handoff != null;
+
+  if (surface.config.tool.toolChoice === "required") {
+    // `repeat_pending_question` and the reply kinds exist only when some gate
+    // opted into `repeatReadBack` — the same roster that activates them
+    // (compile/activation.ts). Without one they are absent from the tool, and
+    // READ-BACK must not send the model to a control it cannot call.
+    //
+    // What READ-BACK calls repeatable is what the control SERVES, in the
+    // control's own words (controls/repeat-question.ts): a repeatable
+    // confirmation, or a standing value ask's stored bytes — `ask_text` on the
+    // result that asked, `awaiting.question` on its record after an aside. An
+    // UNGATED verbatim question also shows an `awaiting.question`, but the
+    // engine stores nothing for it and it is re-asked by speech; naming the
+    // field without its owner sent that case to a control that refuses it.
+    const repeatable =
+      repeatableConfirmationActionsOf(surface.config.actions).length > 0;
+    return [
+      `Use \`${toolName}\` for workflow steps or the sole \`respond_to_caller\` step for speech. The action schemas own parameters and mechanics; these instructions own business meaning.`,
+      handoff ? "A human request or an expectation of a promised transfer takes priority at every stage, including pending confirmation: select the configured human handoff as the sole step. Handoff results end the turn; the platform delivers their closing." : "",
+      ...(surface.toolTurnRules ?? []),
+      gates ? "After a CALLER reply, the pending proposal's `reply_contract` classifies that answer. A first gated call proposes; only a later caller confirmation permits the exact-parameter re-call that executes. Speaking preserves the proposal." : "",
+      asks ? "A `standing_ask` identifies the action and capture owed. A supplied value belongs to that action; the `ask_contract` governs other replies." : "",
+      "A result's `continuation` owns progression: `await_caller` requires presentation; an `action` names the required next call. Otherwise the caller's request determines further work or a reply. Greetings, open choices and supported clarifications use `respond_to_caller`; its `awaiting` record preserves the unanswered question. Interpret the caller's meaning and compose natural speech within that result contract.",
+      "**READ-BACK (sole authority):** present a current result's `read_back`, `ask_text`, or `reply_text` using its matching placeholder in `respond_to_caller.text`" +
+        (repeatable ? ", without a reply kind" : "") +
+        ". The system inserts the exact bytes; `read_back_directive` governs surrounding words. These placeholders refer only to this caller turn's latest tool result. " +
+        (repeatable
+          ? "To repeat a previous question without a new explanation, use `repeat_pending_question` when the pending record supplies stored text (a standing value ask's `ask_text` or `awaiting.question`, or a repeatable confirmation). With `kind: \"clarification\"`, supply only `explanation`: the short answer, without a question, recap, or announcement of repetition. The engine appends the complete stored confirmation and requires a later caller answer; this reply needs no repeat step. With `kind: \"choice\"`, the existing proposal stays pending while the caller chooses a path. "
+          : "") +
+        "Otherwise compose the permitted reply naturally from the conversation and approved facts.",
+    ].filter(Boolean).join("\n\n");
+  }
 
   const toolTurnClauses: string[] = [...(surface.toolTurnRules ?? [])];
   if (gates) {

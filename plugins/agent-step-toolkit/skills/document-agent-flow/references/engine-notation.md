@@ -17,6 +17,11 @@ Readable, not symbolic. One line per step, parts joined with ` · `, in this ord
 - `✓` marks an `ok: true` row (the batch continues), `✗` an `ok: false` row (the batch stops; earlier
   steps' commits stand). `→slot` is the row's static `stateUpdate`; `fx:` lists its `effects`;
   `backendFailure` marks a row counted by the auto-handoff guard.
+- `next:await_caller` / `next:action_name` / `next:continue` after a row is its `continuation`
+  (`VerdictDef.continuation`), for the rows where what happens next differs from what `✓` / `✗`
+  imply: a `✓` row that stops for the caller's answer, a row whose one follow-up call is fixed, a `✗`
+  row the batch reads past. `verbatim` marks a row whose summary must be spoken exactly
+  (`presentation: "verbatim"`). Write neither on a row that keeps the default.
 - `ask:self` / `ask→action` after a row is its standing ask (`VerdictDef.ask`): the value the caller
   owes once that outcome is spoken, and the action their answer becomes. Write `ask→action.param` only
   when the target has several capture fields.
@@ -56,10 +61,10 @@ Per action — `ActionDef` (`agent-step-api.md` `<types>`):
 | params | `paramsSchema` (Zod) | always — what the model sends |
 | field kinds | the capture builders (`<caller_digit_capture>`): `digits` — `digitGroupsParam` / `digitCandidatesParam` / `callerDigits`; `text` — `callerTextParam`; `judged` — `judgedEnum` / `judgedFlag`; `relay` — `relayParam` | a param is dictated by the caller (`digits`, `text`), concluded by the model from what the caller meant (`judged`), or the caller's words passed through (`relay`). Shape rules are refinements: a `pattern` / `minLength` / `maxLength` / `format` in the model-facing schema fails construction |
 | prereqs | `prereqs: PrereqName[]` + one verifier each | the step needs journey state (identity known, cart ready). A prereq is a safety gate, not a sequencing hint |
-| verdict rows | `verdicts: {code: {ok, summary, body?, stateUpdate?, effects?, ask?, backendFailure?}}` (`<declared_verdicts>`) | always — the step's outcomes; ✗ rows are the failure edges. `summary` is what the caller hears, rendered by the host (`<registers>`) |
+| verdict rows | `verdicts: {code: {ok, summary, body?, stateUpdate?, effects?, ask?, backendFailure?, continuation?, presentation?}}` (`<declared_verdicts>`) | always — the step's outcomes; ✗ rows are the failure edges. `summary` is what the caller hears, rendered by the host (`<registers>`). `continuation` says what happens next when that differs from `ok` (`await_caller` · `{action}` · `continue`); `presentation: "verbatim"` makes the summary exact speech |
 | effects | `request_handoff` · `merge_flow_data` · `otp_issued` · `clear_awaiting_input` · `abort_flow` | handoff out, gather into flow data, open an OTP gate, drop a gate but keep the flow, kill the flow |
 | standing ask | `ask: "self" \| {action, param?, render?}` on the verdict row (`<standing_asks>`) | an outcome leaves the caller owing a value: the same one again (`"self"`), or the one the next action takes (`{action}`). Non-locking `dictation`; `param` defaults to the target's one capture field and `expects` is derived from its kind |
-| capture bounce | nothing — derived (`<escalation>`). `bounceCapture: "field"` only when the action has several capture fields | the params schema rejects an answer (`invalid_params` only — a well-formed value the backend refuses is a ✗ verdict row, not a bounce): the caller owes the action's capture again, and the engine bounds the repeats |
+| capture bounce | nothing — derived (`<escalation>`). `bounceCapture: "field"` only when the action has several capture fields; `invalidParamsVerdict: "code"` when a bounce should carry a row's guidance on what a usable value looks like | the params schema rejects an answer (`invalid_params` only — a well-formed value the backend refuses is a ✗ verdict row, not a bounce): the caller owes the action's capture again, and the engine bounds the repeats |
 | state-satisfied input | `satisfies: {values: {name: "state.path"}, mode: "silent" \| "consent", ask?, elseVerdict?}` (`<satisfies>`) | the state may already carry the value (a saved address, a carried identity). An empty call is answered from state: at once (`silent`), or behind the host's reuse question on the action's confirmation gate (`consent`, with an `elseVerdict` row for "nothing carried"). A dictated value always wins |
 | paging | `pageable: true \| "delegate" \| {mode, pageSize, maxPageSize}` (`<pagination>`) | a list read |
 
@@ -81,13 +86,15 @@ Tool level — the config and the `buildAgentStepTool` options:
 | handoff | `handoff: HandoffSpec` (`offTopic`, `modelRequestSchema` typed routes, `clearsOnHandback`, `resolve*`, the `onHandback` observer) (`<handoff>`) | terminals; off-topic delegation. The library's own reasons are `off_topic` / `completed` / `abandon` (back to the orchestrator). The closing the caller hears is always the host's: `resolveClosingMessage` is required and total (`delegateFailureMessage` as well in delegate mode), with rows for the engine's own contexts — `auto_handoff`, `agent-step:escalated[:<action>]`, `agent-step:malicious`. A side effect that must follow the outcome (a contact record) is `onHandback` — it sees every handback, including the engine-decided ones, and cannot change the reply or the signal |
 | transfer to a named human or team (a nurse, a fraud desk) | the scaffold's own handoff action (`soleStep`, the `pendingHandoff` slot, `is_handoff` kwargs — `streaming-and-channel-contract.md`), routed by the channel middleware | a terminal naming who takes over |
 | bounded patience | nothing to declare (`<escalation>`); on whenever `handoff` is configured | a "try again, explain once, then get a human" rule. At the default tolerances two consecutive unusable captures bounce plainly, the next earns one in-place explanation, the turn after hands back `abandon` on `agent-step:escalated:<action>`. The counters reset on progress. The numbers are deployment-level (`AGENT_STEP_*` environment variables read by the engine) — a flow document states the defaults and never a per-step count |
-| refusals | the `note_refusal{kind}` control — `declined_or_cannot` · `unsupported_question` · `malicious_intent` | the caller declines the owed value, asks what the flow cannot answer, or tries to misuse the call. The model names the kind; the engine instructs the in-place handling once, then escalates as above (`declined_or_cannot` needs a standing ask to refuse). The third `malicious_intent` hands back `completed` on `agent-step:malicious` |
+| refusals | the `note_refusal{kind, reply?}` control — `declined_or_cannot` · `unsupported_question` · `malicious_intent` (with `reply`, the in-place decline is recorded and spoken by the same call) | the caller declines the owed value, asks what the flow cannot answer, or tries to misuse the call. The model names the kind; the engine instructs the in-place handling once, then escalates as above (`declined_or_cannot` needs a standing ask to refuse). The third `malicious_intent` hands back `completed` on `agent-step:malicious` |
 | ask contract | `askContract: {categories}` (`<standing_asks>`) | the host's own reply categories for a standing ask. Engine text is otherwise an `instruction` the engine owns — there is no wording override (`<registers>`) |
 | abort policy | `abortPolicy: {requireActive, allowStandalone, allowedFollowers, allowedPendingTargets}` | what "cancel" does mid-gate |
+| tool-calling mode | `tool: {toolChoice: "required"}` (`<required_mode>`); default `auto` | every model turn must be a tool call: speech is the `respond_to_caller` control, each call classifies the caller's turn (`turn: service \| misuse`), and a result's `continuation` bounds the next call. A property of the whole tool — a flow document states it once, on the config; the steps and their rows do not change |
 | auto-handoff | `backendFailureCodes`, `errorHandoffThreshold`, `onErrorThreshold` (`<auto_handoff>`) | the "technical issue" terminal |
 
 Library controls the model can call: `abort_pending_input`, `request_handoff`, `repeat_pending_question`,
-`note_refusal{kind}`. Library-owned state slots (never written by executors): `awaitingInput`, `currentFlow`,
+`note_refusal{kind}` and, under required tool calling, `respond_to_caller{text}` (with
+`{kind: clarification | choice}` at a repeatable confirmation). Library-owned state slots (never written by executors): `awaitingInput`, `currentFlow`,
 `pagedRead`, `spentLadders`, `handoff`, `errorCount`. (`spentLadders` keeps its old name; it holds the
 bounded-patience counters.)
 
@@ -95,7 +102,9 @@ bounded-patience counters.)
 gate's target action, `abort_pending_input`, the handoff, or the repeat control (plus the capturer for a
 match, and a same-flow re-issuer for an OTP). There is no read-only exemption: design waiting steps so
 their status checks run when no gate is pending. `note_refusal` is not admitted either: a refusal while a
-gate is pending is classified by that gate's reply contract.
+gate is pending is classified by that gate's reply contract — except `note_refusal{kind: malicious_intent}`,
+which is recorded behind any gate and leaves it untouched. Under required tool calling the speech
+control is admitted too: speaking never resolves a gate.
 
 ## Not current — never write these in the engine column
 
@@ -125,13 +134,17 @@ model-facing language (descriptions, reply contracts, the turn-protocol prompt f
 changed is who owns each sentence, and how much is left to configure: engine text is a model-facing
 `instruction` no host rewords, everything a caller hears is rendered by the host from state, asks sit
 on the row that asks, capture params declare their kind, and patience is universal instead of
-configured. The version history is in the toolkit's `CHANGELOG.md`.
+configured. What 4.1.0 added is optional: a row can say what happens next apart from `ok`
+(`continuation`, `presentation`), and a tool can require every model turn to be a tool call
+(`toolChoice: "required"`). The version history is in the toolkit's `CHANGELOG.md`.
 
 ## Pitfalls the validator cannot see
 
 **Keep the journey out of flow data when a read-back can be edited.** While a confirmation is pending,
 the lockdown admits only the pending action, `abort_pending_input`, the handoff and the repeat control
-— and `abort_pending_input` clears `awaitingInput` AND `currentFlow` together (`<confirmation_lifecycle>`).
+(a misuse note is still recorded, and speech under required tool calling still passes — neither
+touches the gate) — and `abort_pending_input` clears `awaitingInput` AND `currentFlow` together
+(`<confirmation_lifecycle>`).
 An "edit" answer to a read-back must therefore abort (unless the edit is just new params for the same
 action, which re-proposes). If the journey's data lived in `flowData`, the first edit would throw it
 away, and every `requiresFlow` action would then be refused. So: the journey lives in host slots; a

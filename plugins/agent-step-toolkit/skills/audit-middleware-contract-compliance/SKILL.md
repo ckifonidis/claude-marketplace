@@ -1,6 +1,6 @@
 ---
 name: audit-middleware-contract-compliance
-description: Audit a channel middleware implementation — the proxy service that invokes a generated agent's LangGraph API, forwards reply tokens to the client channel, and routes handoffs — against the agent-step wire contract. Walks the middleware's source against the contract's adherence checklist (invoke shape, sync + streaming handoff detection, routing and handback table, stream modes, token dedupe, trigger point, library-handoff custom events) and produces an evidence-backed findings report (file:line per item), with an optional wire-level verification pass against a captured SSE stream. Use when integrating a new middleware with an agent-step agent, reviewing middleware changes that touch streaming or handoff processing, or diagnosing handoff/streaming integration bugs (dropped tokens, truncated transitions, missed or double-fired handoffs).
+description: Audit a channel middleware implementation — the proxy service that invokes a generated agent's LangGraph API, forwards reply tokens to the client channel, and routes handoffs — against the agent-step wire contract. Walks the middleware's source against the contract's adherence checklist (invoke shape, sync + streaming handoff detection, routing and handback table, stream modes, token dedupe, trigger point, library-handoff custom events, single-chunk replies from required-tool-calling agents) and produces an evidence-backed findings report (file:line per item), with an optional wire-level verification pass against a captured SSE stream. Use when integrating a new middleware with an agent-step agent, reviewing middleware changes that touch streaming or handoff processing, or diagnosing handoff/streaming integration bugs (dropped tokens, truncated transitions, missed or double-fired handoffs).
 ---
 
 <objective>
@@ -33,8 +33,9 @@ fix *direction* (not a patch). The skill never edits the middleware.
    end to end — especially `<middleware_requirements>` (the checklist), `<handoff_contract>`
    (the routing table), and `<streaming_facts>` (the three assumption-breakers).
 3. **Scope the agent population** (Phase 1): which paths the middleware uses (sync `/runs/wait`,
-   streaming `/runs/stream`, or both) and whether any integrated agent uses the library
-   handoff built-in (agent-step ≥ 1.3.0) — this decides which checklist items apply.
+   streaming `/runs/stream`, or both), whether any integrated agent uses the library
+   handoff built-in (agent-step ≥ 1.3.0), and whether any runs under required tool calling
+   (agent-step ≥ 4.1.0) — this decides which checklist items apply.
 4. **Walk the checklist** (Phases 2–3): for each applicable item, locate the responsible code
    and record evidence or a finding. No item passes without a file:line.
 5. **Report** (Phase 4). Optionally **verify on the wire** (Phase 5) with a captured SSE stream.
@@ -60,6 +61,7 @@ Then settle the applicability matrix, asking the user only for what code and con
 | Sync path used? | items 1–3b |
 | Streaming path used? | items 4–7 |
 | Any library-handoff agent (agent-step ≥ 1.3.0) integrated? | item 8 |
+| Any required-tool-calling agent (agent-step ≥ 4.1.0) integrated? | item 9 |
 | Specialized agents in the population? | item 3b (handback routing) |
 
 Record the matrix in the report header. An item ruled out here is `not-applicable`, with the
@@ -69,7 +71,7 @@ reason — never silently skipped.
 <phase name="2_checklist_walk">
 **Phase 2: walk the adherence checklist**
 
-For each applicable item of `<middleware_requirements>` (numbered 1–8, plus 3b), find the code
+For each applicable item of `<middleware_requirements>` (numbered 1–9, plus 3b), find the code
 that implements it and grade it against the doc's clause. The doc carries the normative detail;
 what follows is where violations of each item hide:
 
@@ -106,6 +108,14 @@ what follows is where violations of each item hide:
   `updates` delta; and a `delegated_to`-only final message must NOT be routed on — no
   `is_handoff` means the conversation stays with the agent. See `agent-step-api.md`
   `<handoff>` for the mechanism.
+- **9 — Required-tool-calling agents.** Only when the population includes one (a tool built
+  with `toolChoice: "required"`): the reply is ONE message chunk from node `agent` with no
+  token stream before it, preceded by empty-content tool-call messages. Look for code that
+  waits for several chunks or a stream-end token before speaking, that takes the first AI
+  message of a turn as the reply, or that speaks chat-model stream content from an events API —
+  each is a finding. Where the resolver's final message also arrives in `messages` events
+  beside `handoff_complete`, confirm the closing is spoken once. See the contract's
+  `<streaming_facts>` (required tool calling) and `agent-step-api.md` `<required_mode>`.
 
 Evidence discipline: **no item is `compliant` without a file:line.** If the responsible code
 can't be located or the behavior can't be determined statically, the status is `unverifiable`
@@ -138,7 +148,7 @@ One entry per checklist item, in checklist order:
 - **Fix direction** — one or two sentences pointing at the compliant shape; never a patch.
 
 Severity, when violations exist: anything that loses user-audible output or breaks handoff
-detection outright (items 2, 4, 5, 6) is high; mistimed or misrouted transfers (3, 3b, 7, 8)
+detection outright (items 2, 4, 5, 6, and 9 when a reply is dropped or never spoken) is high; mistimed or misrouted transfers (3, 3b, 7, 8)
 are medium-to-high depending on the channel (voice suffers most); invoke-shape drift (1) ranges
 from cosmetic to fatal depending on the field. End the report with the applicability matrix and
 the list of anything `unverifiable` — that list is the work order for Phase 5.

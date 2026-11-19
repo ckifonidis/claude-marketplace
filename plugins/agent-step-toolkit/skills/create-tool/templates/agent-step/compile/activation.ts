@@ -37,7 +37,23 @@ export function hasAnyLifecycleOpt(
   });
 }
 
+/** The confirm-gated actions that opted into exact stored read-back
+ *  repetition, in config order — the ONE derivation behind the
+ *  `repeat_pending_question` control and the reply kinds. The protocol
+ *  fragment (compile/protocol.ts) reads the same roster, so the prompt cannot
+ *  name a control or a reply kind the tool surface does not carry. */
+export function repeatableConfirmationActionsOf(
+  actions: Record<string, { controller?: { requiresConfirmation?: unknown } }>,
+): string[] {
+  return Object.entries(actions)
+    .filter(([, action]) =>
+      repeatReadBackEnabled(action.controller?.requiresConfirmation),
+    )
+    .map(([name]) => name);
+}
+
 export interface ActivationInputs<ActionName extends string> {
+  toolChoice?: "auto" | "required";
   actions: Record<string, ActionDef<string>>;
   handoff:
     | {
@@ -57,6 +73,7 @@ export function buildControlActivation<ActionName extends string>(
   inputs: ActivationInputs<ActionName>,
 ): ControlActivation {
   return {
+    toolRepliesEnabled: inputs.toolChoice === "required",
     hasLifecycleOpts:
       inputs.conservativeLifecycle === true || hasAnyLifecycleOpt(inputs.actions),
     handoffEnabled: inputs.handoff != null,
@@ -64,10 +81,6 @@ export function buildControlActivation<ActionName extends string>(
     handoffModelRequestSchema:
       inputs.handoff?.modelRequestSchema ?? handoffParamsSchema,
     abortPolicy: resolveAbortPolicy(inputs.abortPolicy),
-    repeatableConfirmationActions: Object.entries(inputs.actions)
-      .filter(([, action]) =>
-        repeatReadBackEnabled(action.controller?.requiresConfirmation),
-      )
-      .map(([name]) => name),
+    repeatableConfirmationActions: repeatableConfirmationActionsOf(inputs.actions),
   };
 }

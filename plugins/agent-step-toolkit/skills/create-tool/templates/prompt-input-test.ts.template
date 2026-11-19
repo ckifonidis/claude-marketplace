@@ -12,10 +12,14 @@
 // ambiguity case where applicable (model produces candidates or asks to
 // clarify); one recovery case (a prior non-ok verdict → the next turn asks
 // appropriately); and, if this is the first action the user hits, one
-// off-topic case matched to the agent's role: standalone → polite refusal, no
-// tool call; specialized → brief aside answered inline (no handback) + topic
-// change → sole off_topic handback step; orchestrator → in-domain routed,
-// out-of-domain steer-back line with no tool call.
+// off-topic case matched to the agent's role: standalone → polite refusal, a
+// spoken reply and no action; specialized → brief aside answered inline (no
+// handback) + topic change → sole off_topic handback step; orchestrator →
+// in-domain routed, out-of-domain steer-back line with no action.
+//
+// "A spoken reply and no action" is `expectSpokenReply`, in either
+// tool-calling mode: no tool call in auto mode, the sole `respond_to_caller`
+// step in required mode (`toolChoice: "required"`).
 //
 // GATED: skipped unless PROMPT_INPUT_LIVE=1 (+ Azure OpenAI creds). Live model,
 // costs money. When iterating, target this compiled file directly rather than
@@ -30,7 +34,7 @@ import {
   expectActionsInOrder,
   expectActionPresent,
   expectParam,
-  expectNoToolCall,
+  expectSpokenReply,
   promptInputEnabled,
   promptInputSkipReason,
 } from "../../../../test-harness/prompt-input.js";
@@ -67,12 +71,12 @@ describe(
     });
 
     // Role-conditional: this is the STANDALONE shape. For a SPECIALIZED agent
-    // replace with the two-play pair (aside → expectNoToolCall; topic change →
+    // replace with the two-play pair (aside → expectSpokenReply; topic change →
     // sole handback step with signal "off_topic"); for an ORCHESTRATOR assert
     // routing to the covering agent's handoff instead of a refusal.
-    test("off topic: refuses politely, no tool call", async () => {
+    test("off topic: refuses politely, speaks instead of acting", async () => {
       const res = await runUserTurn("{{OUT_OF_SCOPE_UTTERANCE}}");
-      expectNoToolCall(res);
+      expectSpokenReply(res);
     });
   },
 );

@@ -140,7 +140,7 @@ Use the `templates/` files as starting points. Fill in concrete values from the 
    - Prompt: a HANDOFF section. ORCHESTRATOR: strictness tiers per target (high threshold ⇒ explicit request only; when in doubt answer from the knowledge surface first). SPECIALIZED: the triggers for the three signals — they're already outlined in the bootstrap OFF-TOPIC POLICY section; the HANDOFF section binds each to the handback action. Both roles: speak the returned `successMessage` then STOP (no closing question), and recoveries for `service_disabled` / guardrail verdicts.
    - Do NOT touch `agent.ts` — the post-model annotator hook is already there from bootstrap and activates automatically once `pendingHandoff` is written.
    - Resolve the prompt's role-conditional leftovers now if bootstrap left the standalone defaults: the SCOPE closer and the CHANNEL CONSTRAINTS "no transfer mechanism" line must match the role (the placeholders in `prompt.ts.template` name the exact replacements).
-7. `src/tools/<name>/config.ts` — the assembler: imports each `actions/<action>/action.js` declaration into `defineConfig<ActionName, PrereqName, State>`, plus the config-level `invalidations` table when the plan lists any (see `templates/config.ts.template`)
+7. `src/tools/<name>/config.ts` — the assembler: imports each `actions/<action>/action.js` declaration into `defineConfig<ActionName, PrereqName, State>`, plus the config-level `invalidations` table when the plan lists any (see `templates/config.ts.template`). Leave `tool.toolChoice` unset (auto mode — what the bootstrap graph is wired for). Required tool calling is a project-level decision, not a per-tool default: it needs the hand-rolled agent node and assumes this is the only tool bound to the model — set it only when the user asks for it, and then follow `references/agent-step-api.md` `<required_mode>` end to end
 8. `src/tools/<name>/index.ts` — wire-up: `selectors` (`satisfies SelectorRegistry<State, ActionName>`) + `executors` (`ExecutorRegistry<State, typeof selectors>`), both keyed by action name, plus the optional features (`handoff`, `abortPolicy`, `askContract`, `getCallerTurnId`) (see `templates/tool-index.ts.template`)
 
 Then graph-level wiring:
@@ -204,7 +204,8 @@ Expected: the dev server starts cleanly. If it throws `agent-step: ...` at start
 - `selectors["xxx"]` missing → the `selectors` registry lacks an entry keyed by that exact action name
 - `executors["xxx"]` missing → the `executors` registry lacks an entry keyed by that exact action name (keys are the action name, not a camelCase function name)
 - `verifiers["xxx"]` missing for an action's prereq
-- action `abort_pending_input` declared (reserved name — library auto-injects it)
+- action `abort_pending_input` declared (reserved name — library auto-injects it; likewise `request_handoff` / `note_refusal` with `handoff`, `repeat_pending_question` with a `repeatReadBack` gate, `respond_to_caller` with `toolChoice: "required"`)
+- a verdict row's `continuation` names an unknown action, pairs anything but `"await_caller"` with an `ask`, or sits on a `backendFailure` row or one carrying a `request_handoff` effect; a row `body` uses the engine-owned key `continuation` / `reply_text`
 - a `controller` hook (e.g. `issuesOtp.consumer_action`, `requiresMatch.capturer`) names an action that doesn't exist
 
 ```bash

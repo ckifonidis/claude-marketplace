@@ -53,7 +53,8 @@ Ships five skills:
   reply tokens to the channel, and routes handoffs) against the wire contract in
   `streaming-and-channel-contract.md`. Walks the adherence checklist — invoke shape,
   sync + streaming handoff detection, routing/handback table, stream modes, token
-  dedupe, trigger point, library-handoff custom events — into an evidence-backed
+  dedupe, trigger point, library-handoff custom events, single-chunk replies from
+  required-tool-calling agents — into an evidence-backed
   findings report (file:line per item, never fixes), with an optional wire-level pass
   against a captured SSE stream. The agent side is correct by construction
   (`create-tool` scaffolds it, `test-agent-step` tests it); this grades the

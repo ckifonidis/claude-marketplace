@@ -14,11 +14,12 @@
 //      ban — its measured closing clause ("…its length, or its digits")
 //      instructs the model NOT to speak such things and never rides a bounce
 //      summary; rewording measured bytes demands a live re-measurement.
-//   3. ONE AUTHORITY — no library source file outside engine-text.ts assigns
-//      a string LITERAL to a result entry's `summary`/`instruction`: engine
-//      emissions route through ENGINE_TEXT, host bytes arrive as values. This
-//      is the lock that keeps the F5 drift class (hard-coded literals
-//      bypassing the catalog) from ever re-forming.
+//   3. ONE AUTHORITY — no library source file outside engine-text.ts puts a
+//      string LITERAL in a result entry's `summary`/`instruction` value,
+//      whether assigned directly or reached through a ternary, a fallback or
+//      a concatenation: engine emissions route through ENGINE_TEXT, host bytes
+//      arrive as values. This is the lock that keeps the F5 drift class
+//      (hard-coded literals bypassing the catalog) from ever re-forming.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -84,19 +85,68 @@ function libSources(dir: string): string[] {
   return out;
 }
 
-test("no library source assigns a string literal to summary/instruction (engine-text.ts is the one authority)", () => {
-  // Matches `summary:` / `instruction:` followed (across whitespace/newlines)
-  // by a quoted or template literal. Values (ENGINE_TEXT.*, host bytes,
-  // composed strings) don't match; literals do — including the historical
-  // multi-line `summary:\n  "…" + "…"` form.
-  const strayLiteral = /\b(summary|instruction):\s*["'`]/;
+/** Comments blanked (newlines kept, so offsets still map to source lines):
+ *  prose such as `instruction: "…"` inside a doc comment is not an assignment. */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "))
+    .replace(/\/\/.*$/gm, "");
+}
+
+// `summary:` / `instruction:` followed by a quoted or template literal
+// ANYWHERE in the value expression — the value runs to the first `,` `;` `{`
+// or `}`. A literal directly after the colon matches, and so does one behind
+// a condition (`instruction: mode === "x" ? "literal" : …`, the form that hid
+// two engine strings from the direct-assignment check). The right-hand
+// operand of an equality test is consumed whole — it is compared, not emitted
+// — and the lookahead keeps backtracking from splitting such an operator to
+// reach its quote. Values (ENGINE_TEXT.*, formatMessage(…), host bytes) and
+// type annotations don't match.
+const COMPARED = /[=!]==?\s*(?:"[^"\n]*"|'[^'\n]*'|`[^`]*`)/.source;
+const STRAY_LITERAL = new RegExp(
+  `\\b(summary|instruction):(?:${COMPARED}|(?![=!]==?\\s*["'\`])[^,;{}"'\`])*["'\`]`,
+);
+
+/** 1-based line of the first stray literal, or null. */
+function strayLiteralLine(source: string): number | null {
+  const code = withoutComments(source);
+  const hit = STRAY_LITERAL.exec(code);
+  return hit ? code.slice(0, hit.index).split("\n").length : null;
+}
+
+test("the stray-literal check sees through conditions and ignores non-values", () => {
+  const flagged = [
+    'return { instruction: "Do this." };',
+    "return { summary: `Did ${name}.` };",
+    'return {\n  instruction:\n    "Do this." + tail,\n};',
+    'return { instruction: mode === "wait" ? "Wait." : other };',
+    'return { instruction: mode === "wait"\n  ? ENGINE_TEXT.a\n  : `Use ${name}.` };',
+    'return { summary: given ?? "Nothing." };',
+  ];
+  for (const source of flagged) {
+    assert.notEqual(strayLiteralLine(source), null, `missed: ${source}`);
+  }
+  const clean = [
+    "return { instruction: ENGINE_TEXT.abort_done };",
+    "return { instruction: formatMessage(ENGINE_TEXT.repeat_done, { action: name }) };",
+    'return { instruction: mode === "wait" ? ENGINE_TEXT.a : ENGINE_TEXT.b };',
+    'const body = { summary: typeof row.summary === "function" ? row.summary(state) : row.summary };',
+    "interface Denial { instruction: string; error: string }",
+    'type Row = { summary: string | ((state: unknown) => string); kind: "a" | "b" };',
+    '// instruction: "a literal quoted in a comment"\nconst x = 1;',
+    '/** e.g. `{ instruction: "…" }` */\nconst y = 2;',
+  ];
+  for (const source of clean) {
+    assert.equal(strayLiteralLine(source), null, `false positive: ${source}`);
+  }
+});
+
+test("no library source puts a string literal in a summary/instruction value (engine-text.ts is the one authority)", () => {
   for (const path of libSources(SRC_DIR)) {
-    const source = readFileSync(path, "utf8");
-    const hit = strayLiteral.exec(source);
-    if (hit) {
-      const line = source.slice(0, hit.index).split("\n").length;
+    const line = strayLiteralLine(readFileSync(path, "utf8"));
+    if (line !== null) {
       assert.fail(
-        `${path}:${line} assigns a string literal to summary/instruction — ` +
+        `${path}:${line} puts a string literal in a summary/instruction value — ` +
           "route it through ENGINE_TEXT (engine text) or a host seam (host bytes).",
       );
     }

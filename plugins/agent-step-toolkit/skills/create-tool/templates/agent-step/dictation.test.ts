@@ -150,7 +150,7 @@ test("a final entry whose ROW declares an ask records the dictation", async () =
     action: "capture_value",
     param: "spokenDigits",
   });
-  assert.match(String(body.results[0].ask_contract), /call "capture_value" with it in "spokenDigits"/);
+  assert.match(String(body.results[0].ask_contract), /call "capture_value" with that supplied content in "spokenDigits"/);
   // No render declared → no ask_text field.
   assert.ok(!("ask_text" in body.results[0]), "ask_text only when the ask renders");
 });
@@ -219,7 +219,7 @@ test("a live confirmation gate wins over asks (a proposal's ask never stomps the
   // result, not to prompt memory (journey-engine G2).
   assert.match(
     String(body.results[0].reply_contract),
-    /A clear yes → re-call "gated_change" with exactly the proposed params/,
+    /A clear yes addressed to the confirmation question → re-call "gated_change" with exactly the proposed params/,
   );
 });
 

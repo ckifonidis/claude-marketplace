@@ -23,6 +23,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { HumanMessage } from "@langchain/core/messages";
 import { graph } from "./graph.js";
+import { tools } from "./tools/index.js";
+import { RESPOND_TO_CALLER_ACTION } from "./agent-step/index.js";
+
+// Required tool calling (`config.tool.toolChoice: "required"`) is a property
+// of the TOOL: one built in that mode carries the library's speech control.
+// There the model's own text is never what the caller hears — the agent node
+// drops it and delivers the speech control's reply instead — so the stream
+// loop below must not print chat-model text in that mode.
+const REQUIRED_MODE = (tools as readonly unknown[]).some((tool) =>
+  JSON.stringify((tool as { schema?: unknown }).schema ?? null).includes(
+    `"${RESPOND_TO_CALLER_ACTION}"`,
+  ),
+);
 
 // ─── Persistent input history ───────────────────────────────────────────── //
 
@@ -530,10 +543,19 @@ interface StepResult {
   ok: boolean;
   /** Host caller-audible text (a declared verdict row). */
   summary?: string;
-  /** Engine directive (an entry the runner raised) — an entry carries
-   *  `summary` OR `instruction`, never both. */
+  /** Engine directive (an entry the runner raised). An entry normally
+   *  carries `summary` OR `instruction`; an `invalid_params` bounce with
+   *  domain guidance carries both. */
   instruction?: string;
   error?: string;
+  /** What the result requires next (a verdict row's `continuation`, or the
+   *  engine's own in required mode). */
+  continuation?: "continue" | "await_caller" | { action: string };
+  /** A `presentation: "verbatim"` summary, repeated as the bytes to speak. */
+  reply_text?: string;
+  /** Required mode: this result IS the spoken reply (`summary`) and ends the
+   *  turn — the agent node delivers it without another model call. */
+  turn_complete?: boolean;
   needs_confirmation?: boolean;
   attempts_left?: number;
   preState?: string;
@@ -677,6 +699,11 @@ function formatStepLine(r: StepResult): string {
   if (r.newStatus) bits.push(`newStatus=${r.newStatus}`);
   if (r.masked_pin_last2) bits.push(`pin=**${r.masked_pin_last2}`);
   if (r.error) bits.push(`error=${r.error}`);
+  if (r.continuation) {
+    bits.push(
+      `continuation=${typeof r.continuation === "string" ? r.continuation : r.continuation.action}`,
+    );
+  }
   const text = r.summary ?? r.instruction;
   if (bits.length === 0 && text)
     bits.push(text.length > 60 ? text.slice(0, 60) + "…" : text);
@@ -877,7 +904,7 @@ async function main(): Promise<void> {
       for await (const event of eventStream) {
         if (aborted) break;
 
-        if (event.event === "on_chat_model_stream") {
+        if (event.event === "on_chat_model_stream" && !REQUIRED_MODE) {
           const chunk = event.data?.chunk;
           const content = chunk?.content;
           if (typeof content === "string" && content.length > 0) {
@@ -939,6 +966,22 @@ async function main(): Promise<void> {
       }
 
       if (spinner.isActive()) spinner.stop();
+      // What the caller hears is not always model-streamed text. Under
+      // required tool calling the agent node delivers the speech control's
+      // reply as a node-returned message, and a library handoff's closing is
+      // built by the handoff node — neither is a chat-model stream event. When
+      // no model text was printed, print the turn's final AI message.
+      if (!aborted && !agentText) {
+        const final = await captureState(threadId);
+        const last = (
+          final?.messages as Array<{ getType?: () => string; content?: unknown }> | undefined
+        )?.at(-1);
+        if (last?.getType?.() === "ai" && typeof last.content === "string" && last.content) {
+          if (!headerPrinted) process.stdout.write(`${BOLD}${CYAN}Agent${RESET} `);
+          process.stdout.write(last.content);
+          agentText = last.content;
+        }
+      }
       if (aborted) {
         console.log(`\n${DIM}${YELLOW}[interrupted]${RESET}\n`);
       } else {

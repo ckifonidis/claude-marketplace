@@ -41,6 +41,15 @@ export type {
   StateSchemaLike,
 } from "./runner.js";
 export type { AbortPolicy } from "./controls/contract.js";
+// Required-call mode (`config.tool.toolChoice: "required"`): the host binds
+// `modelToolsForTurn(tools, messages)` with `modelToolOptions(config)`, wraps
+// the response in `toolOnlyMessage`, and delivers `completedReply` from its
+// agent node. reply.ts states the wiring and what the mode assumes of the host.
+export { completedReply, modelToolOptions, modelToolsForTurn, renderReplyText, toolOnlyMessage, RESPOND_TO_CALLER_ACTION } from "./reply.js";
+// The required-mode turn classification as it appears in the tool call's
+// arguments — exported so a host harness that scripts or records calls reads
+// the wire names from the library instead of mirroring the literals.
+export { TURN_FIELD, TURN_MISUSE, TURN_SERVICE } from "./compile/schema.js";
 
 // Engine instruction text (4.0.0): every runner-emitted string is a
 // MODEL-FACING instruction the engine owns outright — there is no wording

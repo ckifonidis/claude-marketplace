@@ -22,7 +22,16 @@ export const {{TOOL_NAME}}Config = defineConfig<ActionName, PrereqName, State>({
   tool: {
     name: "{{TOOL_NAME}}_agent_step",
     description:
-      "Run ordered {{TOOL_NAME}} workflow steps. Later steps see earlier state updates; execution stops at the first non-ok result.",
+      "Run ordered {{TOOL_NAME}} workflow steps. Later steps see earlier state updates; each result determines whether processing continues or the caller must answer.",
+    // ─── Tool-calling mode (optional, 4.1.0) ─── //
+    // Default "auto": the model answers with text or calls this tool — the
+    // mode the bootstrap graph (src/agent.ts, createReactAgent) is wired for.
+    // "required": EVERY model turn is one call to this tool; speech becomes
+    // the library's `respond_to_caller` control and each call classifies the
+    // caller turn. It is NOT a one-line switch: it needs the hand-rolled agent
+    // node and assumes this is the only tool bound to the model — follow
+    // agent-step-api.md <required_mode> before enabling it.
+    // toolChoice: "required",
   },
   actions: {
     {{ACTION_1}}: {{ACTION_1_CAMEL}}Action,

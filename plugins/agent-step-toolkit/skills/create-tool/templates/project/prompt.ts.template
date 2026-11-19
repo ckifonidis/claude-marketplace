@@ -11,6 +11,13 @@
 // of that text themselves — domain capture doctrines that must outrank the
 // generic contracts go on `toolTurnRules`. This module must stay env-free
 // (import the tool's config/contracts, never its executors).
+//
+// The fragment follows the tool's calling mode by itself: with
+// `config.tool.toolChoice: "required"` it composes the required-mode protocol
+// (speech through `respond_to_caller`, the `{read_back}` / `{ask_text}` /
+// `{reply_text}` placeholders, `continuation`). The sections you write below
+// must then never tell the model to answer "without a tool call" — say WHAT to
+// convey; the fragment owns HOW a reply is delivered.
 
 import type { BaseMessageLike } from "@langchain/core/messages";
 import type { State } from "./state.js";

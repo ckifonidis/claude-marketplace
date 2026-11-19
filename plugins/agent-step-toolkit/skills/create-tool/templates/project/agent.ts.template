@@ -7,6 +7,16 @@
 // the channel middleware fronting the agent (see
 // references/streaming-and-channel-contract.md). It is a no-op until a tool
 // writes the `pendingHandoff` state slot, so it ships with every project.
+//
+// TOOL-CALLING MODE: this scaffold is the AUTO-mode graph — the model answers
+// with text or calls a tool, and `createReactAgent` binds the tools itself.
+// Required tool calling (`config.tool.toolChoice: "required"`, agent-step
+// >= 4.1.0) CANNOT run on this graph: its agent node has to deliver a
+// completed spoken reply without calling the model, bind a per-turn tool
+// surface, and drop the model's incidental text — none of which
+// `createReactAgent` exposes. Adopting it means replacing this file with the
+// hand-rolled graph in references/agent-step-api.md <required_mode>; setting
+// `toolChoice` alone leaves the model unable to end a turn.
 
 import { MemorySaver } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";

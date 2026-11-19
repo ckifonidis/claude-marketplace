@@ -71,7 +71,7 @@ import {
   tryPageFromCache,
   type PagedCache,
 } from "../paginate.js";
-import { CONFIRMATION_DEFAULTS } from "../interaction/confirmation.js";
+import { CONFIRMATION_DEFAULTS, confirmationReplyContract } from "../interaction/confirmation.js";
 import { refuseOtpNotPending, refuseOtpIssueWhileMatchPending } from "../interaction/otp.js";
 import {
   MATCH_DEFAULT_MAX_ATTEMPTS,
@@ -122,8 +122,8 @@ export interface ExecutionOutcome {
   anExecutorRan: boolean;
 }
 
-/** Read an entry's last-text: `instruction` wins when present (an entry never
- *  carries meaningful bytes in both — see StepResult). */
+/** Read an entry's last-text: `instruction` wins when present. A validation
+ *  verdict can also carry a caller-audible summary on the result entry. */
 function lastOf(entry: StepResult): LastText | null {
   if (typeof entry.instruction === "string") {
     return { register: "instruction", text: entry.instruction };
@@ -139,6 +139,7 @@ export async function executeSteps<T extends LibraryManagedSlots>(
   planned: PlannedStep[],
   st: BatchState<T>,
   currentCallerTurnId: string | undefined,
+  messages: readonly unknown[] = [],
 ): Promise<ExecutionOutcome> {
   const { activation } = plan;
   const results: StepResult[] = [];
@@ -159,6 +160,7 @@ export async function executeSteps<T extends LibraryManagedSlots>(
   const batchStartAwaiting = getAwaitingInput(st.view);
 
   const controlCtx: ControlRunContext<T> = {
+    messages,
     activation,
     tolerances: plan.tolerances,
     currentCallerTurnId,
@@ -183,14 +185,17 @@ export async function executeSteps<T extends LibraryManagedSlots>(
   //
   //     The bound is UNIVERSAL and needs no per-action policy — see
   //     interaction/escalation.ts. Past the tolerance the engine explains
-  //     itself once and, if the run continues, escalates. Every byte here stays
-  //     COUNT-FREE: a count in a capture message measurably makes the model pad
-  //     digits to satisfy it.
+  //     itself once and, if the run continues, escalates. Generic instructions
+  //     stay count-free. A declared domain verdict may give length guidance
+  //     AFTER validation fails; those facts never enter the input schema.
   const failInvalidParams = (action: CompiledAction, message: string): void => {
     const debug = `Invalid params for "${action.name}": ${message}`;
     const plain: StepResult = {
       action: action.name,
       ok: false,
+      ...(action.invalidParamsVerdict
+        ? composeRowBody(action.verdicts[action.invalidParamsVerdict], {}, st.view)
+        : {}),
       instruction: ENGINE_TEXT.invalid_params,
       error: "invalid_params",
       _debug: debug,
@@ -425,13 +430,13 @@ export async function executeSteps<T extends LibraryManagedSlots>(
         // of caller reply means for the pending proposal (journey-engine G2 —
         // both agents' skipped-yes-turn incidents are this failure class). A
         // non-empty per-action override is that action's SOLE authority.
-        reply_contract:
-          action.confirmation?.replyContract ||
-          formatMessage(ENGINE_TEXT.confirm_reply_contract, {
-            action: step.action,
-          }),
+        reply_contract: confirmationReplyContract(action.confirmation, step.action, activation.toolRepliesEnabled),
       });
       last = { register: "instruction", text: instruction };
+      if (activation.toolRepliesEnabled) {
+        results[results.length - 1].continuation = "await_caller";
+        break;
+      }
       continue;
     }
 
@@ -768,13 +773,17 @@ export async function executeSteps<T extends LibraryManagedSlots>(
     const summary = (result.resultBody as { summary?: string }).summary;
     if (typeof summary === "string") last = { register: "summary", text: summary };
 
-    if (!result.ok) {
+    const continuation = rowKey === undefined ? undefined : action.verdicts[rowKey]?.continuation;
+    if (!result.ok && continuation !== "continue") {
       failedAt = results.length - 1;
       break;
     }
     // Handoff monotonicity: an ok step that requested a handoff still ends
     // the batch — later steps must not run.
     if (handoffSet) break;
+    // A successful question is still a caller boundary. Do not run the
+    // remainder of a speculative batch or ask the model to invent an answer.
+    if (continuation && continuation !== "continue") break;
   }
 
   return { results, rowKeys, failedAt, last, anExecutorRan };
@@ -805,6 +814,8 @@ function composeRowBody(
         ? (value as (d: Record<string, unknown>) => unknown)(data)
         : value;
   }
+  if (row.continuation !== undefined) body.continuation = row.continuation;
+  if (row.presentation === "verbatim") body.reply_text = body.summary;
   return body;
 }
 
@@ -830,7 +841,7 @@ function normalizeExecutorResult<T>(
   // matches on the error code). Loud, because extras are dynamic and no
   // construction check can see them.
   for (const [key, value] of Object.entries(raw.resultExtras ?? {})) {
-    if (key in body) {
+    if (key in body || key === "continuation" || key === "reply_text") {
       throw new Error(
         `action "${actionName}" verdict "${raw.verdict}": resultExtras key "${key}" ` +
           "collides with a field the declared row already composed — rename the extra, " +

@@ -9,10 +9,21 @@
 // is never called; the runner is never invoked. The boundary is the tool call.
 //
 // What to assert (via the expect* helpers): the emitted action(s), their order
-// or presence, specific param values, and "no tool call" for branches where the
-// model should ask the user instead of acting.
+// or presence, specific param values, and a SPOKEN REPLY (`expectSpokenReply`)
+// for branches where the model should ask the user instead of acting.
 // What NOT to assert: the exact wording of the reply, or anything post-execution
 // (committed state / verdicts) — that is the sandbox layer.
+//
+// TOOL-CALLING MODE. The harness binds the model the way the graph does, in
+// whichever mode the tools were built (`config.tool.toolChoice`):
+//   - auto (the bootstrap default): the tools are bound as-is; a spoken reply
+//     is an assistant message with no tool call.
+//   - required: the tools are bound PER TURN through the library's
+//     `modelToolsForTurn` + `modelToolOptions`, exactly as the required-mode
+//     agent node binds them; a spoken reply is the sole `respond_to_caller`
+//     step, and a turn the model marks `misuse` reads as the
+//     `note_refusal` / `malicious_intent` step the runner records for it.
+// `expectSpokenReply` and `TurnResult.text` mean the same thing in both.
 //
 // GATING: these tests hit a live model and cost money, so they are skipped
 // unless PROMPT_INPUT_LIVE=1 (and Azure OpenAI creds) are present. Always pass
@@ -24,6 +35,15 @@
 import assert from "node:assert/strict";
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import type { BaseMessageLike } from "@langchain/core/messages";
+import {
+  modelToolOptions,
+  modelToolsForTurn,
+  renderReplyText,
+  RESPOND_TO_CALLER_ACTION,
+  TURN_FIELD,
+  TURN_MISUSE,
+  TURN_SERVICE,
+} from "../agent-step/index.js";
 
 // Note: `assert` is used internally by the expect* helpers below and is NOT
 // re-exported (the sandbox layer owns the `assert` re-export, so the shared
@@ -37,12 +57,19 @@ export interface EmittedStep {
 }
 
 /** The outcome of one model turn: the flattened steps it emitted (across all
- *  agent-step tool calls, in order), the raw tool calls, and the assistant text
- *  (non-empty only when the model chose NOT to call a tool). */
+ *  agent-step tool calls, in order), the raw tool calls, and what the model
+ *  SAID — non-empty only when the turn is a spoken reply. In auto mode that is
+ *  the assistant text of a turn with no tool call. In required mode it is the
+ *  speech control's text as the engine would speak it (placeholders such as
+ *  `{read_back}` substituted from the latest tool result); for a
+ *  `kind: "clarification"` reply it is the model's explanation alone — the
+ *  recap the engine appends is an execution fact, tested at the sandbox layer. */
 export interface TurnResult {
   steps: EmittedStep[];
   toolCalls: { name: string; args: Record<string, unknown> }[];
   text: string;
+  /** True when the tools were built with `toolChoice: "required"`. */
+  requiredMode: boolean;
   raw: AIMessage;
 }
 
@@ -58,14 +85,16 @@ export const promptInputSkipReason =
 
 // ─── Drivers ─────────────────────────────────────────────────────────────────
 
-let cachedModel: unknown;
+type Invocable = { invoke: (m: BaseMessageLike[]) => Promise<AIMessage> };
 
-async function boundModel() {
+let cachedModel: import("@langchain/openai").AzureChatOpenAI | undefined;
+let cachedAutoBinding: Invocable | undefined;
+
+async function chatModel() {
   if (!cachedModel) {
     const { llmEnv } = await import("../llm-env.js");
     const { AzureChatOpenAI } = await import("@langchain/openai");
-    const { tools } = await import("../tools/index.js");
-    const model = new AzureChatOpenAI({
+    cachedModel = new AzureChatOpenAI({
       azureOpenAIApiKey: llmEnv.apiKey,
       azureOpenAIApiInstanceName: new URL(llmEnv.endpoint).hostname.split(".")[0],
       azureOpenAIEndpoint: llmEnv.endpoint,
@@ -73,10 +102,45 @@ async function boundModel() {
       azureOpenAIApiVersion: llmEnv.apiVersion,
       temperature: llmEnv.temperature,
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    cachedModel = model.bindTools(tools as any);
   }
-  return cachedModel as { invoke: (m: BaseMessageLike[]) => Promise<AIMessage> };
+  return cachedModel;
+}
+
+/** Required-call mode is a property of the TOOL (`config.tool.toolChoice`): a
+ *  tool built in that mode carries the library's speech control in its schema,
+ *  so the harness reads the mode from the tools instead of importing a config
+ *  (this file stays tool-agnostic). `respond_to_caller` is reserved only in
+ *  required mode — an AUTO-mode tool must not declare a domain action under
+ *  that name, or this reads it as required. */
+function builtInRequiredMode(tools: readonly unknown[]): boolean {
+  return tools.some((tool) =>
+    JSON.stringify((tool as { schema?: unknown }).schema ?? null).includes(
+      `"${RESPOND_TO_CALLER_ACTION}"`,
+    ),
+  );
+}
+
+/** Bind the model the way the graph does. Auto: the tools as-is, once (the
+ *  bootstrap `createReactAgent` binding). Required: per turn, through the
+ *  library's surface narrowing and bind options — the surface depends on the
+ *  latest tool result in `messages`, so it is never cached. */
+async function boundModel(
+  messages: BaseMessageLike[],
+): Promise<{ model: Invocable; requiredMode: boolean }> {
+  const { tools } = await import("../tools/index.js");
+  const model = await chatModel();
+  if (!builtInRequiredMode(tools)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    cachedAutoBinding ??= model.bindTools(tools as any) as unknown as Invocable;
+    return { model: cachedAutoBinding, requiredMode: false };
+  }
+  const bound = model.bindTools(
+    // A fresh array, the SAME tool objects: the library keys each tool's
+    // reply scope on its identity.
+    modelToolsForTurn([...tools] as unknown[], messages) as never,
+    modelToolOptions({ tool: { toolChoice: "required" } }),
+  ) as unknown as Invocable;
+  return { model: bound, requiredMode: true };
 }
 
 function extractSteps(msg: AIMessage): EmittedStep[] {
@@ -85,11 +149,51 @@ function extractSteps(msg: AIMessage): EmittedStep[] {
     // Every agent-step tool is named "<tool>_agent_step" and carries a `steps`
     // array. Collect across all such calls in emission order.
     if (tc.name.endsWith("_agent_step")) {
+      // Mirror the runner (required mode): a turn the model marks as misuse is
+      // recorded as the `malicious_intent` note IN PLACE of its steps.
+      if (tc.args?.[TURN_FIELD] === TURN_MISUSE) {
+        steps.push({ action: "note_refusal", params: { kind: "malicious_intent" } });
+        continue;
+      }
       const arr = (tc.args?.steps ?? []) as EmittedStep[];
       steps.push(...arr);
     }
   }
   return steps;
+}
+
+/** History as PRODUCTION writes it. In required mode every agent-step call
+ *  carries the `turn` classification, and the model copies the shape of its
+ *  own recent calls — a recorded call without the field teaches the next turn
+ *  to omit it (and has hidden real routing failures). Add it to any recorded
+ *  call that lacks it, listed before `steps` as the model emits it. */
+function withRecordedTurn(messages: BaseMessageLike[]): BaseMessageLike[] {
+  return messages.map((message) => {
+    if (!(message instanceof AIMessage) || (message.tool_calls ?? []).length === 0) return message;
+    const toolCalls = (message.tool_calls ?? []).map((tc) => {
+      if (!tc.name.endsWith("_agent_step") || TURN_FIELD in (tc.args ?? {})) return tc;
+      const first = ((tc.args?.steps ?? []) as EmittedStep[])[0];
+      const misuse = first?.action === "note_refusal" && first.params?.kind === "malicious_intent";
+      return { ...tc, args: { [TURN_FIELD]: misuse ? TURN_MISUSE : TURN_SERVICE, ...tc.args } };
+    });
+    return new AIMessage({ content: message.content, id: message.id, tool_calls: toolCalls });
+  });
+}
+
+/** What a required-mode turn SAID: the sole speech control's text (or a
+ *  clarification's explanation), rendered as the engine would speak it. A
+ *  reply the engine would refuse — a placeholder the latest result lacks,
+ *  fixed bytes left out or altered — fails the test here, with the steps. */
+function spokenText(steps: EmittedStep[], messages: BaseMessageLike[]): string {
+  if (steps.length !== 1 || steps[0].action !== RESPOND_TO_CALLER_ACTION) return "";
+  const params = steps[0].params ?? {};
+  const reply = params.kind === "clarification" ? params.explanation : params.text;
+  if (typeof reply !== "string") return "";
+  try {
+    return renderReplyText(reply, messages);
+  } catch (cause) {
+    throw new Error(`Invalid spoken reply: ${JSON.stringify(steps)}`, { cause });
+  }
 }
 
 /** Run one model turn over an explicit message list (system prompt is prepended
@@ -101,18 +205,32 @@ export async function runTurn(messages: BaseMessageLike[]): Promise<TurnResult> 
   // buildPrompt prepends the system message and spreads state.messages after it.
   // awaitingInput / currentFlow are passed for fidelity; the default template
   // does not branch on them, but a customised prompt might.
+  const { tools } = await import("../tools/index.js");
   const full = buildPrompt({
-    messages,
+    messages: builtInRequiredMode(tools) ? withRecordedTurn(messages) : messages,
     awaitingInput: null,
     currentFlow: null,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any) as BaseMessageLike[];
-  const model = await boundModel();
+  const { model, requiredMode } = await boundModel(messages);
   const raw = await model.invoke(full);
+  const steps = extractSteps(raw);
+  if (requiredMode) {
+    assert.equal(
+      raw.tool_calls?.length,
+      1,
+      "required tool calling must emit exactly one tool call per model turn",
+    );
+  }
   return {
-    steps: extractSteps(raw),
+    steps,
     toolCalls: (raw.tool_calls ?? []).map((tc) => ({ name: tc.name, args: tc.args })),
-    text: typeof raw.content === "string" ? raw.content : JSON.stringify(raw.content),
+    text: requiredMode
+      ? spokenText(steps, messages)
+      : typeof raw.content === "string"
+        ? raw.content
+        : JSON.stringify(raw.content),
+    requiredMode,
     raw,
   };
 }
@@ -226,8 +344,35 @@ export function expectParamMatches(
   );
 }
 
-/** The model called NO tool — it should have asked the user instead. */
+/** The model SPOKE instead of acting — it should have asked or answered the
+ *  user. Works in both tool-calling modes: auto → no tool call at all;
+ *  required → the sole speech control with a non-empty reply (no operation or
+ *  handoff may ride along). Prefer this over {@link expectNoToolCall}. */
+export function expectSpokenReply(result: TurnResult): void {
+  if (!result.requiredMode) {
+    assert.equal(
+      result.toolCalls.length,
+      0,
+      `expected a spoken reply with no tool call, got ${describe(result.steps)}`,
+    );
+    return;
+  }
+  assert.deepEqual(
+    result.steps.map((s) => s.action),
+    [RESPOND_TO_CALLER_ACTION],
+    `expected the sole speech step, got ${describe(result.steps)}`,
+  );
+  assert.ok(result.text.trim(), "a speech step must carry a non-empty reply");
+}
+
+/** AUTO MODE ONLY: the model called no tool. In required mode every turn is a
+ *  tool call, so this can never hold — assert {@link expectSpokenReply}. */
 export function expectNoToolCall(result: TurnResult): void {
+  assert.equal(
+    result.requiredMode,
+    false,
+    "required tool calling has no tool-free turn — use expectSpokenReply",
+  );
   assert.equal(
     result.toolCalls.length,
     0,

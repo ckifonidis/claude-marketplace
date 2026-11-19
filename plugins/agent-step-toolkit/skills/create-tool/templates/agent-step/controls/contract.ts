@@ -82,6 +82,8 @@ export function resolveAbortPolicy<ActionName extends string>(
 /** What the compile phase resolved about which library features are on. Built
  *  once per plan (compile/plan.ts); drives control activation everywhere. */
 export interface ControlActivation {
+  /** Speech is an explicit, terminal tool response in required-call hosts. */
+  toolRepliesEnabled?: boolean;
   /** Any action opted into a library-managed gate or flow lifecycle. */
   hasLifecycleOpts: boolean;
   handoffEnabled: boolean;
@@ -96,8 +98,8 @@ export interface ControlActivation {
    *  repetition. Non-empty activates `repeat_pending_question`; the control
    *  still verifies that the current gate belongs to one of these actions
    *  and actually carries a rendered read-back. (A standing dictation with
-   *  stored `ask_text` is also served once active — a safety net for a stray
-   *  call, never named in the describe.) */
+   *  stored `ask_text` is also served once active, when the host's reply
+   *  contract requests exact repetition.) */
   repeatableConfirmationActions: readonly string[];
 }
 
@@ -106,6 +108,8 @@ export interface ControlActivation {
  *  result entry — nothing else. Engine text comes straight from ENGINE_TEXT
  *  (engine-text.ts), so no message catalog is threaded here. */
 export interface ControlRunContext<T extends LibraryManagedSlots> {
+  /** Read-only transcript; deliberately outside the business-state merger. */
+  messages?: readonly unknown[];
   activation: ControlActivation;
   /** The plan's resolved engine tolerances (../tolerances.ts) — the bounds a
    *  counting control compares against. */

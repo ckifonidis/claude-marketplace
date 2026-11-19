@@ -175,5 +175,8 @@ export function climbEntry(
       ...extra,
     };
   }
-  return { action, ok: false, instruction: freeInstruction, ...extra };
+  // The free explanation is owed before the caller can answer again. Reuse
+  // the presentation boundary so required mode cannot skip it by repeating
+  // only the ask, or spend another refusal in the same caller turn.
+  return { action, ok: false, instruction: freeInstruction, ...extra, continuation: "await_caller" };
 }

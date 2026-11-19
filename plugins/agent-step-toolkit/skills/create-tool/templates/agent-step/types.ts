@@ -42,13 +42,11 @@ export type ExecutorEffect =
   | { type: "abort_flow" };
 
 /** Result a single executor returns to the runner. `resultBody` is the
- *  JSON-serializable object the LLM sees as that step's payload. `ok` is a
- *  batch-continuation control flag, NOT a success/verdict signal: `ok: true`
- *  proceeds to the next step; `ok: false` short-circuits the batch and sets
- *  `failed_at`. An executor may return `ok: true` for a "negative" domain
- *  outcome (carry the verdict in `resultBody`) when later steps should still
- *  run — decide on whether the batch should continue, not on whether the
- *  outcome was "good".
+ *  JSON-serializable object the LLM sees as that step's payload. Without a
+ *  declared continuation, `ok: false` retains the legacy batch stop and
+ *  `failed_at`. A verdict can now declare a successful caller wait, a
+ *  required follow-up, or continuation after a negative informational result
+ *  independently of `ok`. The verdict remains the domain outcome authority.
  *
  *  `stateUpdate` is a partial patch of HOST-OWNED slots, threaded to
  *  subsequent steps in the batch AND accumulated into the final tool Command.
@@ -76,8 +74,25 @@ export interface ExecutorResult<T> {
  *  be hand-kept consistent across executors, shared constants, and wiring
  *  lists (and measurably forked). */
 export interface VerdictDef<T = unknown> {
-  /** Batch-continuation flag (`StepResult.ok`) for this verdict. */
+  /** Outcome flag. Without an explicit continuation, false retains the
+   * legacy stop-on-failure behaviour. */
   ok: boolean;
+  /** Independent of success: continue a batch, wait for a new caller reply,
+   * or return to the model for one specified follow-up action. A caller wait
+   * and an action continuation stop this batch without marking a successful
+   * result as failed. Required-tool hosts enforce the boundary on subsequent
+   * calls in the same caller turn too. Reads remain repeatable by default. */
+  continuation?: "continue" | "await_caller" | { action: string };
+  /** `"verbatim"`: the rendered `summary` is caller-audible text that must be
+   * spoken exactly. The result carries it again as `reply_text`; in required
+   * mode the model presents it through the `{reply_text}` placeholder and a
+   * reply that omits or alters those bytes is refused. Words around it stay
+   * model-composed. Pair it with `continuation: "await_caller"` when the
+   * summary is a question: it then stays visible as the unanswered question
+   * through conversational asides, and is re-asked by speech — the engine
+   * stores no gate for it. Never set it on a row whose summary is an
+   * instruction to the model. Omit for summaries the model may paraphrase. */
+  presentation?: "verbatim";
   /** The body `summary` — a string, or a renderer over the CURRENT state
    *  view (for language-keyed catalogs; same division as
    *  `ConfirmationOpts.readBack`) plus the executor's `data` (for
@@ -313,6 +328,19 @@ export interface ActionDef<PrereqName extends string, T = unknown> {
    *  standing ask and its escalation names no owed action. Must name one of
    *  the action's own capture fields — checked at construction. */
   bounceCapture?: string;
+  /** Key of one of this action's `verdicts` rows, used as domain guidance when
+   * a call's params fail the schema parse. The engine's `invalid_params`
+   * result then also carries that row's body — its `summary` (say, the length
+   * a value must have) plus any `body` fields — and the engine instruction
+   * tells the model to relay that summary before asking again. This is the one
+   * place such facts may live: a row is no part of the tool description, so
+   * they reach the model only AFTER a capture was rejected — never through the
+   * prompt or a field description, where they make it count and withhold or
+   * pad the call. It must be a non-terminal failure row with no
+   * state writes, effects, ask or `backendFailure` (checked at construction);
+   * the error code, bounce accounting and the derived standing ask stay the
+   * engine's. Omit for the generic "did not come through" bounce. */
+  invalidParamsVerdict?: string;
   /** Optional library-coordinated lifecycle hooks: confirmation gating, OTP
    *  issue/consume, flow open/close, double-entry capture/consume, and
    *  batch-isolation flags. Omit for plain reads and collection steps that
@@ -517,7 +545,27 @@ export interface AgentStepConfig<
   PrereqName extends string,
   T = unknown,
 > {
-  tool: { name: string; description: string };
+  tool: {
+    name: string;
+    description: string;
+    /** How the model is bound to this tool. Default `"auto"`: the model may
+     * answer with text or call the tool.
+     *
+     * `"required"`: every model invocation makes exactly one call to this
+     * tool. Speech becomes the library-owned `respond_to_caller` control, each
+     * call classifies the caller turn in a `turn` argument, a verdict row's
+     * `continuation` is enforced across calls within a caller turn, and the
+     * protocol fragment (`composeProtocolPrompt`) switches to its required-mode
+     * text.
+     *
+     * The mode needs host wiring — bind `modelToolsForTurn(tools, messages)`
+     * with `modelToolOptions(config)`, return `toolOnlyMessage(response)`, and
+     * deliver `completedReply(messages)` from the agent node — and it assumes
+     * OpenAI-format tool definitions, this tool as the only tool bound to the
+     * model, and the exact tool object `buildAgentStepTool` returned. reply.ts
+     * states both in full. */
+    toolChoice?: "auto" | "required";
+  };
   actions: Record<ActionName, ActionDef<PrereqName, T>>;
   /** Downstream-slot invalidation map — ONE table for the whole config,
    *  because staleness is a fact about the SLOTS, not about which action
@@ -546,9 +594,10 @@ export interface AgentStepConfig<
 /** One result entry. Register is WIRE-VISIBLE (4.0.0): host caller-audible
  *  bytes ride `summary` (the model relays them faithfully); engine directives
  *  ride `instruction` (the model follows them, composing any caller line in
- *  the session language). An entry carries one or the other, never both —
- *  except a match-gate exhaustion, which strips the row's `summary` when the
- *  engine's exhaustion instruction replaces it. */
+ *  the session language). A validation verdict can carry both: its summary
+ *  supplies domain guidance and the instruction directs the re-ask. The
+ *  top-level mirror prefers the instruction. A match-gate exhaustion instead
+ *  strips the row's summary when the exhaustion instruction replaces it. */
 export interface StepResult {
   action: string;
   ok: boolean;

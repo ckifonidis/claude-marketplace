@@ -168,6 +168,7 @@ export interface CompiledAction {
   /** Declared verdict rows for the declarative executor return shape —
    *  `{}` when none declared. */
   verdicts: Record<string, VerdictDef>;
+  invalidParamsVerdict: string | null;
   /** State-satisfied inputs declaration, or null. */
   satisfies: SatisfiesSpec | null;
 }
@@ -249,6 +250,7 @@ export function compilePlan<
   // ONE construction site for the activation (compile/activation.ts): every
   // `xEnabled` flag is derived there, so plan and validate cannot fork.
   const activation = buildControlActivation({
+    toolChoice: opts.config.tool.toolChoice,
     actions: rawActions,
     handoff: opts.handoff,
     abortPolicy: opts.abortPolicy,
@@ -282,6 +284,7 @@ export function compilePlan<
       rowAsks: resolveActionAsks(name, def, opts.config.actions),
       captureField: soleCaptureField(def),
       verdicts: def.verdicts ?? {},
+      invalidParamsVerdict: def.invalidParamsVerdict ?? null,
       satisfies: def.satisfies ?? null,
     };
   }

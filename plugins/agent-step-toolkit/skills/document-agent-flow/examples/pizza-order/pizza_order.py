@@ -231,7 +231,7 @@ OPEN = [
 FLOW = {
     "meta": {
         "slug": "pizza-order",
-        "engine_version": "4.0.0",
+        "engine_version": "4.1.0",
         "title": "Pizza order — phone agent step ladder",
         "subtitle": ("A synthetic example. A box is a step: it gathers until its completeness check passes. ⚡ chips are "
                      "the API calls fired when it closes, in order. Click any box for the details."),
@@ -269,9 +269,9 @@ FLOW = {
             ("“Same address as last time?”", "`satisfies` in `consent` mode on `set_address`: an empty call offers the saved address on the action's confirmation gate, a dictated address always wins, and a new customer gets the `no_saved_address` row with its ask."),
         ],
         "facts": [
-            "A batch stops only on a ✗ verdict row, so a quote whose price changed must be a ✗ row — otherwise the order would be placed at the old price.",
+            "Unless a row declares a continuation, a batch stops only on a ✗ verdict row, so a quote whose price changed must be a ✗ row — otherwise the order would be placed at the old price.",
             "An address edit after the quote must void the quote. Invalidation is one table on the config, not an option of `set_address`: `invalidations{address:[quote]}` nulls `quote` whenever any action's write changes `address`.",
-            "While the read-back is pending, only `place_order`, `abort_pending_input`, the handoff or the repeat control may run — and abort clears the gate AND any open flow. An edit therefore aborts and re-enters P3; it is safe only because the cart is a host slot, not flow data.",
+            "While the read-back is pending, only `place_order`, `abort_pending_input`, the handoff or the repeat control may run (a misuse note is still recorded, without touching the gate) — and abort clears the gate AND any open flow. An edit therefore aborts and re-enters P3; it is safe only because the cart is a host slot, not flow data.",
             "Everything the caller hears is rendered by the host from state: a row's `summary`, the read-back, the handoff closing. The engine's own text is a model-facing `instruction`, never spoken. So `resolveClosingMessage` has a row for each ending the engine decides: `auto_handoff` (the TECH terminal), `agent-step:escalated:<action>` and `agent-step:malicious`.",
         ],
     },

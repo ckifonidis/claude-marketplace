@@ -125,6 +125,13 @@ to a single-tool prompt, the fragment recomposes automatically from the updated 
 capture doctrines that must outrank the generic contracts go on `toolTurnRules` — never hand-written
 into the fragment's territory. Write NONE of the machinery text yourself.
 
+The fragment follows the tool's calling mode. With `config.tool.toolChoice: "required"` (agent-step
+4.1.0) it composes the required-mode protocol — speech through the `respond_to_caller` control,
+`continuation`, the READ-BACK placeholders — and the rest of the prompt must then never say "answer
+without a tool call" or "make no call": write WHAT to convey and let the fragment own how a reply is
+delivered. A guardrail section points at the call's `turn` classification rather than redefining
+misuse. See `agent-step-api.md` `<required_mode>`.
+
 ### 1. SCOPE
 If the new tool covers user intents the current prompt refuses, broaden SCOPE so they're not refused. Example: if cards-only refuses account inquiries, and you're adding accounts, drop the refusal clause.
 
@@ -161,7 +168,7 @@ A state slot has two "empty" meanings the model cannot distinguish: *not fetched
 ### 6. TOOL USE / Recovery from denials
 If your tool introduces new prereq denials (e.g. `account_not_verified`), add a one-line recovery hint in the same style as the existing identity denials (`customer_not_verified` / `card_not_verified`): tell the model what to collect or do to clear the gate.
 
-Library-emitted errors the prompt should recognise: `pending_confirmation_locked`, `otp_pending_locked`, `match_pending_locked`, `no_flow_active`, `wrong_flow`, `otp_not_pending`, `match_not_pending`, `flow_already_active`, `confirmation_attempts_exhausted`, `match_attempts_exhausted`, `mutation_must_be_sole_step`, `mutation_must_be_last_in_batch`.
+Library-emitted errors the prompt should recognise: `pending_confirmation_locked`, `otp_pending_locked`, `match_pending_locked`, `no_flow_active`, `wrong_flow`, `otp_not_pending`, `match_not_pending`, `flow_already_active`, `confirmation_attempts_exhausted`, `match_attempts_exhausted`, `mutation_must_be_sole_step`, `mutation_must_be_last_in_batch`. Under required tool calling also: `continuation_required` (the latest result of this caller turn requires a specific next step), `empty_batch`, `invalid_reply` (a spoken reply the engine refused — the instruction says what to fix), `reply_must_be_sole_step`. These are self-explaining engine instructions; the prompt does not need to teach recovery from them.
 
 ### 7. EXAMPLES section
 Add one or two worked batch examples for the new tool. The format:

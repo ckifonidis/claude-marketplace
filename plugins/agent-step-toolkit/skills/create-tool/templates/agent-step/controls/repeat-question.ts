@@ -11,25 +11,16 @@
 //     is now the question the caller must answer on a LATER turn, so a second
 //     ReAct call cannot answer it on the caller's behalf.
 //   - a standing DICTATION whose record stores host-rendered `ask_text`:
-//     re-present those bytes. This branch is a SAFETY NET, not an invitation —
-//     the control's describe still says "at a standing value ask, do NOT call
-//     this" (that instruction and the ask-contract category are the measured
-//     authorities, and the describe's static bytes are measured-brittle:
-//     2026-08-15, two guards re-tipped under describe edits alone). When the
-//     model strays anyway — the exact 2026-08-15 failure, which then hit an
-//     ineligibility ERROR — it now gets the standing question's bytes back
-//     instead. Nothing to re-stamp: a dictation is non-locking, nothing
-//     executes off it.
+//     re-present those bytes when the host's reply policy needs an exact
+//     repeat. Ordinary conversational re-asks remain speech turns. Nothing
+//     to re-stamp: a dictation is non-locking, nothing executes off it.
 //
 // (The bounded-choice repeat branch left with the bounded-choice controls.)
 
 import { z } from "zod";
-import type { StepResult } from "../types.js";
 import type { LibraryManagedSlots } from "../state.js";
-import {
-  getAwaitingInput,
-  setConfirmationPatch,
-} from "../run/batch-state.js";
+import { getAwaitingInput } from "../run/batch-state.js";
+import { prepareConfirmationRepeat } from "../interaction/repeat-confirmation.js";
 import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
 import type {
   ControlAction,
@@ -50,12 +41,13 @@ function repeatableShapes(ctx: {
       .join(", ");
     shapes.push(`a pending ${repeatable} confirmation's read-back`);
   }
+  shapes.push("a standing value ask whose stored text is shown in ask_text or awaiting.question");
   return shapes;
 }
 
 export const repeatPendingQuestionControl: ControlAction = {
   name: REPEAT_PENDING_QUESTION_ACTION,
-  activeWhen: (ctx) => repeatableShapes(ctx).length > 0,
+  activeWhen: (ctx) => ctx.repeatableConfirmationActions.length > 0,
   schemaVariant: (ctx) => {
     const shapes = repeatableShapes(ctx).join(", or ");
     return z
@@ -65,9 +57,7 @@ export const repeatPendingQuestionControl: ControlAction = {
       })
       .describe(
         "Repeat the engine-stored exact presentation of the pending question as the ONLY step: " +
-          `${shapes}. Nothing else has stored bytes — at a standing value ask or any other pending ` +
-          "question, do NOT call this: re-ask in your own words with no call. " +
-          "Use when the caller has not answered the pending question and needs it repeated. " +
+          `${shapes}. ` +
           "This never confirms, resolves, or executes anything, changes params, or spends an attempt. " +
           "After success, speak the returned `read_back` verbatim.",
       );
@@ -108,72 +98,28 @@ export const repeatPendingQuestionControl: ControlAction = {
     }
 
     // ── Pending confirmation on a repeatable action: re-present read_back. ──
-    const eligible =
-      awaiting?.kind === "confirmation" &&
-      ctx.activation.repeatableConfirmationActions.includes(
-        awaiting.for_action,
-      ) &&
-      typeof awaiting.read_back === "string" &&
-      awaiting.read_back.length > 0;
-    if (!eligible) {
-      const entry: StepResult = {
-        action: REPEAT_PENDING_QUESTION_ACTION,
-        ok: false,
-        instruction: ENGINE_TEXT.repeat_not_available,
-        error: "repeat_confirmation_not_available",
-      };
-      return { entry, failed: true };
-    }
-
-    // A repeat is meaningful only after the caller has heard the proposal and
-    // replied. Fail closed when provenance is unavailable: otherwise a second
-    // ReAct loop could cause the model to answer its own just-proposed gate.
-    const proposedTurnId = awaiting.proposed_on_caller_turn_id;
-    if (!proposedTurnId || !ctx.currentCallerTurnId) {
-      const entry: StepResult = {
-        action: REPEAT_PENDING_QUESTION_ACTION,
-        ok: false,
-        instruction: ENGINE_TEXT.repeat_identity_unavailable,
-        error: "repeat_confirmation_turn_identity_unavailable",
-      };
-      return { entry, failed: true };
-    }
-    if (proposedTurnId === ctx.currentCallerTurnId) {
-      const entry: StepResult = {
-        action: REPEAT_PENDING_QUESTION_ACTION,
-        ok: false,
-        instruction: ENGINE_TEXT.repeat_same_turn_locked,
-        error: "repeat_confirmation_same_turn_locked",
-      };
-      return { entry, failed: true };
+    const repeated = prepareConfirmationRepeat(ctx);
+    if (!repeated.ok) {
+      return { entry: { action: REPEAT_PENDING_QUESTION_ACTION, ...repeated }, failed: true };
     }
 
     // Re-presenting the recap resets the consent boundary. Preserve the exact
     // pending proposal while stamping this caller turn, so neither another
     // repeat nor a matching mutation call in a later ReAct loop can treat the
     // caller's pre-repeat utterance as an answer to the newly spoken question.
-    ctx.state.apply(
-      setConfirmationPatch<T>(
-        awaiting.for_action,
-        awaiting.params,
-        awaiting.attempts_left,
-        awaiting.max_attempts,
-        ctx.currentCallerTurnId,
-        awaiting.read_back,
-      ),
-    );
+    ctx.state.apply(repeated.patch);
 
     return {
       entry: {
         action: REPEAT_PENDING_QUESTION_ACTION,
         ok: true,
         instruction: formatMessage(ENGINE_TEXT.repeat_done, {
-          action: awaiting.for_action,
+          action: repeated.forAction,
         }),
         confirmation_repeated: true,
-        for_action: awaiting.for_action,
+        for_action: repeated.forAction,
         needs_confirmation: true,
-        read_back: awaiting.read_back,
+        read_back: repeated.readBack,
         // Framing for the stored bytes: complete, ends the turn.
         read_back_directive: ENGINE_TEXT.read_back_directive_repeat,
       },

@@ -62,6 +62,22 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
       // Static state write for this verdict (typed against State; the
       // executor's dynamic `stateUpdate` wins on key conflicts):
       // stateUpdate: { {{STATE_FIELD}}: {{STATIC_VALUE}} },
+      //
+      // WHAT HAPPENS NEXT is declared apart from `ok` (4.1.0). Omit it for
+      // the default — an `ok: true` row lets the batch run on, an `ok: false`
+      // row stops it and sets `failed_at`:
+      //   continuation: "await_caller",                  // stop here for the caller's answer, WITHOUT failing the step
+      //   continuation: { action: "{{NEXT_ACTION}}" },   // the next call must be this action, as its sole step
+      //   continuation: "continue",                      // keep running the batch although `ok` is false
+      // A summary the caller must hear EXACTLY (a question the flow depends on):
+      //   presentation: "verbatim",                      // rides the result again as `reply_text`
+      // Both stop/continue the batch in either tool-calling mode; required
+      // mode (`toolChoice: "required"`) also enforces them across calls within
+      // the caller turn and inserts `reply_text` itself. A row with an `ask`
+      // may only declare "await_caller"; a `backendFailure` row or one carrying
+      // a `request_handoff` effect declares none. `continuation` / `reply_text`
+      // are engine-owned names — never use them as `body` keys.
+      // See agent-step-api.md <required_mode>.
     },
     {{FAILURE_VERDICT}}: {
       ok: false,
@@ -115,6 +131,14 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
   // resets the count. Only an action with SEVERAL capture fields declares
   // which one a bounce leaves owed:
   // bounceCapture: "{{CAPTURE_PARAM}}",
+  //
+  // A bounce may carry DOMAIN guidance (4.1.0): name one of the rows above
+  // whose `summary` says what a usable value looks like. It rides the
+  // `invalid_params` result — AFTER a capture was rejected, the only place
+  // such facts may reach the model (in the schema or the prompt a length
+  // makes it count, pad or withhold the call). The row must be a plain
+  // failure row: no stateUpdate, effects, ask or backendFailure.
+  // invalidParamsVerdict: "{{INVALID_VALUE_VERDICT}}",
 
   // ─── State-satisfied inputs (optional) ────────────────────────────────── //
   // The action's input may already be in state (carried by the channel from

@@ -37,6 +37,16 @@
 /** Keys of the engine's instruction text. The `satisfies` on ENGINE_TEXT locks
  *  the value table to this union in both directions. */
 export type EngineTextKey =
+  // ── Required-call speech (run/admission.ts, reply.ts, controls/respond-to-caller.ts)
+  | "empty_batch"
+  | "reply_text_required"
+  | "reply_field_unavailable"
+  | "reply_fixed_text_required"
+  | "reply_kind_required"
+  | "reply_present_result"
+  | "reply_explanation_only"
+  | "continuation_await_caller"
+  | "continuation_action_required"
   // ── Batch admission ──────────────────────────────────────────────────────
   | "unknown_action"
   | "lockdown_confirmation"
@@ -100,6 +110,45 @@ export type EngineTextKey =
  *  each entry; the comment on each entry names the emitting site and the
  *  placeholders the runner supplies. */
 export const ENGINE_TEXT = {
+  // ── Required-call speech (`toolChoice: "required"`) ──────────────────────
+  //
+  // Emitted only in required mode, where speech is the `respond_to_caller`
+  // control. The six `reply_*` entries are thrown inside that control and ride
+  // its `invalid_reply` refusal as `instruction`.
+
+  /** A required-mode batch arrived with no steps and no misuse
+   *  classification (run/admission.ts, error `empty_batch`). */
+  empty_batch: "Choose a workflow step or respond_to_caller with the permitted spoken reply.",
+  /** The reply's content field was missing or blank — `text`, or
+   *  `explanation` for kind "clarification" (controls/respond-to-caller.ts). */
+  reply_text_required: "Supply non-empty caller-facing content in the field declared for this reply kind.",
+  /** The reply used a placeholder the current caller turn's latest result
+   *  does not carry (reply.ts `renderReplyText`). `{field}`: `read_back`,
+   *  `ask_text` or `reply_text`. */
+  reply_field_unavailable: "The current tool result has no {field}; compose the permitted reply from the conversation instead.",
+  /** The latest result carries fixed bytes the reply left out or altered
+   *  (reply.ts `renderReplyText`). `{field}`: as above. */
+  reply_fixed_text_required: "The reply must include the current result's exact {field}. Use its placeholder and obey its framing directive.",
+  /** A repeatable confirmation is pending and the reply carried no kind, or
+   *  an unknown one (controls/respond-to-caller.ts). */
+  reply_kind_required: 'A repeatable confirmation is pending. Choose kind "clarification" for an explanation or kind "choice" for a permitted path-choice question, as its reply_contract directs.',
+  /** A reply kind was sent on the turn that still has to present the
+   *  proposal's own read-back (controls/respond-to-caller.ts). */
+  reply_present_result: "Present the current tool result without a reply kind; READ-BACK governs its exact bytes.",
+  /** A kind "clarification" reply carried `text`, or repeated the stored
+   *  recap the engine appends itself (controls/respond-to-caller.ts). */
+  reply_explanation_only: "Supply only explanation, without text or a recap; the engine appends the stored confirmation question.",
+  /** The latest result of this caller turn declared `continuation:
+   *  "await_caller"` and the batch was not the sole `respond_to_caller` step
+   *  (reply.ts `refuseContinuation`, error `continuation_required`). */
+  continuation_await_caller:
+    "Present the current result with respond_to_caller and wait for a new caller answer.",
+  /** The latest result of this caller turn declared a follow-up action and
+   *  the batch was not that sole step (reply.ts `refuseContinuation`, error
+   *  `continuation_required`). `{action}`: the required follow-up. */
+  continuation_action_required:
+    "The current result requires {action} as the sole next step before speaking.",
+
   // ── Batch admission (run/admission.ts) ───────────────────────────────────
 
   /** A hallucinated/typo'd action name reached the runner. `{action}`. */
@@ -107,7 +156,7 @@ export const ENGINE_TEXT = {
     '"{action}" is not an action of this tool. Re-read the tool schema and re-call using a listed action; tell the caller nothing about this.',
   /** Lockdown refusal: a confirmation is pending. `{action}`, `{abort_action}`. */
   lockdown_confirmation:
-    'A "{action}" is pending confirmation; only the same action with matching params or "{abort_action}" is allowed until it resolves.',
+    'A "{action}" is pending confirmation; only the same action with matching params or "{abort_action}" is allowed until it resolves. To act on a different item or value the caller just gave, send "{abort_action}" followed by that action in the SAME call — never repeat the pending question about the item they moved away from.',
   /** Lockdown refusal: an OTP is awaiting validation. `{action}`, `{abort_action}`. */
   lockdown_otp:
     'An OTP for "{action}" is awaiting validation; only that action or "{abort_action}" is allowed until it resolves.',
@@ -166,7 +215,7 @@ export const ENGINE_TEXT = {
   /** Generic reply contract riding every proposal entry (`reply_contract`) when
    *  the action declares no `GateContractSpec`. `{action}`. */
   confirm_reply_contract:
-    'The caller\'s NEXT reply answers this read-back. A clear yes → re-call "{action}" with exactly the proposed params (that executes it). A corrected or fresh dictation → re-call "{action}" with the new value (a fresh proposal). Anything else is not an answer: make no call and re-ask the read-back question.',
+    'The caller\'s NEXT reply answers this read-back. A clear yes addressed to the confirmation question → re-call "{action}" with exactly the proposed params (that executes it). A corrected or fresh dictation of the requested value → re-call "{action}" with the new value (a fresh proposal). A question about what is being confirmed → use {speech_reply} to briefly explain the pending value and ask the same yes/no confirmation question. Unclear, garbled, unrelated or third-party speech is not consent and supplies no correction: use {speech_reply} for one short yes/no question confirming the value just read back, then wait for the answer.',
   /** Confirmation attempts ran out; the pending proposal was dropped. `{action}`. */
   confirm_exhausted:
     'Confirmation attempts for "{action}" are exhausted and the pending proposal was dropped. Tell the caller you are starting that step over, then re-collect the value.',
@@ -176,17 +225,29 @@ export const ENGINE_TEXT = {
 
   // ── Repeat-question control (controls/repeat-question.ts) ────────────────
 
+  /** Nothing pending carries stored bytes this control may repeat
+   *  (interaction/repeat-confirmation.ts). */
   repeat_not_available:
     "No eligible pending question has an exact stored presentation to repeat.",
+  /** The gate or the current turn has no caller-turn identity, so the repeat
+   *  cannot move the consent boundary safely (interaction/repeat-confirmation.ts). */
   repeat_identity_unavailable:
     "The pending question cannot be repeated without stable caller-turn identity.",
+  /** The repeat arrived on the caller turn that proposed the confirmation
+   *  (interaction/repeat-confirmation.ts). */
   repeat_same_turn_locked:
     "The confirmation was proposed on the current caller turn; wait for the caller's reply before repeating it.",
-  /** The repeat succeeded; the stored bytes ride `read_back`. `{action}`. */
+  /** A standing ask's stored `ask_text` was repeated; the bytes ride
+   *  `read_back`. `{action}`: the action the value is owed to. */
   repeat_done_ask:
     'Repeated the exact stored ask for "{action}"; the value is still owed.',
+  /** Framing directive riding that repeated ask (`read_back_directive`). Also
+   *  the refusal reply.ts `renderReplyText` throws when the spoken reply adds
+   *  anything to it. */
   read_back_directive_repeat_ask:
     "This read-back is the exact standing question: add nothing.",
+  /** A pending confirmation's stored read-back was repeated; the bytes ride
+   *  `read_back`. `{action}`: the gated action. */
   repeat_done:
     'Repeated the exact stored confirmation read-back for "{action}"; the gate remains pending.',
   /** Framing directive riding the repeat control's returned `read_back`
@@ -221,10 +282,10 @@ export const ENGINE_TEXT = {
 
   /** A DOMAIN action's params failed the Zod parse — dominantly a caller
    *  capture that didn't come through (the parse detail rides the trace-only
-   *  debug channel, never this result). COUNT-FREE by measurement: naming the
-   *  expected size makes the model pad the capture. */
+   *  debug channel, never this result). The generic instruction stays
+   *  count-free; a declared domain verdict can supply validation guidance. */
   invalid_params:
-    "The submitted value did not parse as a usable capture. Tell the caller it did not come through and ask them to say it again — ONE short question, never stating the value's expected size or shape.",
+    "The submitted value did not parse as a usable capture. Relay the validation guidance in this result's summary, then ask for the value again in ONE short question. Without a summary, say it did not come through; never invent a required size or shape.",
   /** A CONTROL's params failed its schema — a model authoring mistake, not a
    *  caller capture. `{action}`. */
   control_invalid_params:
@@ -242,10 +303,7 @@ export const ENGINE_TEXT = {
   /** `abort_pending_input` ran with nothing pending (idempotent no-op). */
   abort_nothing: "Nothing was pending; the abort was a no-op. Continue per your instructions.",
 
-  // ── Handoff (controls/request-handoff.ts, run/finalize.ts) ───────────────
-
-  /** A handoff step succeeded; the turn must end silently. `{reason}`. */
-  // ── Escalation ──────────────────────────────────────────────────────────
+  // ── Escalation (controls/note-refusal.ts, run/execution.ts) ──────────────
   //
   // The two free-use instructions. Both are INSTRUCTION register (the model
   // composes the caller sentence in the session language) and both are
@@ -255,8 +313,11 @@ export const ENGINE_TEXT = {
   // to spend it.
   explain_detail_needed:
     "Make NO handoff. Say in ONE short sentence why this value is needed to continue, or where the caller might find it, then ask for it again in the SAME turn. Add no other content.",
+  // The explanation applies to this turn. A repeated unsupported question
+  // is a fresh classification, not permission to replay the free explanation.
+  // Keep this follow-up rule on the refusal result, away from capture inputs.
   decline_unsupported:
-    "Make NO handoff and answer NONE of the question's content — no facts, no claims about what is or is not required. Decline in ONE short sentence and repeat the pending question in the SAME turn.",
+    "Decline this unsupported question in ONE short sentence, without answering its content or claiming requirements, and repeat the pending question. This instruction is for the current caller turn only. While that value is still owed, a new caller reply that repeats or rephrases the unsupported question is another unsupported_question for note_refusal; its result owns the response.",
   // `note_refusal` kind `malicious_intent`: rides the in-place
   // turns below the termination threshold. COUNT-FREE like its siblings —
   // telling the model how many attempts remain invites it to spend them, and
@@ -270,6 +331,10 @@ export const ENGINE_TEXT = {
   // to bound, and the turn belongs to the model's own instructions.
   nothing_owed:
     "No value is owed right now, so there is nothing to record. Handle this turn per your instructions.",
+
+  // ── Handoff (controls/request-handoff.ts, run/finalize.ts) ───────────────
+
+  /** A handoff step succeeded; the turn must end silently. `{reason}`. */
   handoff_requested:
     "Handoff requested ({reason}). The turn ends here — produce no further answer.",
   /** Rides the synthetic `auto_handoff` entry at the backend-failure

@@ -15,11 +15,10 @@
 //     measured re-tipping under unrelated edits while they lived in the
 //     prompt), joined verbatim in declaration order.
 //
-// The frame clauses were extracted byte-for-byte from the reference host's
-// measured standing-ask contract: composed with NO categories they reproduce
-// the 3.x generic default exactly, and with the reference host's two
-// categories they reproduce its 3.x override exactly — the composer never
-// forces a wording change.
+// The frame originated in the reference host's measured standing-ask
+// contract. The required-tool capture-pause fix clarifies that SUPPLY means
+// all or part of the latest reply's value: completeness is the action's
+// verdict, and a pause without new content does not replay a rejected value.
 //
 // `{action}` / `{param}` stay as placeholders in the composed string; the
 // batch finalizer interpolates them per recorded ask (run/finalize.ts).
@@ -29,15 +28,13 @@ import type { AskContractSpec } from "../types.js";
 const LEAD =
   "The caller now owes this value. When `ask_text` is present, ask with exactly those words.";
 const SUPPLY =
-  'When their reply supplies it, call "{action}" with it in "{param}"; if they instead decline, pivot, or ask something else, handle that per your instructions — the ask keeps standing until answered.';
+  'When their latest reply supplies all or part of this value, call "{action}" with that supplied content in "{param}"; the action validates it. If they supply no new value and instead pause, decline, pivot, or ask something else, handle that per your instructions — the ask keeps standing until answered.';
 const REPEAT_IS_THE_VALUE =
   "A reply that repeats a value this ask already refused is STILL the value: call again with exactly what they said, even when you expect the same refusal — the system counts these turns and escalates by itself; answering without the call breaks that count.";
-// Measured wording ("its length, or its digits") kept byte-identical: this
-// clause instructs the model NOT to speak such things — it never rides a
-// capture-bounce summary, so the count-free invariant does not cover it, and
-// rewording measured text demands a live re-measurement for zero defect.
+// Style applies to questions the model composes. Stored questions retain
+// their exact engine-owned wording under READ-BACK.
 const RE_ASK_STYLE =
-  "When re-asking, use ONE short question and never describe how to dictate the value, its length, or its digits.";
+  "For a model-composed re-ask, ask ONE short question for the value again. Accept the caller's dictation style; do not prescribe a pace or grouping. READ-BACK governs engine-stored questions.";
 
 /** Compose the full standing-ask contract: engine frame around the host's
  *  categories (none → the generic frame alone). Every clause is one or more

@@ -26,6 +26,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Annotation } from "@langchain/langgraph";
 import { z } from "zod";
+import { HumanMessage, ToolMessage } from "@langchain/core/messages";
 
 import { defineConfig } from "./define-config.js";
 import { runSteps, buildAgentStepTool, type BuildAgentStepToolOptions } from "./runner.js";
@@ -40,6 +41,7 @@ import {
   escalationContext,
 } from "./interaction/escalation.js";
 import { ENGINE_TEXT } from "./engine-text.js";
+import { modelToolsForTurn } from "./reply.js";
 
 interface S extends LibraryManagedSlots {
   messages?: unknown[];
@@ -170,6 +172,7 @@ test("past the tolerance the engine explains itself once — no handoff yet", as
   for (let i = 0; i < BOUNCE_TOLERANCE; i += 1) s = (await step(opts, s, BAD)).next;
   const r = await step(opts, s, BAD);
   assert.equal(r.entry.instruction, ENGINE_TEXT.explain_detail_needed);
+  assert.equal(r.entry.continuation, "await_caller", "the shared explanation needs a caller answer");
   assert.equal(r.entry.error, "invalid_params", "the value is still owed");
   assert.equal(r.entry.handoff_requested, undefined);
   assert.equal(latchOf(r.committed)?.escalation, 1, "one explanation spent");
@@ -252,7 +255,7 @@ test("unsupported_question carries its OWN instruction — decline, answer nothi
   const opts = makeOpts();
   const r = await step(opts, BASE, REFUSE("unsupported_question"));
   assert.equal(r.entry.instruction, ENGINE_TEXT.decline_unsupported);
-  assert.match(String(r.entry.instruction), /answer NONE of the question's content/);
+  assert.match(String(r.entry.instruction), /without answering its content or claiming requirements/);
   assert.equal(latchOf(r.committed)?.escalation, 1, "it shares the one latch");
 });
 
@@ -310,6 +313,111 @@ test("note_refusal must be the sole step in its batch", async () => {
   assert.equal(body.results[0].ok, false);
 });
 
+// A free explanation owes speech THIS turn. Repeating the standing question
+// alone skips the explanation; another refusal can exhaust patience before
+// the caller has had a chance to answer. Both use the existing continuation.
+for (const kind of ["unsupported_question", "declined_or_cannot"]) {
+  test(`${kind}: required mode presents the explanation before accepting another action`, async () => {
+    const opts = makeOpts();
+    opts.config.tool.toolChoice = "required";
+    opts.config.actions.gated_capture.controller = {
+      requiresConfirmation: {
+        maxAttempts: 3, repeatReadBack: true, readBack: () => "Is that correct?",
+        replyContract: {
+          subject: "this capture", subjectNoun: "capture", executesLabel: "the capture",
+          categories: ["Repeat requests use the repeat control."],
+        },
+      },
+    };
+    const initial: S = {
+      ...BASE,
+      awaitingInput: { ...OWED, ask_text: "What is the value?" },
+    };
+    const free = await step(opts, initial, REFUSE(kind));
+    assert.equal(free.entry.continuation, "await_caller");
+    const current: S = {
+      ...free.next,
+      messages: [...initial.messages!, new ToolMessage({
+        tool_call_id: "free", content: JSON.stringify({ results: [free.entry] }),
+      })],
+    };
+    const surface = modelToolsForTurn([buildAgentStepTool(opts)], current.messages!);
+    const schema = JSON.stringify(surface);
+    assert.match(schema, /"const":"respond_to_caller"/);
+    assert.doesNotMatch(schema, /"const":"(?:note_refusal|repeat_pending_question|capture_value)"/);
+    for (const skipped of [
+      REFUSE(kind), GOOD, { action: "repeat_pending_question", params: {} },
+      { action: "request_handoff", params: { reason: "abandon", context: "human_requested" } },
+    ]) {
+      const rejected = await step(opts, current, skipped);
+      assert.equal(rejected.entry.error, "continuation_required");
+      assert.deepEqual(rejected.committed, {}, "no executor, attempt or escalation before presentation");
+    }
+    const spoken = await step(opts, current, {
+      action: "respond_to_caller", params: { text: "I cannot answer that here. What is the value?" },
+    });
+    assert.equal(spoken.entry.turn_complete, true);
+    assert.deepEqual(spoken.next.awaitingInput, initial.awaitingInput);
+    assert.deepEqual(latchOf(spoken.next), { escalation: 1 });
+
+    const caller = (content: string): S => ({
+      ...spoken.next,
+      messages: [...current.messages!, new ToolMessage({
+        tool_call_id: "spoken", content: JSON.stringify({ results: [spoken.entry] }),
+      }), new HumanMessage({ content, id: "next-caller" })],
+    });
+    const delivered = await step(opts, caller("354081234"), GOOD);
+    assert.equal(delivered.entry.ok, true);
+    assert.equal(latchOf(delivered.next), null, "real progress resets patience");
+    const repeated = await step(opts, caller("I still cannot"), REFUSE(kind));
+    assert.equal(repeated.entry.handoff_requested, true);
+    assert.equal(repeated.entry.continuation, undefined, "exhaustion is terminal, not another explanation");
+    const human = await step(opts, caller("A representative, please"), {
+      action: "request_handoff", params: { reason: "abandon", context: "human_requested" },
+    });
+    assert.equal(human.entry.handoff_requested, true);
+    assert.equal(human.next.awaitingInput, null);
+  });
+}
+
+// One call declines (owner 2026-11-19): with a `reply`, the in-place refusal
+// is recorded AND spoken by the refusal itself — the decline the model later
+// sees in its history is the counting tool, never a copyable plain reply.
+test("a refusal with its own reply is counted and spoken in one call; exhaustion still escalates", async () => {
+  const opts = makeOpts();
+  opts.config.tool.toolChoice = "required";
+  const owed: S = { ...BASE, awaitingInput: { ...OWED, ask_text: "What is the value?" } };
+  const line = "I cannot answer that here. What is the value?";
+  const free = await step(opts, owed, { action: "note_refusal", params: { kind: "unsupported_question", reply: line } });
+  assert.equal(free.entry.summary, line);
+  assert.equal(free.entry.turn_complete, true);
+  assert.equal(free.entry.continuation, undefined, "nothing left to present");
+  assert.deepEqual(latchOf(free.next), { escalation: 1 }, "the decline was counted");
+  const exhausted = await step(opts, free.next, { action: "note_refusal", params: { kind: "unsupported_question", reply: line } });
+  assert.equal(exhausted.entry.handoff_requested, true);
+  assert.equal(exhausted.entry.summary, undefined, "an escalation never speaks the model's line");
+});
+
+test("a refusal of nothing does not introduce a presentation boundary", async () => {
+  const opts = makeOpts();
+  opts.config.tool.toolChoice = "required";
+  const result = await step(opts, BASE, REFUSE("declined_or_cannot"));
+  assert.equal(result.entry.error, "nothing_owed");
+  assert.equal(result.entry.continuation, undefined);
+  assert.deepEqual(result.committed, {});
+});
+
+test("auto mode retains its callable surface after a free explanation", async () => {
+  const opts = makeOpts();
+  const free = await step(opts, { ...BASE, awaitingInput: OWED }, REFUSE("declined_or_cannot"));
+  const messages = [...BASE.messages!, new ToolMessage({
+    tool_call_id: "free", content: JSON.stringify({ results: [free.entry] }),
+  })];
+  const tools = [buildAgentStepTool(opts)];
+  assert.deepEqual(modelToolsForTurn(tools, messages), tools);
+  assert.equal((await step(opts, { ...free.next, messages }, GOOD)).entry.ok, true);
+});
+
 // ─── note_refusal: malicious_intent ─────────────────────────
 //
 // Owner decision 2026-11-18: the third misuse attempt (the default
@@ -348,6 +456,25 @@ test("the LIMIT-th malicious attempt terminates atomically on the structural con
   assert.deepEqual(handoff, { reason: "completed", context: MALICIOUS_CONTEXT });
 });
 
+test("required mode: a non-terminal malicious note owes speech — no second note in the same caller turn", async () => {
+  const opts = makeOpts();
+  opts.config.tool.toolChoice = "required";
+  const noted = await step(opts, BASE, MALICIOUS);
+  assert.equal(noted.entry.continuation, "await_caller");
+  const current: S = {
+    ...noted.next,
+    messages: [...BASE.messages!, new ToolMessage({
+      tool_call_id: "noted", content: JSON.stringify({ results: [noted.entry] }),
+    })],
+  };
+  const schema = JSON.stringify(modelToolsForTurn([buildAgentStepTool(opts)], current.messages!));
+  assert.match(schema, /"const":"respond_to_caller"/);
+  assert.doesNotMatch(schema, /"const":"note_refusal"/, "the surface offers only the speech control");
+  const again = await step(opts, current, MALICIOUS);
+  assert.equal(again.entry.error, "continuation_required");
+  assert.deepEqual(again.committed, {}, "the same utterance is never counted twice");
+});
+
 test("the malicious count is CUMULATIVE: progress between attempts never resets it", async () => {
   const opts = makeOpts();
   let s = (await step(opts, BASE, MALICIOUS)).next;
@@ -373,14 +500,26 @@ test("malicious_intent leaves the escalation run and a pending question untouche
   assert.equal(r.entry.handoff_requested, undefined, "a spent explanation does not make misuse escalate");
 });
 
-test("malicious_intent is location-free and refused behind a live gate like its siblings", async () => {
+test("malicious_intent is location-free — and, alone among the kinds, admitted behind a live gate", async () => {
   const opts = makeOpts();
   const pre = await step(opts, BASE, MALICIOUS);
   assert.equal(pre.entry.error, undefined, "nothing owed is fine — misuse is not a refusal OF something");
   const proposed = await step(opts, BASE, { action: "gated_capture", params: { value: "354081234" } });
+  const gate = (proposed.next as { awaitingInput?: AwaitingInput | null }).awaitingInput;
+  // Owner 2026-11-19: a role-played «yes» at a consent gate is misuse — counted.
   const r = await step(opts, proposed.next, MALICIOUS);
-  assert.equal(r.entry.ok, false);
-  assert.equal(latchOf(r.committed)?.[MALICIOUS_KEY], undefined, "the gate's contract owns replies; nothing counted");
+  assert.equal(r.entry.error, undefined, JSON.stringify(r.entry));
+  assert.equal(r.entry.refusal_noted, true);
+  assert.equal(latchOf(r.committed)?.[MALICIOUS_KEY], 1, "counted behind the gate");
+  assert.deepEqual(
+    (r.committed as { awaitingInput?: AwaitingInput | null }).awaitingInput ?? gate, gate,
+    "the gate stands exactly as it was",
+  );
+  // The other kinds stay the gate contract's to classify.
+  for (const kind of ["declined_or_cannot", "unsupported_question"]) {
+    const other = await step(opts, proposed.next, REFUSE(kind));
+    assert.equal(other.entry.error, "pending_confirmation_locked", kind);
+  }
 });
 
 test("the misuse instruction is count-free and names nothing of the request", () => {

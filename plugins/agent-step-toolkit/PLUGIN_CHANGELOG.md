@@ -11,6 +11,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.30.0] — 2026-11-19
+
+Ships **agent-step library 4.1.0** — a minor library release: nothing is removed or renamed and a
+4.0.0 project compiles unchanged. `/pull-library` applies five transforms, all of them checks (see
+[migrations/4.0.0-to-4.1.0.md](migrations/4.0.0-to-4.1.0.md)). A tool can now run under **required
+tool calling**: every model turn is a tool call, speech goes through a library control, misuse is
+classified on every call, and each result bounds the next call. Verdict rows can say what happens
+next apart from `ok`. Library suite 300 → 358 tests; verified by throwaway bootstrap from these
+templates: clean typecheck, 358/358 passing. The required-mode wiring recipe was run as written
+against a stubbed model endpoint. Several engine sentences were reworded and were measured under
+required tool calling only — hosts re-run their live suites after upgrading.
+
+### Added
+- **Library 4.1.0** — `tool.toolChoice: "required"` with the `respond_to_caller` speech control
+  (`{read_back}` / `{ask_text}` / `{reply_text}` placeholders, `clarification` / `choice` reply
+  kinds), the per-call `turn` classification, and `continuation` enforced across calls;
+  `VerdictDef.continuation` / `presentation`; `ActionDef.invalidParamsVerdict`; `note_refusal`
+  `reply`; host helpers `modelToolsForTurn`, `modelToolOptions`, `completedReply`,
+  `toolOnlyMessage`, `renderReplyText`. Details in [CHANGELOG.md](CHANGELOG.md).
+- `agent-step-api.md`: new `<required_mode>` section — the speech control, the turn classification,
+  continuation, the hand-rolled agent-node recipe, and what the mode assumes of the host.
+- **Mode-aware prompt-input harness** (`test-harness-prompt-input.ts.template`) — binds per turn in
+  required mode, records `turn` in history, and exposes `expectSpokenReply`, which holds in both
+  modes.
+- **Channel contract** — what a channel observes from a required-mode agent (one reply chunk, no
+  token stream) and checklist item 9; `audit-middleware-contract-compliance` walks it.
+- **Migration `4.0.0-to-4.1.0.md`** — prose + 5 transforms (reserved result keys, refusal-behind-gate
+  and whole-entry assertions, stale engine quotes, goldens) and the opt-in adoption steps.
+
+### Changed
+- **Tool templates** — `action.ts.template` (`continuation`, `presentation`,
+  `invalidParamsVerdict`), `config.ts.template` (`toolChoice`, tool description),
+  `prompt-input-test.ts.template` (`expectSpokenReply`).
+- **Project templates** — `cli.ts.template` (prints the delivered reply; never model text in
+  required mode), `agent.ts.template` and `prompt.ts.template` (mode notes). The scaffold stays on
+  auto mode.
+- **References reconciled with 4.1.0** — `agent-step-api.md` (types, registers, standing asks,
+  escalation, confirmation lifecycle, batch flow, result envelope, construction checks) and five
+  further references, both create-tool workflows, and the `create-tool` / `test-agent-step` SKILLs.
+- **`document-agent-flow`** — the engine notation covers `continuation`, `presentation`,
+  `invalidParamsVerdict` and the tool-calling mode; `engine_version` examples → 4.1.0; `out/` rebuilt.
+- `plugin.json` / marketplace entry: library version and description (declared continuation,
+  required tool calling).
+
+### Fixed
+- `test-agent-step` SKILL, `agent-step-api.md` and `cli.ts.template` said a result entry never
+  carries both `summary` and `instruction`.
+- `document-agent-flow`: the lockdown description omitted the misuse note a gate now admits.
+- `audit-middleware-contract-compliance` and the root `README.md`: the checklist was described
+  without item 9.
+
+Verified at release on the `document-agent-flow` example: the generator rebuilds and `verify.py`
+passes all 40 checks, the browser checks (headless render in light, dark and 400 px) included. The
+scaffold CLI change was typechecked but not exercised interactively, and the channel observations
+were made in-process — a capture against a live middleware is still owed.
+
 ## [0.29.0] — 2026-11-19
 
 Ships **agent-step library 4.0.0** — a major library release; `/pull-library` is **required** for

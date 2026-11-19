@@ -19,6 +19,8 @@ import {
 } from "./repeat-question.js";
 import { noteRefusalControl, NOTE_REFUSAL_ACTION } from "./note-refusal.js";
 import { HANDOFF_ACTION } from "../handoff/contract.js";
+import { respondToCallerControl } from "./respond-to-caller.js";
+import { RESPOND_TO_CALLER_ACTION } from "../reply.js";
 
 export const CONTROL_REGISTRY: readonly ControlAction[] = [
   abortControl,
@@ -28,6 +30,7 @@ export const CONTROL_REGISTRY: readonly ControlAction[] = [
   // the damper must not shift the four established variants.
   // Same rule: each later addition appends after the established variants.
   noteRefusalControl,
+  respondToCallerControl,
 ];
 
 // All three groups share ENGINE_TEXT.must_be_sole_step (their 3.x summaries
@@ -36,6 +39,12 @@ const soleStepInstruction = (foundAction: string): string =>
   formatMessage(ENGINE_TEXT.must_be_sole_step, { action: foundAction });
 
 export const EXCLUSIVITY_GROUPS: readonly ExclusivityGroup[] = [
+  {
+    name: "reply",
+    memberNames: [RESPOND_TO_CALLER_ACTION],
+    errorCode: "reply_must_be_sole_step",
+    instruction: soleStepInstruction,
+  },
   {
     name: "handoff",
     memberNames: [HANDOFF_ACTION],

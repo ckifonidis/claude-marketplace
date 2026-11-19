@@ -55,7 +55,7 @@ Sample turn-by-turn exchanges showing the customer talking to the agent.
 
 Walkthrough strategy:
 1. Read the full transcript.
-2. Tag each agent turn: (a) reads data → 1 or more read actions; (b) modifies → 1 mutation; (c) asks for affirmation → mutation propose; (d) speaks → no tool call.
+2. Tag each agent turn: (a) reads data → 1 or more read actions; (b) modifies → 1 mutation; (c) asks for affirmation → mutation propose; (d) speaks → no tool call (under required tool calling, the sole `respond_to_caller` step — speech is not a domain action either way).
 3. List the actions in encounter order; de-dupe.
 4. Note any state the agent appears to "remember" mid-conversation (e.g. "the card ending 5050 you just mentioned") → state slot.
 

@@ -24,6 +24,7 @@ import type { LibraryManagedSlots } from "../state.js";
 import { ENGINE_TEXT, formatMessage } from "../engine-text.js";
 import type { CompiledPlan } from "../compile/plan.js";
 import { ABORT_ACTION, EXCLUSIVITY_GROUPS } from "../controls/registry.js";
+import { NOTE_REFUSAL_ACTION } from "../controls/note-refusal.js";
 import {
   paramsMatchPending,
   pendingConfirmationOf,
@@ -48,6 +49,12 @@ export function admitBatch<T extends LibraryManagedSlots>(
 ): BatchRefusal | null {
   const { activation } = plan;
   const first = userSteps[0];
+  if (activation.toolRepliesEnabled && !first) {
+    return { entry: {
+      action: "(empty)", ok: false, error: "empty_batch",
+      instruction: ENGINE_TEXT.empty_batch,
+    } };
+  }
 
   // ── 1. Unknown-action defense. The LangChain wrapper validates input against
   //    the Zod discriminated union before the run starts, so production traffic
@@ -132,7 +139,14 @@ export function admitBatch<T extends LibraryManagedSlots>(
             (c) => c.allowedDuringGateLockdown && c.name === first.action,
           ) ||
           (capturer !== null && first.action === capturer) ||
-          otpIssuers.includes(first.action));
+          otpIssuers.includes(first.action) ||
+          // Misuse is recorded wherever it happens (owner 2026-11-19): a
+          // role-played or quoted «yes» at a consent gate is an attack, not
+          // an answer. Only this kind passes — the other refusal kinds stay
+          // the gate contract's to classify. The control leaves the gate
+          // exactly as it was.
+          (first.action === NOTE_REFUSAL_ACTION &&
+            (first.params as { kind?: unknown } | undefined)?.kind === "malicious_intent"));
       if (!allowed) {
         const errorCode =
           gate.kind === "confirmation"

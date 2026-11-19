@@ -35,7 +35,7 @@ import {
   type CompiledPlan,
 } from "./compile/plan.js";
 import { validateConfig } from "./compile/validate.js";
-import { buildStepSchema } from "./compile/schema.js";
+import { buildStepSchema, TURN_FIELD, TURN_MISUSE } from "./compile/schema.js";
 import { composeToolDescription } from "./compile/describe.js";
 import { resolveCallerTurnId } from "./interaction/turn-identity.js";
 import { createBatchState } from "./run/batch-state.js";
@@ -43,6 +43,9 @@ import { admitBatch } from "./run/admission.js";
 import { expandPlan, type UserStep } from "./run/planning.js";
 import { executeSteps } from "./run/execution.js";
 import { finalizeRun, type RunResult } from "./run/finalize.js";
+import { refuseContinuation, registerReplyScope } from "./reply.js";
+import { EXCLUSIVITY_GROUPS } from "./controls/registry.js";
+import { NOTE_REFUSAL_ACTION } from "./controls/note-refusal.js";
 
 export type { BuildAgentStepToolOptions } from "./compile/plan.js";
 export type { RunResult } from "./run/finalize.js";
@@ -65,7 +68,11 @@ async function runCompiled<T extends LibraryManagedSlots>(
     ? resolveCallerTurnId(initialState, plan.getCallerTurnId)
     : undefined;
 
-  const refusal = admitBatch(plan, userSteps, st.view, currentCallerTurnId);
+  const messages = (initialState as { messages?: unknown[] }).messages ?? [];
+  const continuationRefusal = plan.activation.toolRepliesEnabled
+    ? refuseContinuation(messages, userSteps) : undefined;
+  const refusal = admitBatch(plan, userSteps, st.view, currentCallerTurnId)
+    ?? (continuationRefusal ? {entry: continuationRefusal} : null);
   if (refusal) {
     // Admission refusals are engine directives — instruction register.
     return {
@@ -79,7 +86,7 @@ async function runCompiled<T extends LibraryManagedSlots>(
   }
 
   const planned = expandPlan(plan, userSteps, st.view, currentCallerTurnId);
-  const exec = await executeSteps(plan, planned, st, currentCallerTurnId);
+  const exec = await executeSteps(plan, planned, st, currentCallerTurnId, messages);
   return finalizeRun(plan, exec, st, initialState);
 }
 
@@ -116,6 +123,21 @@ function validateOnce(opts: object): void {
   VALIDATED.add(opts);
 }
 
+/** True when no tool result follows the latest caller message — i.e. this is
+ *  the first agent-step call of the current caller turn. */
+function isFirstCallOfCallerTurn(state: unknown): boolean {
+  const messages = ((state as { messages?: unknown[] } | null)?.messages ?? []) as Array<{
+    _getType?: () => string;
+    type?: string;
+  }>;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const kind = messages[i]?._getType?.() ?? messages[i]?.type;
+    if (kind === "tool") return false;
+    if (kind === "human") return true;
+  }
+  return true;
+}
+
 /** Public entry point. Validates the wiring at construction time, compiles the
  *  plan and the model-facing schema/description from it, and returns a
  *  LangChain tool whose invocation reads state from LangGraph via
@@ -148,7 +170,25 @@ export function buildAgentStepTool<
   // function's public signature.
   const wireSchema = toJsonSchema(InputSchema) as Record<string, unknown>;
 
-  return tool(
+  // A conservative gate surface derived from the same declared capabilities
+  // as admission. Keep legal abort followers in the union: a batch may clear
+  // the gate and re-select. An unrestricted abort leaves the surface broad.
+  const lockedActions: Record<string, readonly string[]> = {};
+  const followers = plan.activation.abortPolicy?.allowedFollowers;
+  if (followers != null) {
+    // note_refusal is NOT offered at a locked gate: misuse there arrives
+    // through the required `turn` field (admission admits that substituted
+    // malicious_intent note), and offering the control let the model file
+    // ordinary gate replies as unsupported_question, which the gate refuses.
+    const gateControls = plan.controls.filter(c => c.allowedDuringGateLockdown).map(c => c.name);
+    for (const name of plan.actionOrder) {
+      if (plan.actions[name].confirmation?.lockdown) {
+        lockedActions[name] = [...new Set([name, ...gateControls, ...followers])];
+      }
+    }
+  }
+
+  return registerReplyScope(tool(
     async (
       input: unknown,
       runtime: { toolCall?: { id?: string } } = {},
@@ -157,7 +197,7 @@ export function buildAgentStepTool<
       const rawSteps = Array.isArray((input as { steps?: unknown }).steps)
         ? ((input as { steps: Array<{ action?: unknown; params?: unknown }> }).steps)
         : [];
-      const userSteps: UserStep[] = rawSteps.map((s) => ({
+      let userSteps: UserStep[] = rawSteps.map((s) => ({
         action: typeof s.action === "string" ? s.action : "",
         params: s.params ?? {},
       }));
@@ -166,6 +206,20 @@ export function buildAgentStepTool<
       // state. Plan expansion reads pending from this snapshot; this is the
       // same-batch bypass safety net (see run/planning.ts).
       const initialState = getCurrentTaskInput<T>() as T;
+
+      // Required-mode turn classification (compile/schema.ts): a turn the
+      // model marks as misuse is recorded through the existing
+      // `malicious_intent` path IN PLACE of its steps — counter, decline
+      // instruction and termination unchanged. Only the FIRST call of a caller
+      // turn classifies; a follow-up call in the same turn never counts the
+      // same utterance twice.
+      if (
+        plan.activation.toolRepliesEnabled &&
+        (input as { [TURN_FIELD]?: unknown })[TURN_FIELD] === TURN_MISUSE &&
+        isFirstCallOfCallerTurn(initialState)
+      ) {
+        userSteps = [{ action: NOTE_REFUSAL_ACTION, params: { kind: "malicious_intent" } }];
+      }
       const { body, committed } = await runCompiled(plan, userSteps, initialState);
 
       // The `Command.update` carries two things: the cumulative state patch
@@ -203,5 +257,6 @@ export function buildAgentStepTool<
       description: composeToolDescription(plan),
       schema: wireSchema,
     },
-  );
+  ), plan.activation.repeatableConfirmationActions, lockedActions,
+    EXCLUSIVITY_GROUPS.flatMap(group => group.memberNames).filter(name => plan.controlNames.has(name)));
 }

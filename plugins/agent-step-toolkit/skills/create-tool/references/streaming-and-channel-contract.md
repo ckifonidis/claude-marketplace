@@ -222,7 +222,11 @@ Three facts that break common middleware assumptions:
    drops **every** token this agent streams.
 2. **The `messages` stream carries ONLY LLM outputs.** Tool messages and node-returned
    state messages never appear there — so `is_handoff` kwargs are **never visible in
-   `messages` mode**. Handoff detection MUST read `updates` events.
+   `messages` mode**. Handoff detection MUST read `updates` events. (Verified on the stack of
+   the date above. On LangGraph JS 1.3.7 an AI message a NODE returns does appear in
+   `messages` events — the required-tool-calling subsection below depends on it, and records
+   what was observed. The mandate is unchanged: detect handoffs in `updates`, and dedupe by
+   message id.)
 3. **The reply node is named `agent`** (createReactAgent) — if the middleware filters
    tokens per node, that filter must include it.
 
@@ -233,6 +237,46 @@ handoff fires — a spoken transition, usually better for voice channels (no dea
 channel prefers a silent/atomic transfer instead, it can take
 `handoff_metadata.success_message` from the kwargs and the prompt can instruct a minimal
 spoken reply.
+
+### Required tool calling (agent-step ≥ 4.1.0) — what the channel observes
+
+An agent whose tool runs with `toolChoice: "required"` (`agent-step-api.md` `<required_mode>`)
+never streams model text. The model's only output is a tool call; the agent node tags that call
+`langsmith:nostream` and drops any prose beside it; and the reply the caller hears is the text
+the model handed to the `respond_to_caller` control — delivered by the agent node, without
+another model call, as ONE message. This mode runs on a hand-rolled graph with the library
+handoff (`resolve_handoff`), not on the `createReactAgent` scaffold, so there is no
+`post_model_hook` event.
+
+Observed in-process on 2026-11-19 — LangGraph JS 1.3.7, `graph.stream` with modes `messages` /
+`updates` / `custom`, the real OpenAI client against a scripted endpoint. NOT yet captured
+against a live middleware or as raw SSE: treat the serialized field names as owed to the wire
+capture in `<testing>`.
+
+| # | Event | Content |
+|---|-------|---------|
+| 1 | `messages` from node `agent` | a CONSOLIDATED AI message carrying the tool call, with EMPTY content — one per model call of the turn (no token chunks) |
+| 2 | `updates` from `agent`, then from `tools` | the tool call, then the tool result |
+| 3 | *(1–2 repeat for each further call of the turn: a workflow call is followed by the presentation call)* | |
+| 4 | `messages` from node `agent` | the spoken reply — ONE message CHUNK holding the complete text, with a fresh message id |
+| 5 | `updates` from `agent` | the same reply as the node's state delta |
+
+What this changes for a middleware:
+
+1. **The reply arrives whole, not token by token.** It is a single chunk with the full text. Do
+   not require several chunks, a trailing consolidated message, or the end of a token stream
+   before speaking it. Time to first audio is the full model latency of the turn's calls.
+2. **Empty-content AI messages precede it.** Forward non-empty content only, and never take the
+   first AI message of a turn to be the reply.
+3. **The reply is a chunk on purpose.** A middleware that forwards chunks and skips consolidated
+   AI messages keeps working: the tool-call messages are consolidated, the reply is not.
+4. **A handoff turn ends at the handoff node.** No model call follows the tool result. On this
+   stack the resolver's final message appears in `messages` events as a consolidated AI message
+   (with the `is_handoff` kwargs) BESIDE the `handoff_complete` custom event carrying the same
+   text — speak it once.
+5. **`streamEvents` is not silenced by `langsmith:nostream`.** A consumer of that API still
+   receives `on_chat_model_stream` events for the model call, including any prose the agent node
+   then drops. Never speak chat-model stream content from a required-mode agent.
 </streaming_facts>
 
 <middleware_requirements>
@@ -276,6 +320,12 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
    `updates` delta. And do NOT route on a `delegated_to`-only final message — no
    `is_handoff` means the conversation STAYS with the agent (the delegate answered through
    it).
+9. **Required-tool-calling agents (agent-step ≥ 4.1.0).** For agents whose tool runs with
+   `toolChoice: "required"`: speak the non-empty content of a message from node `agent` even
+   when it arrives as ONE chunk with no token stream before it; ignore the empty-content
+   tool-call messages that precede it; dedupe by message id; and never speak chat-model stream
+   content taken from an events API. Handoffs are those of item 8 — and where the resolver's
+   final message also shows up in `messages` events, speak the closing once.
 </middleware_requirements>
 
 <testing>
@@ -295,4 +345,10 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
   fixture for the middleware team's stream-processor tests.
 - The `?? null` identity guard is only exercised when identity is ABSENT from the invoke
   input — include one anonymous-caller case in the sandbox tests.
+- **Required tool calling**: at the graph layer, drive the compiled graph with a scripted model
+  (a stubbed endpoint is enough — no live model) and assert the reply reaches the `messages`
+  stream exactly once, from node `agent`, with the model's incidental prose nowhere on the
+  stream or in state. At the wire layer, capture one spoken turn and one handoff turn
+  (`stream_mode: ["messages-tuple","updates","custom"]`) and confirm the five-step order in
+  `<streaming_facts>` against the middleware's stream processor.
 </testing>
