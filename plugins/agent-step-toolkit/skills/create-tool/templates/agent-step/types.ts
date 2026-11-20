@@ -124,6 +124,28 @@ export interface VerdictDef<T = unknown> {
    *  list in the host wiring goes away. Requires `body.error` to be a
    *  static string (validated at construction). */
   backendFailure?: boolean;
+  /** This outcome goes STRAIGHT ON to propose another confirm-gated action,
+   *  inside the same run: the engine opens that action's consent — its
+   *  read-back, attempts, lockdown and reply contract — through the same
+   *  proposal path a first call from the model takes, and the result carries
+   *  the proposal as its next entry. For an outcome whose next question is a
+   *  foregone conclusion (a confirmed capture that binds the very thing a
+   *  consent is about): the caller turn then needs ONE tool call, and the
+   *  model cannot skip, reorder or delay the proposal. Anything batched after
+   *  the step is dropped — a proposal is a caller boundary. `params` builds
+   *  the proposed params from the state view, the executor's `data` and this
+   *  step's own params; omit for `{}`. Only on an `ok: true` row, and it
+   *  excludes `continuation` and `ask` (owner 2026-11-20: a confirmation is
+   *  ONE action call whose own outcome runs everything up to the next
+   *  question). */
+  proposes?: {
+    action: string;
+    params?: (
+      state: unknown,
+      data: Record<string, unknown>,
+      params: Record<string, unknown>,
+    ) => Record<string, unknown>;
+  };
 }
 
 /** The executor return: name the verdict, hand over the dynamic data; the
@@ -367,6 +389,17 @@ export interface ActionDef<PrereqName extends string, T = unknown> {
 export interface ConfirmationOpts {
   maxAttempts?: number;
   lockdown?: boolean;
+  /** Params the caller's consent does NOT cover: `judged` fields the model
+   *  may settle on the executing call (a classification of the conversation,
+   *  never something read back to the caller). They are ignored when a
+   *  re-call is matched against the pending proposal. On execute, a value the
+   *  executing call supplies wins (a theft first mentioned with the yes); one
+   *  it OMITS keeps the proposal's — an omission never silently changes what
+   *  executes. So a judgement that differs between the two calls never
+   *  re-asks the caller, and a proposal the engine opened itself
+   *  (`VerdictDef.proposes`) carries its judgement through to the execute.
+   *  Never list a param the read-back renders. */
+  consentExempt?: readonly string[];
   /** Persist a non-empty `readBack` rendering on the pending confirmation and
    *  inject the built-in `repeat_pending_question` control. The control
    *  may return those exact stored bytes on a later caller turn without

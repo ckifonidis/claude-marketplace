@@ -23,19 +23,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { HumanMessage } from "@langchain/core/messages";
 import { graph } from "./graph.js";
-import { tools } from "./tools/index.js";
-import { RESPOND_TO_CALLER_ACTION } from "./agent-step/index.js";
 
-// Required tool calling (`config.tool.toolChoice: "required"`) is a property
-// of the TOOL: one built in that mode carries the library's speech control.
-// There the model's own text is never what the caller hears — the agent node
-// drops it and delivers the speech control's reply instead — so the stream
-// loop below must not print chat-model text in that mode.
-const REQUIRED_MODE = (tools as readonly unknown[]).some((tool) =>
-  JSON.stringify((tool as { schema?: unknown }).schema ?? null).includes(
-    `"${RESPOND_TO_CALLER_ACTION}"`,
-  ),
-);
+// WHICH CHAT-MODEL TEXT IS THE CALLER'S. A required-mode agent node
+// (`config.tool.toolChoice: "required"`) tags its TOOL-CALL invocation
+// `langsmith:nostream`: that invocation's text is never what the caller hears
+// — the node drops it — yet `streamEvents` still reports it. Its
+// spoken-answer invocation carries no tag, and streams. So one rule serves
+// both tool-calling modes: print chat-model text unless the event carries the
+// tag. A reply the agent node DELIVERS (the speech control's reply, a handoff
+// closing) is no chat-model event at all; the turn's final AI message is
+// printed for it after the stream loop.
+const NOSTREAM_TAG = "langsmith:nostream";
 
 // ─── Persistent input history ───────────────────────────────────────────── //
 
@@ -904,7 +902,10 @@ async function main(): Promise<void> {
       for await (const event of eventStream) {
         if (aborted) break;
 
-        if (event.event === "on_chat_model_stream" && !REQUIRED_MODE) {
+        if (
+          event.event === "on_chat_model_stream" &&
+          !(event.tags ?? []).includes(NOSTREAM_TAG)
+        ) {
           const chunk = event.data?.chunk;
           const content = chunk?.content;
           if (typeof content === "string" && content.length > 0) {
@@ -966,11 +967,11 @@ async function main(): Promise<void> {
       }
 
       if (spinner.isActive()) spinner.stop();
-      // What the caller hears is not always model-streamed text. Under
-      // required tool calling the agent node delivers the speech control's
-      // reply as a node-returned message, and a library handoff's closing is
-      // built by the handoff node — neither is a chat-model stream event. When
-      // no model text was printed, print the turn's final AI message.
+      // What the caller hears is not always model-streamed text. A
+      // required-mode agent node delivers the speech control's reply as a
+      // node-returned message, and a library handoff's closing is built by the
+      // handoff node — neither is a chat-model stream event. When no model
+      // text was printed, print the turn's final AI message.
       if (!aborted && !agentText) {
         const final = await captureState(threadId);
         const last = (

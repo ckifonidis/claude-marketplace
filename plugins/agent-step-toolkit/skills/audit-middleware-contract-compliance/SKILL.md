@@ -1,6 +1,6 @@
 ---
 name: audit-middleware-contract-compliance
-description: Audit a channel middleware implementation — the proxy service that invokes a generated agent's LangGraph API, forwards reply tokens to the client channel, and routes handoffs — against the agent-step wire contract. Walks the middleware's source against the contract's adherence checklist (invoke shape, sync + streaming handoff detection, routing and handback table, stream modes, token dedupe, trigger point, library-handoff custom events, single-chunk replies from required-tool-calling agents) and produces an evidence-backed findings report (file:line per item), with an optional wire-level verification pass against a captured SSE stream. Use when integrating a new middleware with an agent-step agent, reviewing middleware changes that touch streaming or handoff processing, or diagnosing handoff/streaming integration bugs (dropped tokens, truncated transitions, missed or double-fired handoffs).
+description: Audit a channel middleware implementation — the proxy service that invokes a generated agent's LangGraph API, forwards reply tokens to the client channel, and routes handoffs — against the agent-step wire contract. Walks the middleware's source against the contract's adherence checklist (invoke shape, sync + streaming handoff detection, routing and handback table, stream modes, token dedupe, trigger point, library-handoff custom events, whole and token-streamed replies from required-tool-calling agents) and produces an evidence-backed findings report (file:line per item), with an optional wire-level verification pass against a captured SSE stream. Use when integrating a new middleware with an agent-step agent, reviewing middleware changes that touch streaming or handoff processing, or diagnosing handoff/streaming integration bugs (dropped tokens, truncated transitions, missed or double-fired handoffs).
 ---
 
 <objective>
@@ -109,13 +109,17 @@ what follows is where violations of each item hide:
   `is_handoff` means the conversation stays with the agent. See `agent-step-api.md`
   `<handoff>` for the mechanism.
 - **9 — Required-tool-calling agents.** Only when the population includes one (a tool built
-  with `toolChoice: "required"`): the reply is ONE message chunk from node `agent` with no
-  token stream before it, preceded by empty-content tool-call messages. Look for code that
+  with `toolChoice: "required"`): a reply reaches the channel from node `agent` in one of two
+  shapes — ONE message chunk with no token stream before it, or (agent-step ≥ 4.2.0, a result
+  that awaits the caller) a token stream that opens with one empty chunk and closes with two —
+  and every tool call arrives as a consolidated, empty-content message. Look for code that
   waits for several chunks or a stream-end token before speaking, that takes the first AI
-  message of a turn as the reply, or that speaks chat-model stream content from an events API —
-  each is a finding. Where the resolver's final message also arrives in `messages` events
-  beside `handoff_complete`, confirm the closing is spoken once. See the contract's
-  `<streaming_facts>` (required tool calling) and `agent-step-api.md` `<required_mode>`.
+  message or the first non-empty chunk of a turn as the whole reply, that fails on an
+  empty-content chunk, or that speaks chat-model stream content tagged `langsmith:nostream`
+  from an events API — each is a finding. Where the resolver's final message also arrives in
+  `messages` events beside `handoff_complete`, confirm the closing is spoken once. See the
+  contract's `<streaming_facts>` (required tool calling) and `agent-step-api.md`
+  `<required_mode>`.
 
 Evidence discipline: **no item is `compliant` without a file:line.** If the responsible code
 can't be located or the behavior can't be determined statically, the status is `unverifiable`
@@ -163,7 +167,10 @@ interleaving. When the user wants the dynamic layer, or Phase 4 left items `unve
 1. **Capture a golden fixture**: a raw SSE stream of a handoff turn from an agent dev server
    (`POST /threads/{id}/runs/stream`, `stream_mode: ["messages-tuple","updates"]` — plus
    `"custom"` for a library-handoff agent), per the contract doc's `<testing>` section. Assert
-   the capture itself shows the four-phase event order before using it.
+   the capture itself shows the four-phase event order before using it. For a
+   required-tool-calling agent, capture one turn of each reply shape as well — a reply delivered
+   whole and (agent-step ≥ 4.2.0) one streamed as tokens — and check them against the two event
+   tables in `<streaming_facts>`.
 2. **Replay or observe**: feed the fixture through the middleware's stream processor (if it's
    testable in isolation), or run a live turn through the deployed middleware, and check the
    observable outcomes — every spoken token reached the channel, the transfer fired only after

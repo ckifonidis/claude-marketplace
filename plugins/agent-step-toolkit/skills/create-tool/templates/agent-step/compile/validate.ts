@@ -165,6 +165,28 @@ export function validateConfig(opts: ValidatableOptions): void {
       for (const field of ["continuation", "reply_text"]) {
         if (field in (row.body ?? {})) throw new Error(`agent-step: ${name}.${key}.${field} is engine-owned; declare it on the row.`);
       }
+      if (row.proposes !== undefined) {
+        const target = (config.actions as Record<string, { controller?: { requiresConfirmation?: unknown } }>)[row.proposes.action];
+        if (!target?.controller?.requiresConfirmation) {
+          throw new Error(`agent-step: ${name}.${key}.proposes must name a confirm-gated action.`);
+        }
+        if (row.ok !== true || row.continuation !== undefined || row.ask || row.backendFailure ||
+            row.effects?.some(e => e.type === "request_handoff")) {
+          throw new Error(`agent-step: ${name}.${key}.proposes belongs on a plain ok row — no continuation, ask, backendFailure or handoff.`);
+        }
+      }
+    }
+    // A consent-exempt param must be a declared JUDGED field: only a
+    // classification may differ between the proposing and the executing call.
+    const gate = (action as { controller?: { requiresConfirmation?: unknown } }).controller?.requiresConfirmation;
+    const exempt = gate && typeof gate === "object" ? (gate as { consentExempt?: readonly string[] }).consentExempt ?? [] : [];
+    if (exempt.length > 0) {
+      const shape = objectShapeOf((action as { paramsSchema?: unknown }).paramsSchema) ?? {};
+      for (const field of exempt) {
+        if (!shape[field] || fieldKindOf(shape[field]) !== "judged") {
+          throw new Error(`agent-step: ${name}.requiresConfirmation.consentExempt names "${field}", which is not a judged param of the action.`);
+        }
+      }
     }
   }
   for (const [name, action] of Object.entries(config.actions)) {

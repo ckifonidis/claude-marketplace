@@ -11,6 +11,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.31.0] — 2026-11-20
+
+Ships **agent-step library 4.2.0** — a minor library release: nothing is removed or renamed, the
+model surface is byte-identical in both modes, and a 4.1.1 project compiles unchanged. Under
+required tool calling a caller turn is now ONE tool call followed by a spoken answer that streams:
+a result that awaits the caller is answered by one more model invocation with calls switched off.
+A verdict row can open the next consent itself (`proposes`), and a gate can leave judged params out
+of the consent match (`consentExempt`). `/pull-library` applies five transforms (see
+[migrations/4.1.1-to-4.2.0.md](migrations/4.1.1-to-4.2.0.md)): two are checks for required-mode
+projects, and three are the spoken-answer rewrite, which is opt-in and asks first. Auto-mode
+projects need the library replacement only. Six known issues ship with the library and are
+documented. Library suite 357 → 364 tests; verified by throwaway bootstrap from these templates:
+clean typecheck, 364/364 passing. The three-step agent-node recipe, the prompt-input harness and
+the scaffold CLI were each run against a stubbed model endpoint, in both tool-calling modes.
+
+### Added
+- **Library 4.2.0** — the spoken-answer helpers `speechOwed`, `modelToolsForSpeech`,
+  `speechToolOptions` and `spokenMessage`; `VerdictDef.proposes`; `ConfirmationOpts.consentExempt`.
+  Details in [CHANGELOG.md](CHANGELOG.md).
+- `agent-step-api.md`: "The spoken answer" — when it runs, what it gives up against the speech
+  control, how it fails — with the three-step agent-node recipe; `proposes` and `consentExempt`
+  with the behaviour each was probed for; and a new `<known_issues>` section.
+- **Prompt-input harness** (`test-harness-prompt-input.ts.template`) — runs the spoken-answer
+  invocation when the history ends in a result that awaits the caller: `TurnResult.spokenAnswer`,
+  `text` as the model's plain text, and a `SPOKEN_ANSWER_WIRED` switch for a host that leaves the
+  step out. This is the layer that pins a consent question's spoken text.
+- `document-agent-flow`: `proposes:action_name` in the row notation; `consentExempt` in the gate
+  catalog row.
+
+### Changed
+- **Required mode: a standing ask ends the turn's calls** (library behaviour): a value the caller
+  already volunteered rides the same batch as the step that asks for it.
+- `streaming-and-channel-contract.md`: the required-tool-calling subsection describes both reply
+  shapes — one whole chunk, or a token stream bracketed by empty chunks — with an event table for
+  each, now backed by a raw SSE capture; checklist item 9 and the testing bullets follow, as does
+  `audit-middleware-contract-compliance` (item 9, the wire-verification step, the description).
+- **Scaffold CLI** (`cli.ts.template`) — prints chat-model text unless the event is tagged
+  `langsmith:nostream`, in place of suppressing it for the whole of required mode: a spoken answer
+  shows as it streams, and a delivered reply is still printed from the turn's final message.
+- Template comments (`action`, `config`, `agent`, `prompt`, `prompt-input-test`), six reference
+  docs, `test-agent-step` (the spoken answer and `proposes` at their layers), and the
+  maintainer-side tracked-assets map.
+- `document-agent-flow`: `engine_version` examples → 4.2.0; the pizza example's `out/` rebuilt
+  (`verify.py` passes, browser checks included).
+- `plugin.json` / marketplace entry: library version, the required-mode clause and `proposes` in
+  the description.
+
+### Fixed
+- `test-agent-step/SKILL.md`: the library suite list in step 4 names `proposes`.
+
+### Known issues
+- Six, shipped with library 4.2.0 and listed in [CHANGELOG.md](CHANGELOG.md) and in
+  `agent-step-api.md` `<known_issues>`: a spoken answer is not checked against the result's fixed
+  text; `consentExempt` carries a judgement forward on the execute only; a proposal opened by
+  `proposes` always starts with full attempts; a row may propose its own action; params from
+  `proposes.params` that the target rejects read as a failed caller capture; and `spokenMessage`
+  reads string content only.
+
 ## [0.30.1] — 2026-11-20
 
 Ships **agent-step library 4.1.1** — a patch: one sentence of the required-mode protocol fragment

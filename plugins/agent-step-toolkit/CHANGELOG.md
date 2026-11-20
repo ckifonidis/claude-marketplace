@@ -12,6 +12,90 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [4.2.0] — 2026-11-20
+
+Minor: **one tool call per caller turn, then a spoken answer that streams.** Under required tool
+calling, a result that awaits the caller is now answered by one more model invocation with calls
+switched off, whose plain text streams to the channel — where 4.1 made a second tool call and
+delivered the reply whole. Time to first audio is the reason. Measured through the reference host's
+voice channel on 2026-11-20, the first audio of a consent recap moved from the end of the reply
+(5.6 s) to 1.7 s, and the median turn shortened by about a second. Two additions keep a caller turn
+at one call: a verdict row can open the next consent itself (`proposes`), and a gate can leave
+judged params out of the consent match (`consentExempt`). Nothing is removed or renamed, the model
+surface is byte-identical in both modes, and auto mode is untouched. Two things do move in required
+mode: a standing ask now ends the turn's calls, and a streamed answer is not checked against the
+result's fixed text. Six known issues ship with this version and are listed below.
+Migration: [migrations/4.1.1-to-4.2.0.md](migrations/4.1.1-to-4.2.0.md).
+
+### Added
+- **The spoken answer** — four host helpers in `reply.ts`, exported from `index.ts`, for a third
+  step in the required-mode agent node (`completedReply` first, then these, then the tool call):
+  - `speechOwed(messages)` — true when the latest result of this caller turn says
+    `continuation: "await_caller"`. The engine's result decides which invocation speaks; the model
+    never chooses between speaking and calling.
+  - `modelToolsForSpeech(tools, messages)` — the surface to bind: the scoped surface a fresh caller
+    turn sees, so the prompt prefix is shared with the tool-call invocations around it.
+  - `speechToolOptions()` — `{ tool_choice: "none" }`: tools visible, no call possible.
+  - `spokenMessage(response)` — the response as the node's message; throws on a tool call or on
+    empty text.
+  The invocation carries no `langsmith:nostream` tag, so its tokens stream. The wiring is opt-in: a
+  host that leaves the step out keeps the 4.1 presentation through `respond_to_caller`.
+- **`VerdictDef.proposes?: { action, params? }`** — an `ok: true` row goes straight on to propose
+  another confirm-gated action inside the same run. The proposal takes the ordinary propose path
+  from the flow and prerequisite checks onward (prereqs, params schema, `refuseProposal`,
+  `readBack`, the stored gate, the reply contract) and is the next entry of the same result;
+  steps batched after the proposing step are dropped. `params(state, data, params)` builds the
+  proposed params from the state view after the step's writes, the executor's `data` and the
+  step's own parsed params. Works in both tool-calling modes.
+- **`ConfirmationOpts.consentExempt?: readonly string[]`** — `judged` params the caller's consent
+  does not cover. They are left out when a re-call is matched against the pending proposal; on the
+  execute, one the re-call omits takes the stored proposal's value and one it supplies wins.
+- Construction checks: `.proposes must name a confirm-gated action`, `.proposes belongs on a plain
+  ok row` (no `continuation`, `ask`, `backendFailure` or handoff effect), and
+  `.requiresConfirmation.consentExempt names "…", which is not a judged param of the action`.
+- `proposes.test.ts` — 7 tests over both additions. Library suite: 364 tests.
+
+### Changed
+- **Required mode: a standing ask ends the turn's calls.** `run/finalize.ts` now stamps
+  `continuation: "await_caller"` on any final entry that carries `standing_ask` or `ask_text`;
+  until 4.1.1 only a proposal, a `read_back`, and an `invalid_params` bounce that left a standing
+  ask were stamped. A second call in the same caller turn is refused (`continuation_required`)
+  unless it is the speech step, so a value the caller already volunteered must ride the SAME batch
+  as the step that asks for it. There is no opt-out: a row with an `ask` may declare no
+  continuation other than `"await_caller"`. Result bodies move; the model surface does not.
+- **What a required-mode agent puts on the stream**, once the spoken answer is wired: the tool
+  call is one consolidated, empty-content message; a spoken answer is a token stream that opens
+  with one empty chunk and closes with two, under one message id; a reply delivered by
+  `completedReply` is still one whole chunk. A middleware that speaks non-empty content from node
+  `agent` as it arrives needs no change (`streaming-and-channel-contract.md`).
+- `reply.ts` — the host-wiring header states the three-step agent node.
+
+### Known issues
+- **A spoken answer is not checked against the result's fixed text.** On the streamed path the
+  model transcribes `read_back`, `ask_text` and `reply_text`; the engine neither inserts nor
+  verifies them. `spokenMessage` accepts any non-empty string — a literal `{read_back}`, a reworded
+  consent question, call-shaped JSON written as text — and "nothing added" after
+  `repeat_pending_question` is the result's directive only. This is the accepted price of
+  streaming; the check remains on the `respond_to_caller` path. Two library comments still state
+  the checked behaviour without this limit: `VerdictDef.presentation` in `types.ts` and the wiring
+  header of `reply.ts`.
+- **`consentExempt` carries a judgement forward on the execute only.** A re-proposal whose call
+  omits the exempt param stores exactly what that call sent, so the earlier judgement is gone and
+  the execute runs without it; `abort_pending_input` followed by a fresh proposal loses it the same
+  way; and an explicit value on the executing call replaces the proposed one (`false` over a
+  proposed `true`). A judgement that must survive a correction belongs in state.
+- **A proposal opened by `proposes` always starts with the target's full `maxAttempts`.** With
+  `lockdown: false`, re-running the proposing action while its target is pending re-opens the gate
+  at full attempts every time, where a re-proposal made by the model counts down to
+  `confirmation_attempts_exhausted`. Not reachable under the default lockdown.
+- **A row may propose its own action.** Construction accepts it, and every execute then re-opens
+  the same gate.
+- **Params from `proposes.params` that the target's schema rejects read as a failed caller
+  capture**: the entry is `invalid_params` with the instruction to ask the caller for the value
+  again, although the caller supplied nothing.
+- **`spokenMessage` reads string content only.** A response whose content is an array of blocks is
+  rejected as empty even when a block carries text.
+
 ## [4.1.1] — 2026-11-20
 
 Patch: **the required-mode READ-BACK repeat sentence returns to its measured wording.** 4.1.0

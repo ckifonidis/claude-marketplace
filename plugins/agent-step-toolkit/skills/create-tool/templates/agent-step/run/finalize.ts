@@ -190,10 +190,13 @@ export function finalizeRun<T extends LibraryManagedSlots>(
   if (plan.activation.toolRepliesEnabled) {
     const last = body.results.at(-1);
     if (last && !last.turn_complete && !last.isHandoff) {
-      // A standing ask alone is not a turn barrier: the caller may already
-      // have volunteered the next value. Only a rejected capture, a rendered
-      // read-back, or an explicit verdict continuation requires a new answer.
-      if (last.needs_confirmation || last.read_back || (last.error === "invalid_params" && last.standing_ask)) {
+      // One tool call per caller turn (owner 2026-11-20): a result that leaves
+      // the caller owing an answer — a proposal, a rendered read-back, or a
+      // standing ask for a value — ends the turn's calls, and the model's next
+      // message is the spoken answer (reply.ts `speechOwed`). A caller who
+      // already volunteered the next value is served by the SAME call's batch,
+      // not by a second call. An explicit verdict continuation still wins.
+      if (last.needs_confirmation || last.read_back || last.standing_ask || last.ask_text) {
         last.continuation ??= "await_caller";
       }
     }

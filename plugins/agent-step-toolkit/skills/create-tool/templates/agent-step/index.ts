@@ -45,7 +45,7 @@ export type { AbortPolicy } from "./controls/contract.js";
 // `modelToolsForTurn(tools, messages)` with `modelToolOptions(config)`, wraps
 // the response in `toolOnlyMessage`, and delivers `completedReply` from its
 // agent node. reply.ts states the wiring and what the mode assumes of the host.
-export { completedReply, modelToolOptions, modelToolsForTurn, renderReplyText, toolOnlyMessage, RESPOND_TO_CALLER_ACTION } from "./reply.js";
+export { completedReply, modelToolOptions, modelToolsForSpeech, modelToolsForTurn, renderReplyText, speechOwed, speechToolOptions, spokenMessage, toolOnlyMessage, RESPOND_TO_CALLER_ACTION } from "./reply.js";
 // The required-mode turn classification as it appears in the tool call's
 // arguments — exported so a host harness that scripts or records calls reads
 // the wire names from the library instead of mirroring the literals.

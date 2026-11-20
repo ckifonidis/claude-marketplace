@@ -33,6 +33,8 @@ export type NormalizedConfirmation = Omit<Required<ConfirmationOpts>, "replyCont
 export const CONFIRMATION_DEFAULTS: NormalizedConfirmation = {
   maxAttempts: 3,
   lockdown: true,
+  // Every param is part of the consent unless the gate says otherwise.
+  consentExempt: [],
   repeatReadBack: false,
   // No read-back by default: a host that does not render one keeps handing the
   // model raw `proposed_params`, exactly as before this option existed.
@@ -56,6 +58,7 @@ export function normalizeConfirmation(
   return {
     maxAttempts: v.maxAttempts ?? CONFIRMATION_DEFAULTS.maxAttempts,
     lockdown: v.lockdown ?? CONFIRMATION_DEFAULTS.lockdown,
+    consentExempt: v.consentExempt ?? CONFIRMATION_DEFAULTS.consentExempt,
     repeatReadBack: v.repeatReadBack ?? CONFIRMATION_DEFAULTS.repeatReadBack,
     readBack: v.readBack ?? CONFIRMATION_DEFAULTS.readBack,
     readBackDirective: v.readBackDirective ?? CONFIRMATION_DEFAULTS.readBackDirective,
@@ -126,7 +129,15 @@ export function paramsMatchPending(
 ): boolean {
   const parsed = action.effectiveSchema.safeParse(rawIncoming);
   if (!parsed.success) return false;
-  return valueEqual(pendingParams, parsed.data);
+  const exempt = action.confirmation?.consentExempt ?? [];
+  if (exempt.length === 0) return valueEqual(pendingParams, parsed.data);
+  // Judged params the consent does not cover (`ConfirmationOpts.consentExempt`)
+  // are not part of the match: the caller confirmed what was read back.
+  const covered = (value: unknown): unknown => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !exempt.includes(key)));
+  };
+  return valueEqual(covered(pendingParams), covered(parsed.data));
 }
 
 /** Confirm-mode state machine assigned during plan expansion:

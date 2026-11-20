@@ -558,6 +558,9 @@ export async function executeSteps<T extends LibraryManagedSlots>(
     // declared return so the standing-ask lifecycle can key on the ROW rather
     // than on the wire verdict (two rows may emit the same wire code).
     let rowKey: string | undefined;
+    // The executor's dynamic values, kept for a row that goes straight on to
+    // propose another action (`VerdictDef.proposes`).
+    let rowData: Record<string, unknown> = {};
     anExecutorRan = true; // set before the call — a throw still counts as ran
     try {
       // The declarative return ({verdict, data, …}) is composed into the
@@ -575,6 +578,7 @@ export async function executeSteps<T extends LibraryManagedSlots>(
           : undefined;
       const declared = await executor(params, slice, satisfiedSource);
       rowKey = declared.verdict;
+      rowData = declared.data ?? {};
       result = normalizeExecutorResult(step.action, action, declared, st.view);
     } catch (err) {
       // Executors — and the fetchers / backend client they call — throw on
@@ -781,6 +785,21 @@ export async function executeSteps<T extends LibraryManagedSlots>(
     // Handoff monotonicity: an ok step that requested a handoff still ends
     // the batch — later steps must not run.
     if (handoffSet) break;
+    // The outcome goes straight on to PROPOSE a confirm-gated action
+    // (`VerdictDef.proposes`): it becomes the next planned step, so the
+    // consent is opened by the very proposal path below — read-back, attempts,
+    // lockdown, reply contract — as if the model had made that first call.
+    // Whatever the model batched after this step is dropped: the proposal is
+    // a caller boundary, and its entry ends the batch.
+    const proposes = rowKey === undefined ? undefined : action.verdicts[rowKey]?.proposes;
+    if (proposes && result.ok) {
+      planned.splice(planned.indexOf(step) + 1, planned.length, {
+        action: proposes.action,
+        params: proposes.params?.(st.view, rowData, params as Record<string, unknown>) ?? {},
+        confirmMode: "propose",
+      });
+      continue;
+    }
     // A successful question is still a caller boundary. Do not run the
     // remainder of a speculative batch or ask the model to invent an answer.
     if (continuation && continuation !== "continue") break;

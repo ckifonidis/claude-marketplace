@@ -13,13 +13,17 @@
 //     1. `completedReply(messages)` — when it returns a chunk, return that as
 //        the node's message and make NO model call: the reply the model
 //        already supplied to the control is delivered exactly once.
-//     2. otherwise bind `modelToolsForTurn(tools, messages)` with
+//     2. `speechOwed(messages)` — the turn's tool call returned a result the
+//        caller must hear: bind `modelToolsForSpeech(tools, messages)` with
+//        `speechToolOptions()`, invoke WITHOUT the `langsmith:nostream` tag (the
+//        answer streams), and return `spokenMessage(response)`.
+//     3. otherwise bind `modelToolsForTurn(tools, messages)` with
 //        `modelToolOptions(config)`, invoke with the `langsmith:nostream` tag,
 //        and return `toolOnlyMessage(response)`.
 //   edges
 //     agent → tools while the last message carries a tool call, else END;
 //     tools → the handoff node when a handoff was requested, else agent (the
-//     pass that lets step 1 deliver the reply).
+//     pass that delivers or speaks the result).
 //
 // WHAT THE MODE ASSUMES OF THE HOST. The library checks none of these; most
 // violations do not throw — the surface silently stops being narrowed:
@@ -141,6 +145,46 @@ function scopeReplyKinds<T>(tool: T, result: Record<string, unknown> | undefined
  *  could then execute twice, which the runner cannot see from inside a call. */
 export function modelToolOptions(config: { tool: { toolChoice?: "auto" | "required" } }) {
   return { parallel_tool_calls: false, tool_choice: config.tool.toolChoice ?? "auto" } as const;
+}
+
+/** Is the next model invocation the SPOKEN ANSWER? True when the latest result
+ *  of this caller turn says `continuation: "await_caller"` — a proposal's
+ *  read-back, a verbatim question, an ask for a value, a rejected capture, an
+ *  in-place decline. The caller turn has made its tool call; what remains is
+ *  to tell the caller, so the model is invoked with calls switched off
+ *  (`speechToolOptions`) and its plain text streams to the channel. The
+ *  engine's result decides this — the model never chooses between speaking and
+ *  calling. Check `completedReply` first: a reply already carried by a speech
+ *  control is delivered without a model call. */
+export function speechOwed(messages: readonly unknown[]): boolean {
+  return continuationOf(latestResult(messages)) === "await_caller";
+}
+
+/** The bind options for the SPOKEN ANSWER invocation: the tools stay visible —
+ *  the model reads the result it is presenting against their descriptions —
+ *  but no call can be made. Invoke WITHOUT the `langsmith:nostream` tag, so
+ *  the text streams. */
+export function speechToolOptions() {
+  return { tool_choice: "none" } as const;
+}
+
+/** The tool surface to bind for the SPOKEN ANSWER invocation: the scoped
+ *  surface a fresh caller turn sees, so the prompt prefix is shared with the
+ *  tool-call invocations around it. */
+export function modelToolsForSpeech<T>(tools: T[], messages: readonly unknown[]): T[] {
+  const context = latestResult(messages, true);
+  return tools.map(tool => scopeReplyKinds(tool, context));
+}
+
+/** The model's spoken answer as the node's message. Throws when the response
+ *  carries a tool call or no text — neither is a legal answer to a result that
+ *  awaits the caller; the host owns the retry policy. */
+export function spokenMessage(response: AIMessage): AIMessage {
+  const text = typeof response.content === "string" ? response.content : "";
+  if (response.tool_calls?.length || response.invalid_tool_calls?.length || !text.trim()) {
+    throw new Error("Spoken answer must be non-empty text without a tool call.");
+  }
+  return response;
 }
 
 /** The tool surface for ONE model invocation. Call it on every invocation,

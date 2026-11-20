@@ -73,11 +73,28 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
       //   presentation: "verbatim",                      // rides the result again as `reply_text`
       // Both stop/continue the batch in either tool-calling mode; required
       // mode (`toolChoice: "required"`) also enforces them across calls within
-      // the caller turn and inserts `reply_text` itself. A row with an `ask`
-      // may only declare "await_caller"; a `backendFailure` row or one carrying
-      // a `request_handoff` effect declares none. `continuation` / `reply_text`
+      // the caller turn. There, a result that ends in "await_caller" is spoken
+      // by the model as STREAMED text (4.2.0) — and `reply_text` is then
+      // transcribed, not inserted: nothing checks it. A verbatim row WITHOUT
+      // "await_caller" is presented through the speech control, which inserts
+      // and checks the bytes. A row with an `ask` may only declare
+      // "await_caller"; a `backendFailure` row or one carrying a
+      // `request_handoff` effect declares none. `continuation` / `reply_text`
       // are engine-owned names — never use them as `body` keys.
       // See agent-step-api.md <required_mode>.
+      //
+      // GO STRAIGHT ON TO THE NEXT CONSENT (4.2.0). When this outcome's next
+      // question is a foregone conclusion — it binds the very thing a
+      // confirm-gated action is about — let the engine open that proposal in
+      // the SAME result, so the caller turn needs one tool call:
+      //   proposes: {
+      //     action: "{{GATED_ACTION}}",                        // must declare requiresConfirmation
+      //     params: (state, data, params) => ({ /* … */ }),   // optional; omitted → {}
+      //   },
+      // Only on a plain `ok: true` row (no continuation / ask / backendFailure
+      // / handoff effect). Steps batched after this one are dropped. Keep the
+      // builder inside the target's params schema, and never name this row's
+      // own action. See agent-step-api.md <declared_verdicts>, <known_issues>.
     },
     {{FAILURE_VERDICT}}: {
       ok: false,
@@ -162,6 +179,13 @@ export const {{ACTION_CAMEL}}Action: ActionDef<PrereqName, State> = {
     // requiresConfirmation opts:
     //   maxAttempts — re-propose budget before the gate exhausts (default 3).
     //   lockdown    — defaults to true (unrelated batches refused while pending).
+    //   consentExempt — (4.2.0) names of `judged` params (judgedFlag /
+    //                 judgedEnum) the caller's consent does NOT cover: ignored
+    //                 when a re-call is matched against the proposal; on the
+    //                 execute an omitted one keeps the proposal's value, a
+    //                 supplied one wins. Never a param the read-back renders.
+    //                 The carry-forward is execute-only — a judgement that
+    //                 must survive a correction belongs in state.
     //   readBack    — (params, state) => string: render what the RUNNER
     //                 recorded so the model speaks it back verbatim. Add it
     //                 whenever params carry caller-dictated digits.

@@ -38,6 +38,27 @@ export interface PlannedStep extends UserStep {
   proposeAttemptsLeft?: number;
 }
 
+/** The params an EXECUTE runs with. A consent-exempt param
+ *  (`ConfirmationOpts.consentExempt`) is not part of the match, so the re-call
+ *  may omit it; the stored proposal's value then still applies — an omission
+ *  must never silently change what executes (a theft proposal re-called as `{}`
+ *  would otherwise close as a loss). A value the re-call does supply wins. */
+function withExemptFromPending(
+  exempt: readonly string[],
+  pendingParams: unknown,
+  incoming: unknown,
+): unknown {
+  if (exempt.length === 0) return incoming;
+  if (!pendingParams || typeof pendingParams !== "object" || Array.isArray(pendingParams)) return incoming;
+  if (incoming != null && (typeof incoming !== "object" || Array.isArray(incoming))) return incoming;
+  const merged: Record<string, unknown> = { ...((incoming ?? {}) as Record<string, unknown>) };
+  for (const key of exempt) {
+    const stored = (pendingParams as Record<string, unknown>)[key];
+    if (merged[key] === undefined && stored !== undefined) merged[key] = stored;
+  }
+  return merged;
+}
+
 export function expandPlan<T extends LibraryManagedSlots>(
   plan: CompiledPlan<T>,
   userSteps: UserStep[],
@@ -64,7 +85,9 @@ export function expandPlan<T extends LibraryManagedSlots>(
       );
       planned.push({
         action: s.action,
-        params: s.params,
+        params: decision.mode === "execute"
+          ? withExemptFromPending(action.confirmation.consentExempt, effectivePending?.params, s.params)
+          : s.params,
         confirmMode: decision.mode,
         ...(decision.attemptsLeft !== undefined
           ? { proposeAttemptsLeft: decision.attemptsLeft }

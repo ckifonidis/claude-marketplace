@@ -26,11 +26,13 @@ export const {{TOOL_NAME}}Config = defineConfig<ActionName, PrereqName, State>({
     // ─── Tool-calling mode (optional, 4.1.0) ─── //
     // Default "auto": the model answers with text or calls this tool — the
     // mode the bootstrap graph (src/agent.ts, createReactAgent) is wired for.
-    // "required": EVERY model turn is one call to this tool; speech becomes
-    // the library's `respond_to_caller` control and each call classifies the
-    // caller turn. It is NOT a one-line switch: it needs the hand-rolled agent
-    // node and assumes this is the only tool bound to the model — follow
-    // agent-step-api.md <required_mode> before enabling it.
+    // "required": the model must call this tool before anything is said. A
+    // turn that only speaks goes through the library's `respond_to_caller`
+    // control, each call classifies the caller turn, and a result that awaits
+    // the caller is answered by one more invocation with calls switched off,
+    // whose text streams (4.2.0). It is NOT a one-line switch: it needs the
+    // hand-rolled agent node and assumes this is the only tool bound to the
+    // model — follow agent-step-api.md <required_mode> before enabling it.
     // toolChoice: "required",
   },
   actions: {

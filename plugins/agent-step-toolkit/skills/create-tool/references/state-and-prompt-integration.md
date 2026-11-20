@@ -129,7 +129,8 @@ The fragment follows the tool's calling mode. With `config.tool.toolChoice: "req
 4.1.0) it composes the required-mode protocol — speech through the `respond_to_caller` control,
 `continuation`, the READ-BACK placeholders — and the rest of the prompt must then never say "answer
 without a tool call" or "make no call": write WHAT to convey and let the fragment own how a reply is
-delivered. A guardrail section points at the call's `turn` classification rather than redefining
+delivered. The streamed spoken answer (4.2.0) runs on the same prompt, with calls switched off by the
+graph: add no prompt text for it, and do not tell the model when to speak rather than call. A guardrail section points at the call's `turn` classification rather than redefining
 misuse. See `agent-step-api.md` `<required_mode>`.
 
 ### 1. SCOPE

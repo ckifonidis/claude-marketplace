@@ -206,6 +206,7 @@ Expected: the dev server starts cleanly. If it throws `agent-step: ...` at start
 - `verifiers["xxx"]` missing for an action's prereq
 - action `abort_pending_input` declared (reserved name — library auto-injects it; likewise `request_handoff` / `note_refusal` with `handoff`, `repeat_pending_question` with a `repeatReadBack` gate, `respond_to_caller` with `toolChoice: "required"`)
 - a verdict row's `continuation` names an unknown action, pairs anything but `"await_caller"` with an `ask`, or sits on a `backendFailure` row or one carrying a `request_handoff` effect; a row `body` uses the engine-owned key `continuation` / `reply_text`
+- a verdict row's `proposes` names an action that is not confirm-gated, or sits on a row that is not a plain `ok: true` row (one with a `continuation`, an `ask`, `backendFailure` or a `request_handoff` effect); a gate's `consentExempt` names something that is not a `judged` param of the action
 - a `controller` hook (e.g. `issuesOtp.consumer_action`, `requiresMatch.capturer`) names an action that doesn't exist
 
 ```bash

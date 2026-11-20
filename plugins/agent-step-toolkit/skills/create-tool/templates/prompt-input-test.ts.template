@@ -18,8 +18,12 @@
 // in-domain routed, out-of-domain steer-back line with no action.
 //
 // "A spoken reply and no action" is `expectSpokenReply`, in either
-// tool-calling mode: no tool call in auto mode, the sole `respond_to_caller`
-// step in required mode (`toolChoice: "required"`).
+// tool-calling mode: no tool call in auto mode; in required mode
+// (`toolChoice: "required"`) the sole `respond_to_caller` step, or — when the
+// history ends in a result that awaits the caller — the spoken answer itself.
+// The engine does not check a spoken answer against the result it presents,
+// so pin every consent question here: play the turn that produced it and
+// assert its fixed bytes with `expectContentMatches`.
 //
 // GATED: skipped unless PROMPT_INPUT_LIVE=1 (+ Azure OpenAI creds). Live model,
 // costs money. When iterating, target this compiled file directly rather than

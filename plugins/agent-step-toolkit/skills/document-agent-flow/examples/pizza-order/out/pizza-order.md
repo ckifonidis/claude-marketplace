@@ -4,7 +4,7 @@ The ladder a phone agent walks to take one pizza order, from greeting to deliver
 
 **Source of truth for the flow:** the product owner's call walkthrough (synthetic).
 
-**Step engine:** agent-step 4.1.1.
+**Step engine:** agent-step 4.2.0.
 
 | File | What it holds |
 |---|---|

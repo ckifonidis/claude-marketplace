@@ -238,45 +238,72 @@ channel prefers a silent/atomic transfer instead, it can take
 `handoff_metadata.success_message` from the kwargs and the prompt can instruct a minimal
 spoken reply.
 
-### Required tool calling (agent-step ≥ 4.1.0) — what the channel observes
+### Required tool calling (agent-step ≥ 4.1.0; streamed spoken answer ≥ 4.2.0) — what the channel observes
 
-An agent whose tool runs with `toolChoice: "required"` (`agent-step-api.md` `<required_mode>`)
-never streams model text. The model's only output is a tool call; the agent node tags that call
-`langsmith:nostream` and drops any prose beside it; and the reply the caller hears is the text
-the model handed to the `respond_to_caller` control — delivered by the agent node, without
-another model call, as ONE message. This mode runs on a hand-rolled graph with the library
-handoff (`resolve_handoff`), not on the `createReactAgent` scaffold, so there is no
+An agent whose tool runs with `toolChoice: "required"` (`agent-step-api.md` `<required_mode>`) puts
+three kinds of frame on the `messages` stream, all from node `agent`:
+
+| Frame | When | Shape |
+|-------|------|-------|
+| the tool call | every tool-call invocation of the turn — one per caller turn, two when the first result carries no `continuation` | ONE consolidated AI message: empty content, the tool call, NO `tool_call_chunks` key. No token chunks — the invocation is tagged `langsmith:nostream`, and the agent node drops any prose beside the call |
+| a spoken answer (≥ 4.2.0) | the turn's result awaits the caller — a read-back, a question, an ask | a TOKEN STREAM: one empty chunk, the text chunks, then two empty chunks, all under ONE message id and each with a `tool_call_chunks` key (empty). No consolidated copy follows |
+| a delivered reply | a turn that only speaks; the presentation of a result with no `continuation`; an in-place decline | ONE message chunk holding the complete text, with a fresh message id and a `tool_call_chunks` key (empty) |
+
+An agent on agent-step 4.1.x — or a 4.2.0 host that does not wire the spoken answer — emits only the
+first and the third: every reply arrives whole. This mode runs on a hand-rolled graph with the
+library handoff (`resolve_handoff`), not on the `createReactAgent` scaffold, so there is no
 `post_model_hook` event.
 
-Observed in-process on 2026-11-19 — LangGraph JS 1.3.7, `graph.stream` with modes `messages` /
-`updates` / `custom`, the real OpenAI client against a scripted endpoint. NOT yet captured
-against a live middleware or as raw SSE: treat the serialized field names as owed to the wire
-capture in `<testing>`.
+Observed twice on 2026-11-20, with the same result. In-process: LangGraph JS 1.3.7, `graph.stream`
+with modes `messages` / `updates`, the real OpenAI client against a scripted streaming endpoint.
+And as raw SSE from a LangGraph dev server (`stream_mode: ["messages-tuple","updates"]`), where
+EVERY frame above serializes as `type: "ai"` — so it is the `tool_call_chunks` key, never `type`,
+that tells a chunk from a consolidated message. A handoff turn (item 6 below) is observed in-process
+only: its `custom` events are still owed to the wire capture in `<testing>`.
+
+A turn whose result awaits the caller (≥ 4.2.0):
 
 | # | Event | Content |
 |---|-------|---------|
-| 1 | `messages` from node `agent` | a CONSOLIDATED AI message carrying the tool call, with EMPTY content — one per model call of the turn (no token chunks) |
+| 1 | `messages` from node `agent` | the consolidated, empty-content AI message carrying the tool call |
 | 2 | `updates` from `agent`, then from `tools` | the tool call, then the tool result |
-| 3 | *(1–2 repeat for each further call of the turn: a workflow call is followed by the presentation call)* | |
-| 4 | `messages` from node `agent` | the spoken reply — ONE message CHUNK holding the complete text, with a fresh message id |
+| 3 | `messages` from node `agent`, many | the spoken answer as token chunks — the first chunk empty, the last two empty |
+| 4 | `updates` from `agent` | the complete spoken answer as the node's state delta |
+
+A turn that only speaks, or that presents a result with no `continuation`:
+
+| # | Event | Content |
+|---|-------|---------|
+| 1 | `messages` from node `agent` | the consolidated, empty-content AI message carrying the tool call |
+| 2 | `updates` from `agent`, then from `tools` | the tool call, then the tool result |
+| 3 | *(1–2 repeat when a workflow call is followed by the presentation call)* | |
+| 4 | `messages` from node `agent` | the reply — ONE message CHUNK holding the complete text, with a fresh message id |
 | 5 | `updates` from `agent` | the same reply as the node's state delta |
 
-What this changes for a middleware:
+What this means for a middleware:
 
-1. **The reply arrives whole, not token by token.** It is a single chunk with the full text. Do
-   not require several chunks, a trailing consolidated message, or the end of a token stream
-   before speaking it. Time to first audio is the full model latency of the turn's calls.
-2. **Empty-content AI messages precede it.** Forward non-empty content only, and never take the
-   first AI message of a turn to be the reply.
-3. **The reply is a chunk on purpose.** A middleware that forwards chunks and skips consolidated
-   AI messages keeps working: the tool-call messages are consolidated, the reply is not.
-4. **A handoff turn ends at the handoff node.** No model call follows the tool result. On this
+1. **Speak non-empty content from node `agent` as it arrives.** One rule covers both replies: a
+   token stream is forwarded chunk by chunk, and a whole reply is a stream of one. Do not wait for
+   several chunks, a trailing consolidated message, or the end of a stream before speaking — and do
+   not take the first non-empty chunk to be the complete reply.
+2. **Ignore empty content.** The tool-call messages are empty, and a spoken answer opens with one
+   empty chunk and closes with two. Never take the first AI message of a turn to be the reply.
+3. **Skipping consolidated AI messages stays safe.** The only consolidated messages are the empty
+   tool-call ones; both kinds of reply are chunks. The whole reply is a chunk on purpose.
+4. **Dedupe by message id.** A spoken answer's chunks share the model's response id; a delivered
+   reply has a freshly generated one. No frame repeats a reply: no consolidated copy follows a token
+   stream.
+5. **Time to first audio differs by reply.** For a spoken answer it is the tool call plus the first
+   tokens of the answer; for a delivered reply it is the full model latency of the turn's calls.
+6. **A handoff turn ends at the handoff node.** No model call follows the tool result. On this
    stack the resolver's final message appears in `messages` events as a consolidated AI message
    (with the `is_handoff` kwargs) BESIDE the `handoff_complete` custom event carrying the same
    text — speak it once.
-5. **`streamEvents` is not silenced by `langsmith:nostream`.** A consumer of that API still
-   receives `on_chat_model_stream` events for the model call, including any prose the agent node
-   then drops. Never speak chat-model stream content from a required-mode agent.
+7. **`streamEvents` is not silenced by `langsmith:nostream`.** A consumer of that API receives
+   `on_chat_model_stream` events for EVERY model invocation. Those of the tool-call invocation carry
+   the `langsmith:nostream` tag (`event.tags`) and must never be spoken — they include prose the
+   agent node then drops. Events without the tag are the spoken answer. A delivered reply produces
+   no chat-model event at all: read it from the node's output.
 </streaming_facts>
 
 <middleware_requirements>
@@ -321,11 +348,13 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
    `is_handoff` means the conversation STAYS with the agent (the delegate answered through
    it).
 9. **Required-tool-calling agents (agent-step ≥ 4.1.0).** For agents whose tool runs with
-   `toolChoice: "required"`: speak the non-empty content of a message from node `agent` even
-   when it arrives as ONE chunk with no token stream before it; ignore the empty-content
-   tool-call messages that precede it; dedupe by message id; and never speak chat-model stream
-   content taken from an events API. Handoffs are those of item 8 — and where the resolver's
-   final message also shows up in `messages` events, speak the closing once.
+   `toolChoice: "required"`: speak the non-empty content of every message chunk from node `agent`
+   as it arrives — whether the reply comes as ONE chunk with no token stream before it or
+   (agent-step ≥ 4.2.0) as a token stream bracketed by empty chunks; ignore empty-content frames,
+   the tool-call messages included; dedupe by message id; and from an events API speak only
+   chat-model stream content that is NOT tagged `langsmith:nostream`. Handoffs are those of item
+   8 — and where the resolver's final message also shows up in `messages` events, speak the
+   closing once.
 </middleware_requirements>
 
 <testing>
@@ -346,9 +375,11 @@ in one place — hand this section to the middleware developers. Items 1–3 cov
 - The `?? null` identity guard is only exercised when identity is ABSENT from the invoke
   input — include one anonymous-caller case in the sandbox tests.
 - **Required tool calling**: at the graph layer, drive the compiled graph with a scripted model
-  (a stubbed endpoint is enough — no live model) and assert the reply reaches the `messages`
-  stream exactly once, from node `agent`, with the model's incidental prose nowhere on the
-  stream or in state. At the wire layer, capture one spoken turn and one handoff turn
-  (`stream_mode: ["messages-tuple","updates","custom"]`) and confirm the five-step order in
+  (a stubbed STREAMING endpoint is enough — no live model) and assert: the turn's requests carry
+  `tool_choice` `"required"` then `"none"` when the result awaits the caller; the spoken answer
+  reaches the `messages` stream as chunks from node `agent`, exactly once; a delivered reply
+  reaches it as one chunk; and the tool-call invocation's incidental prose is nowhere on the
+  stream or in state. At the wire layer, capture one turn of each reply shape and one handoff
+  turn (`stream_mode: ["messages-tuple","updates","custom"]`) and confirm the event orders in
   `<streaming_facts>` against the middleware's stream processor.
 </testing>

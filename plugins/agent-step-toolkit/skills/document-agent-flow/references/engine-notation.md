@@ -22,6 +22,9 @@ Readable, not symbolic. One line per step, parts joined with ` · `, in this ord
   imply: a `✓` row that stops for the caller's answer, a row whose one follow-up call is fixed, a `✗`
   row the batch reads past. `verbatim` marks a row whose summary must be spoken exactly
   (`presentation: "verbatim"`). Write neither on a row that keeps the default.
+- `proposes:action_name` after a `✓` row means that outcome goes straight on to open that
+  confirm-gated action's proposal in the same result (`VerdictDef.proposes`): the next thing the
+  caller hears is that action's read-back, with no further call from the model.
 - `ask:self` / `ask→action` after a row is its standing ask (`VerdictDef.ask`): the value the caller
   owes once that outcome is spoken, and the action their answer becomes. Write `ask→action.param` only
   when the target has several capture fields.
@@ -61,7 +64,7 @@ Per action — `ActionDef` (`agent-step-api.md` `<types>`):
 | params | `paramsSchema` (Zod) | always — what the model sends |
 | field kinds | the capture builders (`<caller_digit_capture>`): `digits` — `digitGroupsParam` / `digitCandidatesParam` / `callerDigits`; `text` — `callerTextParam`; `judged` — `judgedEnum` / `judgedFlag`; `relay` — `relayParam` | a param is dictated by the caller (`digits`, `text`), concluded by the model from what the caller meant (`judged`), or the caller's words passed through (`relay`). Shape rules are refinements: a `pattern` / `minLength` / `maxLength` / `format` in the model-facing schema fails construction |
 | prereqs | `prereqs: PrereqName[]` + one verifier each | the step needs journey state (identity known, cart ready). A prereq is a safety gate, not a sequencing hint |
-| verdict rows | `verdicts: {code: {ok, summary, body?, stateUpdate?, effects?, ask?, backendFailure?, continuation?, presentation?}}` (`<declared_verdicts>`) | always — the step's outcomes; ✗ rows are the failure edges. `summary` is what the caller hears, rendered by the host (`<registers>`). `continuation` says what happens next when that differs from `ok` (`await_caller` · `{action}` · `continue`); `presentation: "verbatim"` makes the summary exact speech |
+| verdict rows | `verdicts: {code: {ok, summary, body?, stateUpdate?, effects?, ask?, backendFailure?, continuation?, presentation?, proposes?}}` (`<declared_verdicts>`) | always — the step's outcomes; ✗ rows are the failure edges. `summary` is what the caller hears, rendered by the host (`<registers>`). `continuation` says what happens next when that differs from `ok` (`await_caller` · `{action}` · `continue`); `presentation: "verbatim"` makes the summary exact speech; `proposes: {action, params?}` (4.2.0) opens another action's consent in the same result |
 | effects | `request_handoff` · `merge_flow_data` · `otp_issued` · `clear_awaiting_input` · `abort_flow` | handoff out, gather into flow data, open an OTP gate, drop a gate but keep the flow, kill the flow |
 | standing ask | `ask: "self" \| {action, param?, render?}` on the verdict row (`<standing_asks>`) | an outcome leaves the caller owing a value: the same one again (`"self"`), or the one the next action takes (`{action}`). Non-locking `dictation`; `param` defaults to the target's one capture field and `expects` is derived from its kind |
 | capture bounce | nothing — derived (`<escalation>`). `bounceCapture: "field"` only when the action has several capture fields; `invalidParamsVerdict: "code"` when a bounce should carry a row's guidance on what a usable value looks like | the params schema rejects an answer (`invalid_params` only — a well-formed value the backend refuses is a ✗ verdict row, not a bounce): the caller owes the action's capture again, and the engine bounds the repeats |
@@ -73,7 +76,7 @@ Per action — `controller` hooks:
 | Primitive | Declared as | Use in a step when… |
 |---|---|---|
 | batch shape | `soleStep` / `soleOnExecute` | the closing write must run alone (execute alone; the propose may be last in a batch) |
-| confirmation | `requiresConfirmation: {maxAttempts, lockdown, readBack, readBackDirective, repeatReadBack, replyContract, refuseProposal}` (`<confirmation_lifecycle>`) | the step completes on the user's yes to a read-back |
+| confirmation | `requiresConfirmation: {maxAttempts, lockdown, consentExempt, readBack, readBackDirective, repeatReadBack, replyContract, refuseProposal}` (`<confirmation_lifecycle>`) | the step completes on the user's yes to a read-back. `consentExempt` (4.2.0) lists judged params the yes does not cover |
 | OTP | `issuesOtp: {consumer_action}` on one step, `requiresOtp` on the next (`<otp_lifecycle>`) | a code is sent and read back — always two steps |
 | double entry | `startsMatchFor: {consumer_action}` / `requiresMatch: {capturer, maxAttempts}` (`<match_lifecycle>`) | a value is typed twice |
 | flow | `startsFlow: {name}` / `requiresFlow` / `endsFlow` | a multi-turn span. **One flow at a time** (starting another fails `flow_already_active`); re-entering the same flow is idempotent |
@@ -89,7 +92,7 @@ Tool level — the config and the `buildAgentStepTool` options:
 | refusals | the `note_refusal{kind, reply?}` control — `declined_or_cannot` · `unsupported_question` · `malicious_intent` (with `reply`, the in-place decline is recorded and spoken by the same call) | the caller declines the owed value, asks what the flow cannot answer, or tries to misuse the call. The model names the kind; the engine instructs the in-place handling once, then escalates as above (`declined_or_cannot` needs a standing ask to refuse). The third `malicious_intent` hands back `completed` on `agent-step:malicious` |
 | ask contract | `askContract: {categories}` (`<standing_asks>`) | the host's own reply categories for a standing ask. Engine text is otherwise an `instruction` the engine owns — there is no wording override (`<registers>`) |
 | abort policy | `abortPolicy: {requireActive, allowStandalone, allowedFollowers, allowedPendingTargets}` | what "cancel" does mid-gate |
-| tool-calling mode | `tool: {toolChoice: "required"}` (`<required_mode>`); default `auto` | every model turn must be a tool call: speech is the `respond_to_caller` control, each call classifies the caller's turn (`turn: service \| misuse`), and a result's `continuation` bounds the next call. A property of the whole tool — a flow document states it once, on the config; the steps and their rows do not change |
+| tool-calling mode | `tool: {toolChoice: "required"}` (`<required_mode>`); default `auto` | the model must call the tool before anything is said: a turn that only speaks uses the `respond_to_caller` control, each call classifies the caller's turn (`turn: service \| misuse`), and a result's `continuation` decides whether another call follows or the model speaks — since 4.2.0 a result that awaits the caller is answered by streamed text. A property of the whole tool — a flow document states it once, on the config; the steps and their rows do not change |
 | auto-handoff | `backendFailureCodes`, `errorHandoffThreshold`, `onErrorThreshold` (`<auto_handoff>`) | the "technical issue" terminal |
 
 Library controls the model can call: `abort_pending_input`, `request_handoff`, `repeat_pending_question`,
@@ -135,8 +138,11 @@ changed is who owns each sentence, and how much is left to configure: engine tex
 `instruction` no host rewords, everything a caller hears is rendered by the host from state, asks sit
 on the row that asks, capture params declare their kind, and patience is universal instead of
 configured. What 4.1.0 added is optional: a row can say what happens next apart from `ok`
-(`continuation`, `presentation`), and a tool can require every model turn to be a tool call
-(`toolChoice: "required"`). The version history is in the toolkit's `CHANGELOG.md`.
+(`continuation`, `presentation`), and a tool can require a tool call before anything is said
+(`toolChoice: "required"`). 4.2.0 is optional too: a row can open the next consent itself
+(`proposes`), a gate can leave judged params out of the consent (`consentExempt`), and a
+required-mode result that awaits the caller is spoken as streamed text. The version history is in
+the toolkit's `CHANGELOG.md`.
 
 ## Pitfalls the validator cannot see
 

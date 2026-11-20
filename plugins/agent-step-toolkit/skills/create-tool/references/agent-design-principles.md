@@ -121,9 +121,14 @@ every caller-audible byte is host-rendered from state; engine text is an `instru
 follows and never speaks (`agent-step-api.md` `<registers>`). The read-back authority is stated ONCE, by the engine-composed
 protocol fragment; the per-result framing rides the wire as `read_back_directive`. A verdict row's
 `presentation: "verbatim"` extends the same guarantee to a summary that must be heard exactly
-(`reply_text`). Under required tool calling the model does not even transcribe these bytes: it writes
-a placeholder (`{read_back}`, `{ask_text}`, `{reply_text}`) and the engine inserts them, refusing a
-reply that leaves them out or rewords them (`agent-step-api.md` `<required_mode>`).
+(`reply_text`). Under required tool calling, a reply made through the speech control does not even
+transcribe these bytes: the model writes a placeholder (`{read_back}`, `{ask_text}`, `{reply_text}`)
+and the engine inserts them, refusing a reply that leaves them out or rewords them. That holds for
+the control ONLY. A result that awaits the caller is answered by a streamed spoken answer (4.2.0),
+where the model transcribes the bytes and the engine checks nothing — rendering still guarantees WHAT
+the sentence is, but no longer that it was said. A host that streams therefore pins each consent
+question's spoken text in its prompt-input tests (`agent-step-api.md` `<required_mode>`,
+`<known_issues>`).
 
 ## 7. One authority per behaviour in the prompt
 
@@ -175,10 +180,12 @@ lockdown means a forgotten abort cannot touch a suspended mutation; choice-pendi
 stray "continue" cannot execute anything; propose-time refusal means an impossible proposal cannot
 store a gate; the fail-closed repeat control means a misdirected repeat call changes nothing. Model
 judgement decides *which* safe thing happens — never whether an unsafe thing can. Required tool
-calling carries the principle to the turns that only speak: every model turn is a tool call the
-engine sees, so a result's `continuation` bounds what the next call may be, a spoken reply is
-validated before it is delivered, and misuse is a classification the model makes on EVERY call
-(`turn`) instead of an optional step it may never reach.
+calling carries the principle to the turns that only speak: every caller turn starts with a tool
+call the engine sees, so a result's `continuation` decides whether the model calls again or speaks, a
+reply made through the speech control is validated before it is delivered, and misuse is a
+classification the model makes on EVERY call (`turn`) instead of an optional step it may never
+reach. Whether the model speaks or calls after a result is the engine's decision, read from that
+result — never the model's.
 
 *Why:* the model's pass rates on judgement calls oscillate with serving conditions outside anyone's
 control. A behaviour whose safety depends on a pass rate is not encoded, it is lucky.

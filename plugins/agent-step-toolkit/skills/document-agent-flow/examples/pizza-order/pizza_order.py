@@ -231,7 +231,7 @@ OPEN = [
 FLOW = {
     "meta": {
         "slug": "pizza-order",
-        "engine_version": "4.1.1",
+        "engine_version": "4.2.0",
         "title": "Pizza order — phone agent step ladder",
         "subtitle": ("A synthetic example. A box is a step: it gathers until its completeness check passes. ⚡ chips are "
                      "the API calls fired when it closes, in order. Click any box for the details."),
