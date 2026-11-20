@@ -28,7 +28,7 @@ TONES = (TONE_GOOD, TONE_BAD)
 
 SPEC_VARIABLE = "FLOW"  # the name a Python spec module must bind
 REQUIRED_META = ("slug", "title", "subtitle", "engine_version")
-# "4.1.0" — the version a step-engine expression is written against; also "code_engine_version".
+# "4.1.1" — the version a step-engine expression is written against; also "code_engine_version".
 VERSION_PATTERN = r"^\d+\.\d+\.\d+$"
 REQUIRED_STEP = ("stage", "title", "completion", "next", "engine", "status")
 REQUIRED_TRIGGER = ("name", "short", "real", "on_ok", "status")

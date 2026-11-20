@@ -79,7 +79,7 @@ uvx playwright install chromium     # once per machine, if verify reports no bro
 ```python
 FLOW = {
   "meta": {"slug": "...", "title": "...", "subtitle": "...",
-           "engine_version": "4.1.0",          # the toolkit's templates/agent-step/VERSION — shown top-right
+           "engine_version": "4.1.1",          # the toolkit's templates/agent-step/VERSION — shown top-right
            "code_engine_version": "1.4.0"},    # optional: the project's src/agent-step/VERSION
   "stages": [{"id": "A", "name": "Start"}, ...],
   "steps": {"S0": {"stage": "A", "title": "...", "completion": "...", "next": [{"to": "S1", "when": "..."}],

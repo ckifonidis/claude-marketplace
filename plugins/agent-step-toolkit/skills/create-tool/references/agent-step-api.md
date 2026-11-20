@@ -985,6 +985,20 @@ control refuses it (`repeat_confirmation_not_available`), leaving it standing. T
 names the repeat control and the reply kinds only when some action opts into `repeatReadBack`, so the
 prompt never sends the model to a control its tool does not carry.
 
+**Two mechanisms, and the reply's content picks one.** The stored question and NOTHING else goes
+through `repeat_pending_question`: its result forbids added words, and that refusal is the only thing
+that holds a reply to the unchanged question. Anything of the model's own first — a reassurance, a
+short answer — is speech, and the model then re-asks in its own words. The host's reply and ask
+contracts decide which of the two a given caller reply calls for; the two are not redundant.
+
+**Known limit.** The fragment's repeat sentence names `awaiting.question` without saying whose it
+is, so it also matches the record of an ungated verbatim question — which the control refuses. The
+refusal is recoverable: the same caller turn re-asks by speech, at the cost of one extra model round
+and nothing audible. The sentence is measured surface and is deliberately left as it is: narrowing
+its field list, reducing it to a pointer at the contracts, and folding ask repetition into speech
+were each measured, and each moved other replies off the right mechanism (the numbers sit beside
+the sentence in `compile/protocol.ts`). Do not reword it in a host prompt either.
+
 ### Host wiring
 
 The graph needs no speech node. The agent node does three things the `createReactAgent` scaffold

@@ -12,6 +12,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [4.1.1] — 2026-11-20
+
+Patch: **the required-mode READ-BACK repeat sentence returns to its measured wording.** 4.1.0
+narrowed the sentence's field list to "a standing value ask's `ask_text` or `awaiting.question`".
+Measured on a live graph, that wording moved a channel check at a standing ask off
+speech-with-reassurance and onto the repeat control, whose result allows no added words — the
+reassurance was lost. 4.1.1 restores "(`ask_text`, `awaiting.question`, or a repeatable
+confirmation)". No public-surface change, and nothing else moves: auto-mode tools, and required-mode
+tools without a `repeatReadBack` gate, are byte-identical to 4.1.0.
+Migration: [migrations/4.1.0-to-4.1.1.md](migrations/4.1.0-to-4.1.1.md).
+
+### Fixed
+- `compile/protocol.ts` — the required-mode protocol fragment's repeat sentence, composed for tools
+  with a `repeatReadBack` gate, reads as it did before 4.1.0's rewording. The comment beside it
+  records the three alternatives that were measured and reverted, with their numbers.
+- `protocol.test.ts` — the test that pinned the narrowed wording is removed; the tests on what the
+  repeat control serves and refuses stay. Library suite: 357 tests.
+
+### Known limit
+- The sentence names `awaiting.question` without saying whose it is, so it also matches the record
+  of an ungated verbatim question (a `presentation: "verbatim"` + `continuation: "await_caller"`
+  row), which the control refuses with `repeat_confirmation_not_available`. The same caller turn
+  then re-asks by speech: one extra model round, nothing audible. Narrowing the field list, reducing
+  the sentence to a pointer at the contracts, and folding ask repetition into speech were each
+  measured and each moved other replies off the right mechanism, so the sentence stays.
+
 ## [4.1.0] — 2026-11-19
 
 Minor: **required tool calling, declared continuation, and misuse judged on every turn.** A tool can

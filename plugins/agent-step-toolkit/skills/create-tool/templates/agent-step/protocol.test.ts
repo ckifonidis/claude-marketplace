@@ -126,12 +126,14 @@ test("a repeatable gate puts the repeat control and the reply kinds on both side
   assert.ok(description.includes("the reply kind governs a pending repeatable confirmation"));
 });
 
-// ── What READ-BACK calls repeatable is exactly what the control serves ──────
+// ── What the repeat control serves ──────────────────────────────────────────
 //
 // A standing value ask's stored bytes are shown as `ask_text` on the result
 // that asked and as `awaiting.question` on its record after an aside; both are
 // served. An ungated verbatim question shows an `awaiting.question` too, but
-// lives in the transcript alone and is re-asked by speech.
+// lives in the transcript alone: the control refuses it and it is re-asked by
+// speech. (READ-BACK's clause does not draw this line — see protocol.ts for
+// why its measured wording stays.)
 
 const ASK_TEXT = "Which reference should I use?";
 const QUESTION = "Is this the item you mean?";
@@ -197,16 +199,6 @@ type Body = { results: Array<Record<string, unknown>> };
 const caller = (id: string) => new HumanMessage({ id, content: "…" });
 const result = (body: unknown) => new ToolMessage({ tool_call_id: "call", content: JSON.stringify(body) });
 const one = (action: string, params: Record<string, unknown> = {}) => [{ action, params }];
-
-test("READ-BACK scopes ask_text and awaiting.question to a standing value ask, as the control's description does", () => {
-  const opts = repeatFixture();
-  const protocol = composeProtocolPrompt(opts);
-  assert.ok(
-    protocol.includes("(a standing value ask's `ask_text` or `awaiting.question`, or a repeatable confirmation)"),
-  );
-  const description = (buildAgentStepTool(opts) as unknown as { description: string }).description;
-  assert.ok(description.includes("a standing value ask whose stored text is shown in ask_text or awaiting.question"));
-});
 
 test("a standing value ask is served by repeat from either field: ask_text, then awaiting.question after an aside", async () => {
   const opts = repeatFixture();

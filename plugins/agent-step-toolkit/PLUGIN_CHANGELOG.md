@@ -11,6 +11,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.30.1] — 2026-11-20
+
+Ships **agent-step library 4.1.1** — a patch: one sentence of the required-mode protocol fragment
+returns to its measured wording (see
+[migrations/4.1.0-to-4.1.1.md](migrations/4.1.0-to-4.1.1.md)). Only a tool that runs under required
+tool calling AND has a `repeatReadBack` gate composes different text; everything else is
+byte-identical to 4.1.0. `/pull-library` replaces the library; its one transform is a golden check
+for those hosts. Library suite 358 → 357 tests (the test pinning the reworded sentence is removed);
+verified by throwaway bootstrap from these templates: clean typecheck, 357/357 passing.
+
+### Fixed
+- **Library 4.1.1** — the READ-BACK repeat sentence reads "(`ask_text`, `awaiting.question`, or a
+  repeatable confirmation)" again. The narrowed wording shipped in 4.1.0 measurably moved a channel
+  check at a standing ask off speech-with-reassurance and onto the repeat control. Details in
+  [CHANGELOG.md](CHANGELOG.md).
+- `agent-step-api.md` `<required_mode>`: "Repeating a question" now states which mechanism a reply's
+  content selects, and records the accepted known limit (the sentence also matches an ungated
+  verbatim question, which the control refuses and the same turn re-asks by speech).
+
+### Changed
+- `document-agent-flow`: `engine_version` examples → 4.1.1; the pizza example's `out/` rebuilt
+  (`verify.py` 40/40, browser checks included).
+- `plugin.json` / marketplace entry: library version in the description.
+
 ## [0.30.0] — 2026-11-19
 
 Ships **agent-step library 4.1.0** — a minor library release: nothing is removed or renamed and a

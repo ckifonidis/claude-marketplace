@@ -65,13 +65,32 @@ export function composeProtocolPrompt(surface: ProtocolSurface): string {
     // (compile/activation.ts). Without one they are absent from the tool, and
     // READ-BACK must not send the model to a control it cannot call.
     //
-    // What READ-BACK calls repeatable is what the control SERVES, in the
-    // control's own words (controls/repeat-question.ts): a repeatable
-    // confirmation, or a standing value ask's stored bytes — `ask_text` on the
-    // result that asked, `awaiting.question` on its record after an aside. An
-    // UNGATED verbatim question also shows an `awaiting.question`, but the
-    // engine stores nothing for it and it is re-asked by speech; naming the
-    // field without its owner sent that case to a control that refuses it.
+    // The repeat sentence below is MEASURED bytes. Leave its wording alone.
+    //
+    // It maps reply CONTENT to mechanism: the stored question and nothing else
+    // → `repeat_pending_question` (the result then forbids added words, which
+    // is what holds a speaker or ownership claim to the unchanged question);
+    // anything of the model's own first → speech. The contracts decide the
+    // content per reply. Two things about it look wrong and are not worth
+    // fixing: it is a second voice on WHEN to call the control, and its bare
+    // `awaiting.question` also matches an ungated verbatim question the
+    // control refuses. Three changes were measured on the reference host's
+    // live graph (2026-11-19/20, checkpoint replays, 12 per case per build)
+    // and reverted; with these bytes every case below holds 12/12, the
+    // handover claim 22/24:
+    //   - field list scoped to "a standing value ask's …": a channel check at
+    //     a standing ask left speech-with-reassurance for the control (15/18);
+    //   - sentence reduced to "use it where the question's contract directs":
+    //     a phone-handover claim got a paraphrased spoken re-ask (9/24);
+    //   - one mechanism for an ask (speech, `{ask_text}` inserting the stored
+    //     question on any turn; the control advertised for confirmations
+    //     only): channel checks, resume and the closure recap held, but claims
+    //     lost the unchanged question — ownership claim 3/12 at one ask and
+    //     10/12 at another, one reply asking for the other person's name;
+    //     handover claim 7/12. Nothing but the control's result enforces
+    //     "nothing added".
+    // The over-claim costs nothing live: the ungated question is re-asked by
+    // speech 24/24.
     const repeatable =
       repeatableConfirmationActionsOf(surface.config.actions).length > 0;
     return [
@@ -85,7 +104,7 @@ export function composeProtocolPrompt(surface: ProtocolSurface): string {
         (repeatable ? ", without a reply kind" : "") +
         ". The system inserts the exact bytes; `read_back_directive` governs surrounding words. These placeholders refer only to this caller turn's latest tool result. " +
         (repeatable
-          ? "To repeat a previous question without a new explanation, use `repeat_pending_question` when the pending record supplies stored text (a standing value ask's `ask_text` or `awaiting.question`, or a repeatable confirmation). With `kind: \"clarification\"`, supply only `explanation`: the short answer, without a question, recap, or announcement of repetition. The engine appends the complete stored confirmation and requires a later caller answer; this reply needs no repeat step. With `kind: \"choice\"`, the existing proposal stays pending while the caller chooses a path. "
+          ? "To repeat a previous question without a new explanation, use `repeat_pending_question` when the pending record supplies stored text (`ask_text`, `awaiting.question`, or a repeatable confirmation). With `kind: \"clarification\"`, supply only `explanation`: the short answer, without a question, recap, or announcement of repetition. The engine appends the complete stored confirmation and requires a later caller answer; this reply needs no repeat step. With `kind: \"choice\"`, the existing proposal stays pending while the caller chooses a path. "
           : "") +
         "Otherwise compose the permitted reply naturally from the conversation and approved facts.",
     ].filter(Boolean).join("\n\n");
