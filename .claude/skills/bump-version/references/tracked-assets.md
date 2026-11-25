@@ -115,6 +115,7 @@ new template + a new import line in `tool-index.ts.template`).
 ## Tier 6 — SKILL prose (hand-edit)
 - `skills/create-tool/SKILL.md` — `<essential_principles>` (states the library invariants), `<quick_reference>` (canonical layout block), `<templates_index>` (template inventory).
 - `skills/test-agent-step/SKILL.md` — only if the test surface (runner unit-test entry points, harness helpers) shifted.
+- `skills/heal-agent-audit/references/decision-ownership.md` — check the shared ownership and progression criteria when verdict, continuation, consent or tool-mode behavior changes. Reconcile `skills/heal-agent-fix/SKILL.md` when the verification entry points change.
 - `skills/audit-middleware-contract-compliance/SKILL.md` — only if the channel/streaming surface shifted (handoff custom events, `HANDBACK_SIGNALS`, the `resolve_handoff` node, stream modes, the reply shapes of a required-tool-calling agent). Its checklist summaries are navigation aids over `streaming-and-channel-contract.md` — when that doc changes, reconcile this prose too.
 - `skills/document-agent-flow/` — `references/engine-notation.md` (primitive catalog, controls, library slots, retired terms), `templates/flowdoc/model.py` `RETIRED_ENGINE_TERMS`, and the `engine_version` examples (SKILL.md quick reference, `examples/pizza-order/` — rebuild its `out/`) — update when a primitive, control or slot is added, removed or renamed.
 
