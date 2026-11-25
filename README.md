@@ -23,7 +23,7 @@ Install:
 /plugin install agent-step-toolkit@ckifonidis-marketplace
 ```
 
-Ships five skills:
+The toolkit includes seven skills.
 
 - **`create-tool`** — bootstrap a new agent-step project (package.json, tsconfig,
   langgraph config, the agent-step runner **library**, graph/agent/state/prompt
@@ -43,6 +43,10 @@ Ships five skills:
   action: runner unit tests (flow-controller mechanics, no backend/LLM), sandbox/tool
   tests (runner + executors against a local sandbox, no LLM), and prompt-input tests
   (the LLM emits the right steps, no execution).
+- **`heal-agent-audit`** reviews instruction ownership and workflow progression in an
+  existing agent. It returns read-only findings with evidence, tradeoffs and acceptance criteria.
+- **`heal-agent-fix`** repairs a selected finding or directly reported defect and
+  verifies its effects and caller-facing behavior.
 - **`pull-library`** — consumer side of library versioning: run inside a downstream
   project to upgrade its vendored `src/agent-step/` to the toolkit's version and apply
   the migration transforms to the project's own tools. (The maintainer side,
@@ -160,6 +164,8 @@ plugins/
 │   └── skills/
 │       ├── create-tool/             # bootstrap / add-tool / extend / port + workflows + references + templates (incl. the canonical agent-step library)
 │       ├── test-agent-step/         # three-layer testing methodology
+│       ├── heal-agent-audit/        # read-only findings and shared decision criteria
+│       ├── heal-agent-fix/          # implement and verify selected repairs
 │       ├── pull-library/            # upgrade a downstream project's vendored library (consumer side)
 │       ├── audit-middleware-contract-compliance/  # audit a channel middleware against the wire/streaming/handoff contract
 │       └── document-agent-flow/     # flow spec → md + interactive graph + xlsx (vendorable flowdoc generator + verify)

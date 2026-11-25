@@ -11,6 +11,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); newest first. Se
 **major** = removed/renamed skill or breaking workflow change, **minor** = new skill / capability /
 template, **patch** = doc or fix with no new surface.
 
+## [0.32.0] — 2026-11-25
+
+Ships **agent-step library 4.2.0**. Downstream projects can use both skills by
+updating the marketplace plugin, without running `/pull-library`.
+
+### Added
+
+- `heal-agent-audit` reviews instruction ownership and workflow transitions and returns
+  read-only findings with evidence and acceptance criteria.
+- `heal-agent-fix` takes a selected finding or directly reported defect through
+  a focused repair and verifies caller intent, authorization and observable effects.
+
 ## [0.31.0] — 2026-11-20
 
 Ships **agent-step library 4.2.0** — a minor library release: nothing is removed or renamed, the
