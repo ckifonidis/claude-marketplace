@@ -1,0 +1,14 @@
+# Release Radar feature register
+
+| Operator task | Entry point | Evidence |
+| --- | --- | --- |
+| Find a workspace from its orchestration repository or a registered member clone | `workspace-index resolve` | [Workspace lookup and registration](../plugins/release-radar/skills/deployment-status/references/workspace-model.md) |
+| Set up a workspace or add a component | The two setup workflows use `discover`, show the proposed values and finish with `validate-config`. | [Initialize a workspace](../plugins/release-radar/skills/deployment-status/workflows/init-workspace.md) and [initialize a component](../plugins/release-radar/skills/deployment-status/workflows/init-component.md) |
+| Inspect deployed images, commits, pipeline drift and application health | `/release-radar:deployment-status` calls `status` and can request verification. | [Deployment status](../plugins/release-radar/skills/deployment-status/SKILL.md) |
+| Check which commit an application serves | `verify` runs the configured HTTP, version and permitted smoke checks. | [Verification outcomes](../plugins/release-radar/skills/deployment-status/references/verification.md) |
+| Review a promotion, branch, commit range or pull request | `/release-radar:change-risk` examines the local change and checks the fleet and component checklists. `snapshot-info` checks whether a prior report is fresh. `checklist-check` classifies the component checklist at the promoted commit, and `settings-diff` compares the handoff settings. | [Change risk](../plugins/release-radar/skills/change-risk/SKILL.md) |
+| Inspect a mapped pipeline or follow an existing run | `pipeline-runs` reads the history. `pipeline-run` shows one run and can follow it through completion or an approval wait. | [Promotion lifecycle](../plugins/release-radar/skills/promote/references/lifecycle-model.md) |
+| Promote to a stage owned by the operator's team | `/release-radar:promote` calls `pipeline-preview`, obtains confirmation for that action and calls `run-pipeline` once. It then checks the running target and verifies the application. | [Run a pipeline](../plugins/release-radar/skills/promote/workflows/run-pipeline.md) |
+| Prepare an externally owned stage | `handoff-package` writes a local manifest and files copied from the promoted commit, with each file's hash. | [Assemble a handoff](../plugins/release-radar/skills/promote/workflows/assemble-handoff.md) |
+| Check or normalize the local files | `format --check` reports the state of each file. `format` writes canonical files and applies configured retention. | [File formats and ownership](../plugins/release-radar/skills/deployment-status/references/file-formats.md) |
+| Confirm the installed engine location and version | `where --json` reports the engine's version and resolved paths. | [Engine entry point](../plugins/release-radar/engine/src/cli.ts) |
