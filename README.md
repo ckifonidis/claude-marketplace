@@ -148,6 +148,32 @@ canonical, versioned source — its `VERSION` travels into every target project 
 `src/observability/VERSION`; `CHANGELOG.md` tracks it, `migrations/` carries upgrade
 guides.
 
+### release-radar
+
+Track a container build from one stage to the next. Release Radar reads the deployed image
+and Git commit for each component and can check the running application against that build.
+The bundled engine runs on Node.js 20 or later.
+
+```
+/plugin install release-radar@ckifonidis-marketplace
+```
+
+- `/deployment-status [component|--all] [stage] [--verify]` shows what is running, where
+  stages differ and recent Azure DevOps runs. Add `--verify` to run the checks configured
+  by that application.
+- `/change-risk <component> <from-stage> <to-stage>` reviews settings, dependencies and
+  contracts before promotion. Use `/change-risk [component] <range|branch|PR>` to review
+  a Git change directly.
+- `/promote <component> <stage> [action]` is the only skill that can queue a pipeline.
+  It shows the exact Azure DevOps run and asks for confirmation for a stage your team owns.
+  For a handoff stage, it prepares the artifacts for the receiving team.
+
+The workspace's `.release-radar/workspace.json` lists the stages and member components.
+Each member keeps its own `.release-radar/component.json`. A local repos file maps those
+members to checkouts. The engine validates the schema and canonical format of these files.
+All three skills accept `--workspace <path>`. If skill names overlap, use the plugin prefix,
+as in `/release-radar:deployment-status --all`.
+
 ## Layout
 
 ```
@@ -174,11 +200,20 @@ plugins/
 │   └── skills/
 │       ├── run-langgraph-conversation/      # execute a test conversation, capture thread_id
 │       └── follow-langgraph-conversation/   # investigate a thread (dev server + LangSmith) → root cause
-└── kafka-observability/
+├── kafka-observability/
+│   ├── .claude-plugin/plugin.json   # plugin manifest
+│   ├── CHANGELOG.md                 # observability library version history
+│   ├── PLUGIN_CHANGELOG.md          # plugin package version history
+│   ├── migrations/                  # per-version upgrade guides
+│   └── skills/
+│       └── add-kafka-observability/ # install/upgrade the vendored library + wiring (templates incl. the canonical observability library)
+└── release-radar/
     ├── .claude-plugin/plugin.json   # plugin manifest
-    ├── CHANGELOG.md                 # observability library version history
-    ├── PLUGIN_CHANGELOG.md          # plugin package version history
-    ├── migrations/                  # per-version upgrade guides
+    ├── CHANGELOG.md                 # release engine history
+    ├── PLUGIN_CHANGELOG.md          # plugin package history
+    ├── engine/                      # compiled CLI, TypeScript source and offline tests
     └── skills/
-        └── add-kafka-observability/ # install/upgrade the vendored library + wiring (templates incl. the canonical observability library)
+        ├── deployment-status/
+        ├── change-risk/
+        └── promote/
 ```

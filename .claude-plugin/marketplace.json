@@ -49,6 +49,20 @@
       "keywords": ["kafka", "observability", "langsmith", "tracing", "langgraph", "langchain", "audit"],
       "category": "development",
       "tags": ["kafka", "observability", "langsmith", "tracing"]
+    },
+    {
+      "name": "release-radar",
+      "source": "./plugins/release-radar",
+      "description": "Track container deployments across release stages with deployment-status, assess the changes between builds with change-risk, and use promote to preview and confirm an Azure DevOps pipeline run or prepare a handoff for the team that owns the next stage. Supports Azure App Service, Azure Container Apps, Kubernetes, Docker Compose and configured commands. Includes a compiled Node.js engine.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Charalampos Kyfonidis"
+      },
+      "repository": "https://github.com/ckifonidis/claude-marketplace",
+      "license": "MIT",
+      "keywords": ["deployment", "release", "promotion", "azure-devops", "pipelines", "azure", "kubernetes", "docker", "drift", "verification"],
+      "category": "development",
+      "tags": ["deployment", "release", "azure-devops", "containers"]
     }
   ]
 }

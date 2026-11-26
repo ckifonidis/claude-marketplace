@@ -1,0 +1,9 @@
+{
+  "name": "release-radar",
+  "version": "0.1.0",
+  "description": "Release lifecycle awareness for container deployments: deployment-status reports what runs where (image, commit, stage deltas, pipeline runs, per-application real-world verification), change-risk reports what could break in a promotion, and promote runs a dev-owned Azure DevOps pipeline behind a preview and explicit confirmation, or assembles the handoff package for a stage another team promotes.",
+  "author": {
+    "name": "Charalampos Kyfonidis"
+  },
+  "keywords": ["deployment", "release", "promotion", "azure-devops", "pipelines", "azure", "kubernetes", "docker", "drift", "verification"]
+}
