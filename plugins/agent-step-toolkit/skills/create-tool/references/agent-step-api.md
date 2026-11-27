@@ -306,7 +306,9 @@ interface ControllerHooks {
 }
 
 interface ConfirmationOpts {
-  maxAttempts?: number;            // re-propose budget before the gate exhausts. Default 3.
+  maxAttempts?: number;            // rejected-proposal budget before the gate exhausts. Default 3.
+                                   // (4.3.0) task-scoped when a handoff is configured: an abort
+                                   // does not refund it, only an execute does; spent → handoff.
   lockdown?: boolean;              // default true — refuses unrelated batches while pending.
   consentExempt?: readonly string[];
                                    // (4.2.0) `judged` params the caller's consent does NOT cover:
@@ -918,6 +920,19 @@ variable the ENGINE reads — no host wiring, no build option, nothing per actio
   `DEFAULT_TOLERANCES`, `TOLERANCE_ENV`, `EngineTolerances`) so a host can log the effective values at
   boot or assert them in a test. Per-action budgets — a confirmation's or a match's `maxAttempts` —
   are configuration and are NOT tolerances.
+- **Gate budgets are task-scoped (4.3.0).** With a handoff configured, what a task has spent of a
+  confirmation's or a match's `maxAttempts` is kept in the same latch (`confirm:<action>`,
+  `match:<consumer>`). These two are NOT reset on progress and NOT refunded by
+  `abort_pending_input` or a capturer re-run — only an execute / a successful match refunds — and a
+  spent budget hands off `abandon` on `escalationContext(action)`. Without a handoff nothing is
+  latched and the gates refund on abort as before 4.3.0.
+- **Tool-free replies (4.3.0, auto mode, opt-in).** `countToolFreeReply(state, reply, { max })`,
+  called by the host's model node with each model reply, counts consecutive caller turns answered
+  with NO tool call (latch key `TOOL_FREE_REPLIES_KEY`) — the one path the runner cannot count.
+  A reply with tool calls ends the run; the text closing a tool turn is neutral. Past `max` the
+  returned patch requests `abandon` on `escalationContext(null)`: return it without the model's
+  reply and route `handoffRequested` to `HANDOFF_NODE`. It counts every tool-free caller turn, so
+  set `max` well above the bounce tolerance. Required mode needs none of this.
 </escalation>
 
 <required_mode>
@@ -1257,6 +1272,7 @@ export function createAgent() {
 | `modelToolsForSpeech(tools, messages)` | (4.2.0) The tool surface to bind for the spoken answer: the scoped surface a fresh caller turn sees, so the prompt prefix is shared with the calls around it. |
 | `speechToolOptions()` | (4.2.0) The bind options for the spoken answer: `{ tool_choice: "none" }` — tools visible, no call possible. |
 | `spokenMessage(response)` | (4.2.0) The model's spoken answer as the node's message — the response, unchanged. Throws when it carries a tool call or no string text. It does NOT render placeholders or compare the text with the result. |
+| `countToolFreeReply(state, reply, { max })` | (4.3.0, AUTO mode) Counts consecutive caller turns the model answered with no tool call; returns `{ exhausted, patch }`. Past `max` the patch requests the escalation handoff — see `<escalation>`. |
 | `modelToolsForTurn(tools, messages)` | The tool surface for ONE tool-call invocation (see above). Call it on every such invocation with the full message list. An auto-mode tool is returned unchanged. |
 | `modelToolOptions(config)` | The bind options: `tool_choice` from `config.tool.toolChoice` (default `"auto"`) and, in BOTH modes, `parallel_tool_calls: false` — sibling calls would each read the same state snapshot, and a pending confirmation could execute twice. |
 | `toolOnlyMessage(response)` | The response reduced to its tool call (ids, usage metadata kept). Throws when it is not exactly one valid tool call; the host owns the retry policy. |
@@ -1462,7 +1478,7 @@ The runner switches the mutation action into a five-mode state machine. Detected
   - **`reply_contract`** — the complete classification of the caller's next reply: the composed action-specific contract when the action declares `replyContract`, else the generic `confirm_reply_contract` template. The gate turn reacts to THIS, not prompt memory. The generic template was reworded in 4.1.0 and no longer ends in "make no call and re-ask": a question about what is being confirmed, and unclear, unrelated or third-party speech, are each answered with ONE short spoken yes/no question — through the speaking-turn protocol in auto mode, through `respond_to_caller` in required mode.
 - **Executor is NOT invoked.**
 - In required mode the proposal ENDS the batch and carries `continuation: "await_caller"`: later steps of the same batch do not run (a second gate cannot overwrite the one just proposed), and the read-back is then presented to the caller — by the spoken answer, or by the speech control in a host that does not wire it (`<required_mode>`).
-- (4.2.0) The same path runs when the ENGINE opens the proposal, from a verdict row's `proposes` (`<declared_verdicts>`). Two differences: the proposal always starts at `maxAttempts`, and with `lockdown: false` it replaces a pending gate without passing the mode decision below.
+- (4.2.0) The same path runs when the ENGINE opens the proposal, from a verdict row's `proposes` (`<declared_verdicts>`). Two differences: the proposal does not pass the mode decision below (it opens with what is left of the task's budget — full `maxAttempts` when no handoff is configured), and with `lockdown: false` it replaces a pending gate without passing the mode decision below.
 
 ### Re-call whose params **parse to the pending proposal**, on a LATER caller turn → **execute mode**
 - The incoming RAW params are parsed with the same effective schema, then compared (deep value equality) against the stored parsed proposal — value normalization never reads as drift (e.g. a `z.preprocess` stripping STT separators: `"70,76"` ≡ `"7076"`). A failed parse counts as drift (→ rePropose).
@@ -1479,7 +1495,8 @@ The runner switches the mutation action into a five-mode state machine. Detected
 - Update `awaitingInput.params` to the newly parsed params, decrement `attempts_left`.
 - If the re-call's params fail to parse: the step fails with `invalid_params` (the engine instruction; raw Zod detail in `_debug`) and the pending proposal is left **unchanged** — no decrement, the prior proposal still stands.
 - If `attempts_left > 0`: return new `needs_confirmation` envelope with decremented `attempts_left` — including a fresh `read_back` rendered from the CORRECTED params, so the caller hears what actually replaced the old value.
-- If `attempts_left === 0`: return `{ ok: false, instruction, error: "confirmation_attempts_exhausted" }` and clear pending.
+- If `attempts_left === 0`: return `{ ok: false, instruction, error: "confirmation_attempts_exhausted" }` and clear pending. (4.3.0) With a handoff configured the entry also carries `escalated: true`, `handoff_requested: true`, `reason: "abandon"` and the handoff is requested atomically on `escalationContext(action)`.
+- (4.3.0) **The budget is task-scoped when a handoff is configured.** A FRESH proposal — after `abort_pending_input`, in the same batch as the abort, or opened by a row's `proposes` — starts at `maxAttempts` minus the proposals this task already stored for the action without executing, and is refused as exhausted once more than `maxAttempts` were spent. Only an execute refunds. A bare "no" followed by a new value is therefore bounded exactly like an in-gate correction.
 - (4.2.0) `consentExempt` params are NOT carried into a re-proposal: the new proposal stores exactly the params this call sent. A judgement the first proposal held and the correcting call omitted is gone, and the eventual execute runs without it. `abort_pending_input` followed by a fresh proposal loses it the same way. A judgement that must survive a correction belongs in STATE, not only in proposal params (`<known_issues>`).
 
 ### The repeat control (`repeat_pending_question`)
@@ -1576,7 +1593,7 @@ The customer provides a value once, then again; the system verifies they match. 
 ### Capturer (`controller.startsMatchFor = { consumer_action }`)
 - Executor validates/encodes/persists the first entry (typically into flow data, via a `merge_flow_data` effect).
 - On the ok verdict, library sets `awaitingInput = { kind: "match", for_action: consumer_action, attempts_left: maxAttempts, max_attempts: maxAttempts, flow_ref? }`.
-- Re-running the capturer while a match is awaiting **resets** `attempts_left` (lets the customer change their first entry).
+- Re-running the capturer while a match is awaiting lets the customer change their first entry. It **resets** `attempts_left` only when no handoff is configured; (4.3.0) with one, the gate re-opens with what is left of the task's mismatch budget (never below 1), also after an abort.
 
 ### Consumer (`controller.requiresMatch = { capturer, maxAttempts }`)
 - Refused unless `awaitingInput.kind === "match" && for_action === <this action>`. Error: `match_not_pending` if absent.
@@ -1584,7 +1601,7 @@ The customer provides a value once, then again; the system verifies they match. 
 - Executor receives the second entry, owns the comparison (e.g. compares ciphertexts), performs the side-effect on match.
 - Library reads the verdict's outcome:
   - `ok: true` → match succeeded; library auto-clears `awaitingInput`. Pair with `endsFlow: true` to wrap the flow — or with `issuesOtp` for the folded "confirming the value sends the code" shape (the consumed match is cleared, then the OTP gate opens; see `<otp_lifecycle>`).
-  - `ok: false` + body `verdict === "match_mismatch"` → library decrements `attempts_left`. On exhaustion, library clears `awaitingInput` AND `currentFlow` (terminal) and surfaces `verdict: "match_attempts_exhausted"`, `error: "match_attempts_exhausted"`.
+  - `ok: false` + body `verdict === "match_mismatch"` → library decrements `attempts_left`. On exhaustion, library clears `awaitingInput` AND `currentFlow` (terminal) and surfaces `verdict: "match_attempts_exhausted"`, `error: "match_attempts_exhausted"`. (4.3.0) With a handoff configured it also requests the `abandon` handoff on `escalationContext(action)`; only a successful match refunds spent mismatches.
   - `ok: false` + any other verdict → library leaves state alone (unrelated failure, e.g. backend error).
 
 ### Lockdown
@@ -2063,7 +2080,9 @@ no model when it was absorbed; none is fixed in this version.
    the executing call replaces the proposed one whatever it is (`false` over a proposed `true`).
    *Design around it:* a judgement that must survive a correction belongs in STATE — written by the
    action that first hears it, read by the executor — not only in proposal params.
-3. **A proposal opened by `proposes` always starts with the target's full `maxAttempts`.** When the
+3. **A proposal opened by `proposes` always starts with the target's full `maxAttempts`** — since
+   4.3.0 only when no handoff is configured; with one it draws on the task's budget like any fresh
+   proposal. When the
    proposing action runs again while its own target is pending — possible only with
    `lockdown: false` — the gate re-opens at full attempts every time, where a re-proposal made by the
    model counts down to `confirmation_attempts_exhausted`. With the default lockdown the proposing

@@ -158,7 +158,7 @@ mutations exist, what the caller must consent TO in business terms, and any post
 For each multi-turn flow, teach the LLM:
 - The opener (e.g. `request_card_activation` / `request_pin_setup`) starts the flow and mints an OTP — quote the masked mobile, ask the customer to read the 6-digit code on the next turn.
 - The OTP consumer (e.g. `confirm_otp`) validates the code. Verdicts: `otp_invalid` (retry the same code), `otp_timeout` (offer to resend → re-call the opener), `otp_locked` (terminal — abort gracefully).
-- For double-entry: the capturer records the first entry, the consumer takes the repeat. The library decrements on `match_mismatch` and aborts on exhaustion (`match_attempts_exhausted`). The customer can re-enter (capturer reset) at any time.
+- For double-entry: the capturer records the first entry, the consumer takes the repeat. The library decrements on `match_mismatch` and aborts on exhaustion (`match_attempts_exhausted`). The customer can re-enter (re-run the capturer) at any time; with a handoff configured (4.3.0) that does not refund spent mismatches.
 - Lockdown semantics: while a gate is pending, only the targeted action, the capturer (match only), or `abort_pending_input` are allowed.
 - The customer's verbal "say PIN / repeat PIN" or "say the code" IS the affirmation for those gates — there is no separate "are you sure?" recap.
 

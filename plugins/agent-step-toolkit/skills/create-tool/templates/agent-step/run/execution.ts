@@ -63,7 +63,12 @@ import {
   clearOnProgress,
   climb,
   climbEntry,
+  confirmBudgetKey,
   countBounce,
+  escalateSpentGate,
+  gateSpent,
+  matchBudgetKey,
+  setGateSpent,
 } from "../interaction/escalation.js";
 import type { ControlRunContext } from "../controls/contract.js";
 import {
@@ -71,7 +76,7 @@ import {
   tryPageFromCache,
   type PagedCache,
 } from "../paginate.js";
-import { CONFIRMATION_DEFAULTS, confirmationReplyContract } from "../interaction/confirmation.js";
+import { CONFIRMATION_DEFAULTS, confirmationReplyContract, freshProposal } from "../interaction/confirmation.js";
 import { refuseOtpNotPending, refuseOtpIssueWhileMatchPending } from "../interaction/otp.js";
 import {
   MATCH_DEFAULT_MAX_ATTEMPTS,
@@ -172,6 +177,17 @@ export async function executeSteps<T extends LibraryManagedSlots>(
     last = lastOf(entry) ?? last;
     failedAt = results.length - 1;
   };
+
+  // ─── Gate budgets (interaction/escalation.ts): recorded only when there is
+  //     a handoff to escalate into — otherwise nothing is latched and a gate
+  //     behaves as it always did.
+  const spendGate = (key: string, value: number | undefined): void => {
+    if (activation.handoffEnabled) setGateSpent(st, key, value);
+  };
+  const escalateGate = (key: string, action: string): Record<string, unknown> =>
+    activation.handoffEnabled && getHandoff(st.view) == null
+      ? escalateSpentGate(st, key, action)
+      : {};
 
   // ─── Bounded patience on unusable captures ────────────────────────────────
   //     The `invalid_params` bounce is deliberately FREE: no gate is stored, no
@@ -417,6 +433,9 @@ export async function executeSteps<T extends LibraryManagedSlots>(
             )
           : confirmationPatch,
       );
+      // The proposal is spent the moment it is stored — an abort will not
+      // give it back.
+      spendGate(confirmBudgetKey(step.action), maxAttempts - attemptsLeft + 1);
       push({
         action: step.action,
         ok: true,
@@ -457,7 +476,8 @@ export async function executeSteps<T extends LibraryManagedSlots>(
       break;
     }
 
-    // ─── 6. Confirm-required attempts exhausted: clear the gate, error out.
+    // ─── 6. Confirm-required attempts exhausted: clear the gate, escalate
+    //     (a plain error when there is no handoff to escalate into).
     if (step.confirmMode === "exhausted") {
       st.apply(clearAwaitingInputPatch<T>());
       fail({
@@ -467,13 +487,17 @@ export async function executeSteps<T extends LibraryManagedSlots>(
           action: step.action,
         }),
         error: "confirmation_attempts_exhausted",
+        ...escalateGate(confirmBudgetKey(step.action), step.action),
       });
       break;
     }
 
     // ─── 7. Execute mode: clear the gate atomically BEFORE the executor runs.
+    //     The caller accepted a proposal — the only event that refunds the
+    //     action's proposal budget.
     if (step.confirmMode === "execute") {
       st.apply(clearAwaitingInputPatch<T>());
+      spendGate(confirmBudgetKey(step.action), undefined);
     }
 
     // ─── 7.–9. OTP / match gates (freeze semantics documented per gate).
@@ -704,6 +728,8 @@ export async function executeSteps<T extends LibraryManagedSlots>(
       }
       if (controller?.requiresMatch) {
         st.apply(clearAwaitingInputPatch<T>());
+        // Matched — the only event that refunds the mismatch budget.
+        spendGate(matchBudgetKey(step.action), undefined);
       }
 
       if (effects.some((e) => e.type === "otp_issued")) {
@@ -724,7 +750,8 @@ export async function executeSteps<T extends LibraryManagedSlots>(
       }
 
       // startsMatchFor on ok → open (or reset) the match gate for the named
-      // consumer with a fresh attempts counter from the consumer's config.
+      // consumer with what is LEFT of the consumer's budget: a re-capture
+      // changes the first entry, it does not refund spent mismatches.
       // (validate.ts checks the pair at construction; the throw remains as
       // defense for direct runSteps consumers with unvalidated configs.)
       if (controller?.startsMatchFor) {
@@ -738,8 +765,12 @@ export async function executeSteps<T extends LibraryManagedSlots>(
         const maxAttempts =
           consumer.requiresMatch.maxAttempts ?? MATCH_DEFAULT_MAX_ATTEMPTS;
         const finalFlow = getCurrentFlow(st.view);
+        const attemptsLeft = Math.max(
+          1,
+          maxAttempts - gateSpent(st.view, matchBudgetKey(consumerName)),
+        );
         st.apply(
-          setAwaitingMatchPatch<T>(consumerName, maxAttempts, maxAttempts, finalFlow?.name),
+          setAwaitingMatchPatch<T>(consumerName, attemptsLeft, maxAttempts, finalFlow?.name),
         );
       }
 
@@ -759,8 +790,13 @@ export async function executeSteps<T extends LibraryManagedSlots>(
         st.apply(mismatch.patch);
         const entryIndex = results.length - 1;
         results[entryIndex] = { ...results[entryIndex], ...mismatch.entryPatch };
+        const key = matchBudgetKey(step.action);
         if (mismatch.exhausted) {
+          results[entryIndex] = { ...results[entryIndex], ...escalateGate(key, step.action) };
           last = lastOf(results[entryIndex]) ?? last;
+        } else {
+          const live = getAwaitingInput(st.view);
+          if (live?.kind === "match") spendGate(key, live.max_attempts - live.attempts_left);
         }
       }
     }
@@ -783,8 +819,9 @@ export async function executeSteps<T extends LibraryManagedSlots>(
       break;
     }
     // Handoff monotonicity: an ok step that requested a handoff still ends
-    // the batch — later steps must not run.
-    if (handoffSet) break;
+    // the batch — later steps must not run. Read live: a spent match budget
+    // may have requested the handoff after `handoffSet` was taken.
+    if (getHandoff(st.view) != null) break;
     // The outcome goes straight on to PROPOSE a confirm-gated action
     // (`VerdictDef.proposes`): it becomes the next planned step, so the
     // consent is opened by the very proposal path below — read-back, attempts,
@@ -793,10 +830,18 @@ export async function executeSteps<T extends LibraryManagedSlots>(
     // a caller boundary, and its entry ends the batch.
     const proposes = rowKey === undefined ? undefined : action.verdicts[rowKey]?.proposes;
     if (proposes && result.ok) {
+      const target = plan.actions[proposes.action];
+      const opening = freshProposal(
+        target.confirmation?.maxAttempts ?? CONFIRMATION_DEFAULTS.maxAttempts,
+        gateSpent(st.view, confirmBudgetKey(proposes.action)),
+      );
       planned.splice(planned.indexOf(step) + 1, planned.length, {
         action: proposes.action,
         params: proposes.params?.(st.view, rowData, params as Record<string, unknown>) ?? {},
-        confirmMode: "propose",
+        confirmMode: opening.mode,
+        ...(opening.attemptsLeft !== undefined
+          ? { proposeAttemptsLeft: opening.attemptsLeft }
+          : {}),
       });
       continue;
     }

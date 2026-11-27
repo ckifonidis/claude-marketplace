@@ -387,6 +387,13 @@ export interface ActionDef<PrereqName extends string, T = unknown> {
  *  clear via `abort_pending_input` or via backend signals the executor
  *  surfaces as `clear_awaiting_input` / `abort_flow` effects. */
 export interface ConfirmationOpts {
+  /** Proposals the caller may REJECT before the gate is spent. With a library
+   *  handoff configured the budget is task-scoped
+   *  (`spentLadders["confirm:<action>"]`): a drifted re-proposal spends it,
+   *  and so does a fresh proposal after `abort_pending_input` — a bare "no"
+   *  followed by a new value is a rejected proposal like any other. Only an
+   *  EXECUTE refunds it, and a spent budget hands off (`abandon`,
+   *  `escalationContext(action)`). Default 3. */
   maxAttempts?: number;
   lockdown?: boolean;
   /** Params the caller's consent does NOT cover: `judged` fields the model
@@ -558,7 +565,11 @@ export interface ControllerHooks {
    *  - `ok: false` + `resultBody.verdict === "match_mismatch"` → library
    *    decrements `attempts_left`; on exhaustion clears `awaitingInput` and
    *    aborts the flow. Otherwise leaves the awaiting slot alone so the
-   *    customer can retry.
+   *    customer can retry. With a library handoff configured the spent
+   *    mismatches are task-scoped (`spentLadders["match:<action>"]`): neither
+   *    `abort_pending_input` nor a capturer re-run refunds them — only a
+   *    successful match does — and exhaustion hands off (`abandon`,
+   *    `escalationContext(action)`).
    *  - `ok: false` + any other verdict → library leaves state alone
    *    (unrelated failure, e.g. backend error). */
   requiresMatch?: { capturer: string; maxAttempts?: number };
@@ -566,10 +577,10 @@ export interface ControllerHooks {
    *  something (typically a tokenised form of the customer's first entry)
    *  for the consumer to compare against on the next turn. On `ok:true`,
    *  the library sets `awaitingInput.kind="match"` for the named consumer
-   *  with `attempts_left = consumer.requiresMatch.maxAttempts`. Idempotent —
-   *  re-running the capturer while a match is already awaiting just resets
-   *  the attempts counter (and the host's stored token, via a
-   *  `merge_flow_data` effect). */
+   *  with what is left of `consumer.requiresMatch.maxAttempts`. Re-running
+   *  the capturer while a match is already awaiting replaces the host's stored
+   *  token (via a `merge_flow_data` effect); it does not refund mismatches
+   *  the task already spent. */
   startsMatchFor?: { consumer_action: string };
 }
 

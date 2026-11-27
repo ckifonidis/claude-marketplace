@@ -13,8 +13,9 @@
 //
 // ABORT-AWARENESS: an `abort_pending_input` step destroys the pending gate,
 // so confirm steps AFTER it in the same batch are planned against NO pending —
-// they propose fresh (full attempts) instead of resolving to execute /
-// re-propose against a gate the batch just cleared. Without this,
+// they propose fresh (with whatever budget the task has left — an abort does
+// not refund it) instead of resolving to execute / re-propose against a gate
+// the batch just cleared. Without this,
 // `[abort, mutation(matching params)]` would execute a mutation whose
 // confirmation the same batch aborted.
 
@@ -25,6 +26,7 @@ import {
   pendingConfirmationOf,
   type ConfirmMode,
 } from "../interaction/confirmation.js";
+import { confirmBudgetKey, gateSpent } from "../interaction/escalation.js";
 import { ABORT_ACTION } from "../controls/registry.js";
 import { getAwaitingInput } from "./batch-state.js";
 
@@ -82,6 +84,7 @@ export function expandPlan<T extends LibraryManagedSlots>(
         effectivePending,
         s.params,
         currentCallerTurnId,
+        gateSpent(batchStartView, confirmBudgetKey(action.name)),
       );
       planned.push({
         action: s.action,
