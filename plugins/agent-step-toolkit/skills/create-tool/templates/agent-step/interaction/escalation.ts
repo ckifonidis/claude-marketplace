@@ -180,3 +180,55 @@ export function climbEntry(
   // only the ask, or spend another refusal in the same caller turn.
   return { action, ok: false, instruction: freeInstruction, ...extra, continuation: "await_caller" };
 }
+
+// ─── Gate budgets ───────────────────────────────────────────────────────────
+// A confirmation or match gate keeps `attempts_left` on the transient
+// `awaitingInput` slot, which `abort_pending_input` clears and a capturer
+// re-run rewrites — so on its own the slot refunded the whole budget every
+// time (reported 2026-11-17: a read-back answered with a bare "no" aborts the
+// gate, the next value proposes with full attempts, nothing executes, and
+// "no" → new value → "no" has no cap). What the task has SPENT is mirrored
+// into the same task-scoped latch. Unlike `bounce` / `escalation` these keys
+// are NOT cleared by `clearOnProgress`: a parsed proposal is not the caller
+// accepting anything. Only an execute / a successful match refunds.
+//
+// Like the rest of bounded patience this needs somewhere to escalate TO: the
+// runner records nothing when no library handoff is configured, and the gates
+// then behave exactly as before.
+
+export const confirmBudgetKey = (action: string): string => `confirm:${action}`;
+export const matchBudgetKey = (consumer: string): string => `match:${consumer}`;
+
+/** What the task has spent on one gate budget, read from any state view. */
+export const gateSpent = (view: unknown, key: string): number =>
+  (view as { spentLadders?: Latch | null }).spentLadders?.[key] ?? 0;
+
+/** Record (`value`) or refund (`undefined`) one gate budget. */
+export function setGateSpent<T extends LibraryManagedSlots>(
+  st: BatchState<T>,
+  key: string,
+  value: number | undefined,
+): void {
+  const { [key]: current, ...rest } = latchOf(st);
+  if (current === value) return;
+  writeLatch(st, value === undefined ? rest : { ...rest, [key]: value });
+}
+
+/** A spent gate budget ends the task: the same atomic `abandon` handoff, on
+ *  the same structural context, as a spent explanation. Returns the fields to
+ *  merge over the exhaustion entry. */
+export function escalateSpentGate<T extends LibraryManagedSlots>(
+  st: BatchState<T>,
+  key: string,
+  action: string,
+): Record<string, unknown> {
+  setGateSpent(st, key, undefined);
+  const request = { reason: "abandon" as const, context: escalationContext(action) };
+  st.apply(requestHandoffPatch<T>(request));
+  return {
+    instruction: formatMessage(ENGINE_TEXT.handoff_requested, { reason: request.reason }),
+    escalated: true,
+    handoff_requested: true,
+    reason: request.reason,
+  };
+}

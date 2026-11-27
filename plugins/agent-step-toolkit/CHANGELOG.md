@@ -12,6 +12,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). The library uses
 **major** = breaking public-API change (exports/signatures in `index.ts` / `types.ts`, or the
 `buildAgentStepTool` options), **minor** = additive, **patch** = internal-only.
 
+## [4.3.0] — 2026-11-27
+
+Minor: **two bounds for loops that had none.**
+
+1. **Gate budgets are task-scoped** — with a handoff configured, a confirmation's and a match's
+   `maxAttempts` are no longer refunded by `abort_pending_input` or a capturer re-run, and a spent
+   budget hands off. **Behaviour-changing** for every such host with a confirm- or match-gated action.
+2. **`countToolFreeReply`** — a counter for caller turns the model answers with NO tool call in auto
+   mode. Additive and opt-in.
+
+No engine text is added or reworded, so goldens do not move.
+Migration: [migrations/4.2.0-to-4.3.0.md](migrations/4.2.0-to-4.3.0.md).
+
+### Changed — gate budgets
+- Reported 2026-11-17 (balances-info-ts, fleet-wide): `attempts_left` lives on the transient
+  `awaitingInput` slot. A read-back answered with a bare "no" is routed to `abort_pending_input`,
+  which clears the gate; the next dictation proposed with the full budget again. Nothing executes,
+  bounded patience sees a parsed proposal as progress, and `confirmation_attempts_exhausted` is
+  never reached — "no" → new value → "no" without bound. The match gate had the same flaw (abort, or
+  a capturer re-run resetting `attempts_left`).
+- The runner now mirrors what the task has SPENT into the task-scoped `spentLadders` latch
+  (`confirm:<action>`, `match:<consumer>`; `interaction/escalation.ts`). Unlike `bounce` /
+  `escalation` these keys are not cleared on progress. A fresh proposal opens with
+  `maxAttempts − spent` — after an abort, in `[abort_pending_input, <action>]`, or opened by a row's
+  `proposes`; a capturer opens the match gate with what is left (never below 1). Only an EXECUTE / a
+  successful match refunds.
+- Exhaustion escalates: the entry keeps its `error` and gains `escalated: true`,
+  `handoff_requested: true`, `reason: "abandon"`, and the handoff is requested atomically on
+  `escalationContext(action)` — the context a spent explanation already uses, so a host's
+  context→closing table needs no new row. Nothing is declared per action.
+- **Only with a handoff configured.** Without one there is nothing to escalate to: nothing is
+  latched and both gates behave exactly as in 4.2.0. No new required channel — `spentLadders` was
+  already required whenever a handoff is configured.
+- Narrows known issue 3 of 4.2.0: with a handoff configured a proposal opened by `proposes` draws on
+  the task's budget instead of always starting at full `maxAttempts`.
+- Not changed: an in-gate drifted re-proposal still spends exactly one attempt, and the bounce /
+  explanation counters still reset on progress.
+- `gate-budget.test.ts` +8, driven through `runSteps` across threaded turns. Seven fail against
+  4.2.0; the eighth pins the unchanged no-handoff behaviour.
+
+### Added
+- `countToolFreeReply(state, reply, { max })` → `{ exhausted, patch }`, plus `ToolFreeReplyPolicy`
+  and `TOOL_FREE_REPLIES_KEY` (`interaction/tool-free-reply.ts`, exported from `index.ts`). Called
+  by the HOST's model node with each model reply: a reply with tool calls ends the run; the text
+  that closes a tool turn is neutral; any other reply is a caller turn the engine never saw and is
+  counted under `spentLadders["turn:tool_free"]`. Past `max` in a row the patch requests `abandon`
+  on `escalationContext(null)`, and the host routes `handoffRequested` to `HANDOFF_NODE` on the
+  edge after its model node.
+- Why: every bound the runner owns advances inside a tool batch, so a model that stops calling the
+  tool stops being counted. Live incident 2026-11-16: one `verify_card` bounce, then 26 caller
+  turns answered with the same "didn't catch those digits" sentence and no call. Required tool
+  calling (4.1.0) closes the path structurally; this is the bound for auto mode, the default.
+- It counts EVERY tool-free caller turn, not only failed captures — set `max` well above the bounce
+  tolerance. `max` is a call-site argument, not an `AGENT_STEP_*` tolerance.
+- `tool-free-reply.test.ts` +5. Library suite: 377 tests.
+
 ## [4.2.0] — 2026-11-20
 
 Minor: **one tool call per caller turn, then a spoken answer that streams.** Under required tool

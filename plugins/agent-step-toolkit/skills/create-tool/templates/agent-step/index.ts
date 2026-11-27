@@ -150,6 +150,17 @@ export { REFUSAL_KINDS } from "./controls/note-refusal.js";
 // the bounded-choice control use. Exported so hosts stop re-deriving it.
 export { resolveCallerTurnId } from "./interaction/turn-identity.js";
 
+// The tool-free-reply counter (auto mode): the bound on caller turns the model
+// answers with NO tool call — the one path the runner cannot count, because
+// it does not run. The host's model node calls it with each model reply; past
+// `max` it returns the atomic escalation handoff patch. See
+// interaction/tool-free-reply.ts.
+export {
+  countToolFreeReply,
+  TOOL_FREE_REPLIES_KEY,
+} from "./interaction/tool-free-reply.js";
+export type { ToolFreeReplyPolicy } from "./interaction/tool-free-reply.js";
+
 // Read-pagination primitives. Pure, domain-agnostic helpers for tool read
 // executors — the runner does not use them. A tool's list reads use these to
 // present one uniform paginated envelope (delegate to a paging backend, or

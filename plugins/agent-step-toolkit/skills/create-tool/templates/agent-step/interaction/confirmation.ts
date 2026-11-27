@@ -142,7 +142,9 @@ export function paramsMatchPending(
 
 /** Confirm-mode state machine assigned during plan expansion:
  *  - `propose`: no pending exists for this action → store params, return
- *    needs_confirmation, do NOT call executor.
+ *    needs_confirmation, do NOT call executor. The counter starts from what
+ *    the task already SPENT on this action (`proposalsSpent`), not from the
+ *    full budget — an aborted proposal stays spent.
  *  - `rePropose`: pending exists with different params → overwrite params,
  *    decrement attemptsLeft, return needs_confirmation.
  *  - `execute`: pending exists with matching params, stored on an EARLIER
@@ -154,8 +156,9 @@ export function paramsMatchPending(
  *    only when BOTH the stored and the current turn identity exist (production
  *    always has message ids; identity-less direct consumers keep the
  *    params-only behavior rather than being locked out of confirmation).
- *  - `exhausted`: pending exists with `attemptsLeft <= 0` → clear pending,
- *    return error. Customer must restart the operation.
+ *  - `exhausted`: the budget is spent — a drifted call over a pending with
+ *    `attemptsLeft <= 0`, or a fresh proposal after more than `maxAttempts`
+ *    spent ones → clear pending and escalate (run/execution.ts).
  *
  *  Actions without `requiresConfirmation` skip this machine entirely — they
  *  run as a normal single step (subject to `soleStep`). */
@@ -172,12 +175,23 @@ export interface ConfirmDecision {
   attemptsLeft?: number;
 }
 
-/** Resolve one step's confirm mode against the batch-start pending gate. */
+/** A proposal with no pending gate behind it: it opens with what is left of
+ *  the task's budget, or finds the budget spent. */
+export function freshProposal(maxAttempts: number, proposalsSpent: number): ConfirmDecision {
+  return proposalsSpent > maxAttempts
+    ? { mode: "exhausted" }
+    : { mode: "propose", attemptsLeft: maxAttempts - proposalsSpent };
+}
+
+/** Resolve one step's confirm mode against the batch-start pending gate.
+ *  `proposalsSpent` — proposals this task already stored for the action
+ *  without executing (the `confirmBudgetKey` latch at batch start). */
 export function decideConfirmMode(
   action: CompiledAction,
   pending: PendingConfirmation | null,
   rawParams: unknown,
   currentCallerTurnId: string | undefined,
+  proposalsSpent = 0,
 ): ConfirmDecision {
   const confirm = action.confirmation;
   if (!confirm) {
@@ -186,7 +200,7 @@ export function decideConfirmMode(
     );
   }
   if (!pending || pending.action !== action.name) {
-    return { mode: "propose", attemptsLeft: confirm.maxAttempts };
+    return freshProposal(confirm.maxAttempts, proposalsSpent);
   }
   if (paramsMatchPending(action, pending.params, rawParams)) {
     const sameTurn =

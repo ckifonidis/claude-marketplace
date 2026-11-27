@@ -405,7 +405,7 @@ export async function proposeNewPin(
 }
 ```
 
-Library on the ok verdict: sets `awaitingInput.kind = "match"` for the consumer with `attempts_left = consumer.requiresMatch.maxAttempts`. Re-running the capturer mid-match resets that counter.
+Library on the ok verdict: sets `awaitingInput.kind = "match"` for the consumer with `attempts_left = consumer.requiresMatch.maxAttempts`. Re-running the capturer mid-match resets that counter only when no handoff is configured; with one (4.3.0) the gate re-opens with what is left of the task's mismatch budget.
 
 ### Consumer
 
@@ -439,7 +439,7 @@ export async function commitPin(
 
 On the ok verdict: library auto-clears `awaitingInput`. The `endsFlow: true` opt also clears `currentFlow`.
 
-On `ok: false` + body `verdict: "match_mismatch"`: library decrements `attempts_left`. On exhaustion, library clears both slots and re-shapes the result entry to surface `error: "match_attempts_exhausted"`, `verdict: "match_attempts_exhausted"`, `attempts_left: 0`.
+On `ok: false` + body `verdict: "match_mismatch"`: library decrements `attempts_left`. On exhaustion, library clears both slots and re-shapes the result entry to surface `error: "match_attempts_exhausted"`, `verdict: "match_attempts_exhausted"`, `attempts_left: 0` — and, with a handoff configured (4.3.0), requests the `abandon` handoff.
 
 On `ok: false` + any other verdict: library leaves state alone (this is a "real" failure, e.g. backend error, not a mismatch).
 
